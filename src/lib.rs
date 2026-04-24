@@ -139,7 +139,11 @@ impl IniImporter {
         Self { options }
     }
 
-    pub fn import_paths(&self, ini_path: &Path, cfg_path: &Path) -> Result<ImportResult, ImportError> {
+    pub fn import_paths(
+        &self,
+        ini_path: &Path,
+        cfg_path: &Path,
+    ) -> Result<ImportResult, ImportError> {
         let cfg_text = read_to_string(cfg_path)?;
         let mut cfg = parse_cfg_str(&cfg_text);
 
@@ -151,7 +155,11 @@ impl IniImporter {
         self.import_maps(&mut cfg, &ini, ini_path)
     }
 
-    pub fn import_config_paths(&self, ini_path: &Path, cfg_path: &Path) -> Result<ConfigImportResult, ImportError> {
+    pub fn import_config_paths(
+        &self,
+        ini_path: &Path,
+        cfg_path: &Path,
+    ) -> Result<ConfigImportResult, ImportError> {
         let mut config = OpenMWConfiguration::new(Some(cfg_path.to_owned()))
             .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
         let mut cfg = config_to_multimap(&config);
@@ -172,7 +180,11 @@ impl IniImporter {
         write_cfg_via_openmw_config(output_path, cfg)
     }
 
-    pub fn save_config_output(&self, output_path: &Path, config: &OpenMWConfiguration) -> Result<(), ImportError> {
+    pub fn save_config_output(
+        &self,
+        output_path: &Path,
+        config: &OpenMWConfiguration,
+    ) -> Result<(), ImportError> {
         config
             .save_to_path(output_path)
             .map_err(|error| ImportError::OpenMwConfig(error.to_string()))
@@ -222,7 +234,10 @@ impl IniImporter {
         Ok(TextEncoding::Win1252)
     }
 
-    fn effective_encoding_from_config(&self, config: &OpenMWConfiguration) -> Result<TextEncoding, ImportError> {
+    fn effective_encoding_from_config(
+        &self,
+        config: &OpenMWConfiguration,
+    ) -> Result<TextEncoding, ImportError> {
         if let Some(encoding) = self.options.encoding {
             return Ok(encoding);
         }
@@ -248,11 +263,18 @@ impl IniImporter {
         if let Some(paths) = cfg.get("data-local") {
             add_paths(&mut data_paths, paths);
         }
-        data_paths.push(ini_path.parent().unwrap_or_else(|| Path::new("")).join("Data Files"));
+        data_paths.push(
+            ini_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join("Data Files"),
+        );
 
         let mut content_files = Vec::new();
         for file in sequential_ini_values(ini, "Game Files:GameFile") {
-            if !ends_with_ignore_ascii_case(file, ".esm") && !ends_with_ignore_ascii_case(file, ".esp") {
+            if !ends_with_ignore_ascii_case(file, ".esm")
+                && !ends_with_ignore_ascii_case(file, ".esp")
+            {
                 continue;
             }
 
@@ -273,7 +295,8 @@ impl IniImporter {
             }
         }
 
-        content_files.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        content_files
+            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 
         let format = self.options.game.plugin_format();
         let mut dependencies = Vec::new();
@@ -396,7 +419,11 @@ fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap) {
         if let Some(values) = ini.get(*key) {
             for value in values {
                 let fallback_key = key.replace([' ', ':'], "_");
-                insert_multimap(cfg, "fallback".to_owned(), format!("{fallback_key},{value}"));
+                insert_multimap(
+                    cfg,
+                    "fallback".to_owned(),
+                    format!("{fallback_key},{value}"),
+                );
             }
         }
     }
@@ -433,7 +460,11 @@ fn dependency_sort(mut source: Vec<(String, Vec<String>)>) -> Vec<String> {
     result
 }
 
-fn dependency_sort_step(element: String, source: &mut Vec<(String, Vec<String>)>, result: &mut Vec<String>) {
+fn dependency_sort_step(
+    element: String,
+    source: &mut Vec<(String, Vec<String>)>,
+    result: &mut Vec<String>,
+) {
     let Some(index) = source.iter().position(|(name, _)| *name == element) else {
         return;
     };
@@ -458,7 +489,8 @@ fn apply_morrowind_expansion_order(files: &mut Vec<String>) {
 
     if bloodmoon_index < tribunal_index {
         let tribunal = files.remove(tribunal_index);
-        let bloodmoon_index = position_ignore_ascii_case(files, "Bloodmoon.esm").expect("Bloodmoon.esm remains present");
+        let bloodmoon_index = position_ignore_ascii_case(files, "Bloodmoon.esm")
+            .expect("Bloodmoon.esm remains present");
         files.insert(bloodmoon_index, tribunal);
     }
 }
@@ -486,10 +518,13 @@ fn read_tes3_header(path: &Path) -> Result<PluginHeader, ImportError> {
 
     let record_size = read_u32_le(&bytes, 4, path)? as usize;
     let record_start = 16usize;
-    let record_end = record_start.checked_add(record_size).ok_or_else(|| ImportError::InvalidPluginHeader {
-        path: path.to_owned(),
-        message: "TES3 record size overflow".to_owned(),
-    })?;
+    let record_end =
+        record_start
+            .checked_add(record_size)
+            .ok_or_else(|| ImportError::InvalidPluginHeader {
+                path: path.to_owned(),
+                message: "TES3 record size overflow".to_owned(),
+            })?;
 
     if bytes.len() < record_end {
         return Err(ImportError::InvalidPluginHeader {
@@ -554,7 +589,9 @@ fn config_to_multimap(config: &OpenMWConfiguration) -> MultiMap {
         insert_multimap(
             &mut cfg,
             "encoding".to_owned(),
-            TextEncoding::from_openmw(encoding.value()).as_label().to_owned(),
+            TextEncoding::from_openmw(encoding.value())
+                .as_label()
+                .to_owned(),
         );
     }
 
@@ -575,7 +612,11 @@ fn config_to_multimap(config: &OpenMWConfiguration) -> MultiMap {
     }
 
     for archive in config.fallback_archives_iter() {
-        insert_multimap(&mut cfg, "fallback-archive".to_owned(), archive.value().clone());
+        insert_multimap(
+            &mut cfg,
+            "fallback-archive".to_owned(),
+            archive.value().clone(),
+        );
     }
 
     for content in config.content_files_iter() {
@@ -591,13 +632,21 @@ fn config_to_multimap(config: &OpenMWConfiguration) -> MultiMap {
     }
 
     for setting in config.generic_settings_iter() {
-        insert_multimap(&mut cfg, setting.key().to_owned(), setting.value().to_owned());
+        insert_multimap(
+            &mut cfg,
+            setting.key().to_owned(),
+            setting.value().to_owned(),
+        );
     }
 
     cfg
 }
 
-fn apply_imported_cfg(config: &mut OpenMWConfiguration, cfg_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
+fn apply_imported_cfg(
+    config: &mut OpenMWConfiguration,
+    cfg_path: &Path,
+    cfg: &MultiMap,
+) -> Result<(), ImportError> {
     if let Some(values) = cfg.get("no-sound") {
         config.set_generic_settings("no-sound", Some(values.clone()));
     }
@@ -605,7 +654,9 @@ fn apply_imported_cfg(config: &mut OpenMWConfiguration, cfg_path: &Path, cfg: &M
     let encoding = cfg
         .get("encoding")
         .and_then(|values| values.last())
-        .map_or(Ok(TextEncoding::Win1252), |value| TextEncoding::parse(value))?;
+        .map_or(Ok(TextEncoding::Win1252), |value| {
+            TextEncoding::parse(value)
+        })?;
     apply_encoding(config, cfg_path, encoding)?;
 
     config
@@ -672,23 +723,34 @@ fn contains_ignore_ascii_case(values: &[String], needle: &str) -> bool {
 }
 
 fn position_ignore_ascii_case(values: &[String], needle: &str) -> Option<usize> {
-    values.iter().position(|value| value.eq_ignore_ascii_case(needle))
+    values
+        .iter()
+        .position(|value| value.eq_ignore_ascii_case(needle))
 }
 
 fn system_time_key(time: SystemTime) -> u128 {
-    time.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
 }
 
 fn read_u32_le(bytes: &[u8], offset: usize, path: &Path) -> Result<u32, ImportError> {
-    let bytes = bytes.get(offset..offset + 4).ok_or_else(|| ImportError::InvalidPluginHeader {
-        path: path.to_owned(),
-        message: "unexpected end of file".to_owned(),
-    })?;
-    Ok(u32::from_le_bytes(bytes.try_into().expect("slice length checked")))
+    let bytes = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| ImportError::InvalidPluginHeader {
+            path: path.to_owned(),
+            message: "unexpected end of file".to_owned(),
+        })?;
+    Ok(u32::from_le_bytes(
+        bytes.try_into().expect("slice length checked"),
+    ))
 }
 
 fn read_c_string(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
@@ -1282,10 +1344,15 @@ mod tests {
 
     #[test]
     fn parses_ini_sections_comments_duplicates_and_equals() {
-        let parsed = parse_ini_str("[General]\nDisable Audio=1 ; comment\nName=a=b\nName=c\n=ignored\nEmpty=\n[bad\nignored\n");
+        let parsed = parse_ini_str(
+            "[General]\nDisable Audio=1 ; comment\nName=a=b\nName=c\n=ignored\nEmpty=\n[bad\nignored\n",
+        );
 
         assert_eq!(values(&parsed, "General:Disable Audio"), &["1 ".to_owned()]);
-        assert_eq!(values(&parsed, "General:Name"), &["a=b".to_owned(), "c".to_owned()]);
+        assert_eq!(
+            values(&parsed, "General:Name"),
+            &["a=b".to_owned(), "c".to_owned()]
+        );
         assert!(!parsed.contains_key("General:Empty"));
     }
 
@@ -1298,13 +1365,19 @@ mod tests {
     #[test]
     fn parses_cfg_trims_and_preserves_inline_hash() {
         let parsed = parse_cfg_str(" # comment\nkey = value # not comment\nkey= second\ninvalid\n");
-        assert_eq!(values(&parsed, "key"), &["value # not comment".to_owned(), "second".to_owned()]);
+        assert_eq!(
+            values(&parsed, "key"),
+            &["value # not comment".to_owned(), "second".to_owned()]
+        );
     }
 
     #[test]
     fn decodes_ini_with_selected_codepage() {
         let parsed = parse_ini_bytes(b"[Movies]\nNew Game=caf\xe9.bik\n", TextEncoding::Win1252);
-        assert_eq!(values(&parsed, "Movies:New Game"), &["caf\u{e9}.bik".to_owned()]);
+        assert_eq!(
+            values(&parsed, "Movies:New Game"),
+            &["caf\u{e9}.bik".to_owned()]
+        );
     }
 
     #[test]
@@ -1315,14 +1388,23 @@ mod tests {
             "[General]\nDisable Audio=1\n[Fonts]\nFont 0=magic\n[Archives]\nArchive 0=Tribunal.bsa\nArchive 1=Bloodmoon.bsa\n[Movies]\nNew Game=intro.bik\n",
         );
 
-        let result = importer.import_maps(&mut cfg, &ini, Path::new("Morrowind.ini")).unwrap();
+        let result = importer
+            .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
+            .unwrap();
 
         assert_eq!(values(&result.cfg, "no-sound"), &["1".to_owned()]);
         assert_eq!(
             values(&result.cfg, "fallback-archive"),
-            &["Morrowind.bsa".to_owned(), "Tribunal.bsa".to_owned(), "Bloodmoon.bsa".to_owned()]
+            &[
+                "Morrowind.bsa".to_owned(),
+                "Tribunal.bsa".to_owned(),
+                "Bloodmoon.bsa".to_owned()
+            ]
         );
-        assert_eq!(values(&result.cfg, "fallback"), &["Movies_New_Game,intro.bik".to_owned()]);
+        assert_eq!(
+            values(&result.cfg, "fallback"),
+            &["Movies_New_Game,intro.bik".to_owned()]
+        );
     }
 
     #[test]
@@ -1330,18 +1412,28 @@ mod tests {
         let ini = parse_ini_str("[Fonts]\nFont 0=magic\n[Movies]\nNew Game=intro.bik\n");
         let mut cfg = MultiMap::new();
         let importer = IniImporter::new(ImportOptions::default());
-        let result = importer.import_maps(&mut cfg, &ini, Path::new("Morrowind.ini")).unwrap();
-        assert_eq!(values(&result.cfg, "fallback"), &["Movies_New_Game,intro.bik".to_owned()]);
+        let result = importer
+            .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
+            .unwrap();
+        assert_eq!(
+            values(&result.cfg, "fallback"),
+            &["Movies_New_Game,intro.bik".to_owned()]
+        );
 
         let mut cfg = MultiMap::new();
         let importer = IniImporter::new(ImportOptions {
             import_fonts: true,
             ..ImportOptions::default()
         });
-        let result = importer.import_maps(&mut cfg, &ini, Path::new("Morrowind.ini")).unwrap();
+        let result = importer
+            .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
+            .unwrap();
         assert_eq!(
             values(&result.cfg, "fallback"),
-            &["Fonts_Font_0,magic".to_owned(), "Movies_New_Game,intro.bik".to_owned()]
+            &[
+                "Fonts_Font_0,magic".to_owned(),
+                "Movies_New_Game,intro.bik".to_owned()
+            ]
         );
     }
 
@@ -1350,7 +1442,10 @@ mod tests {
         let ini = parse_ini_str("[Archives]\nArchive 0=First.bsa\nArchive 2=Skipped.bsa\n");
         let mut cfg = MultiMap::new();
         import_archives(&mut cfg, &ini);
-        assert_eq!(values(&cfg, "fallback-archive"), &["Morrowind.bsa".to_owned(), "First.bsa".to_owned()]);
+        assert_eq!(
+            values(&cfg, "fallback-archive"),
+            &["Morrowind.bsa".to_owned(), "First.bsa".to_owned()]
+        );
     }
 
     #[test]
@@ -1364,9 +1459,16 @@ mod tests {
 
     #[test]
     fn applies_morrowind_expansion_order() {
-        let mut files = vec!["Morrowind.esm".to_owned(), "Bloodmoon.esm".to_owned(), "Tribunal.esm".to_owned()];
+        let mut files = vec![
+            "Morrowind.esm".to_owned(),
+            "Bloodmoon.esm".to_owned(),
+            "Tribunal.esm".to_owned(),
+        ];
         apply_morrowind_expansion_order(&mut files);
-        assert_eq!(files, vec!["Morrowind.esm", "Tribunal.esm", "Bloodmoon.esm"]);
+        assert_eq!(
+            files,
+            vec!["Morrowind.esm", "Tribunal.esm", "Bloodmoon.esm"]
+        );
     }
 
     #[test]
@@ -1411,9 +1513,14 @@ mod tests {
             ..ImportOptions::default()
         });
 
-        let result = importer.import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini")).unwrap();
+        let result = importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
 
-        assert_eq!(values(&result.cfg, "content"), &["Base.esm".to_owned(), "Patch.esp".to_owned()]);
+        assert_eq!(
+            values(&result.cfg, "content"),
+            &["Base.esm".to_owned(), "Patch.esp".to_owned()]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1424,7 +1531,11 @@ mod tests {
         let cfg = dir.join("openmw.cfg");
         let ini = dir.join("Morrowind.ini");
         let output = dir.join("imported.cfg");
-        fs::write(&cfg, "no-sound=0\nfallback=Old_Setting,old\nencoding=win1252\n").unwrap();
+        fs::write(
+            &cfg,
+            "no-sound=0\nfallback=Old_Setting,old\nencoding=win1252\n",
+        )
+        .unwrap();
         fs::write(
             &ini,
             "[General]\nDisable Audio=1\n[Movies]\nNew Game=intro.bik\n[Archives]\nArchive 0=Tribunal.bsa\n",
@@ -1445,7 +1556,9 @@ mod tests {
         assert!(result.config.has_archive_file("Morrowind.bsa"));
         assert!(result.config.has_archive_file("Tribunal.bsa"));
 
-        importer.save_config_output(&output, &result.config).unwrap();
+        importer
+            .save_config_output(&output, &result.config)
+            .unwrap();
         let written = fs::read_to_string(&output).unwrap();
         assert!(written.contains("no-sound=1"));
         assert!(written.contains("fallback=Movies_New_Game,intro.bik"));
@@ -1482,7 +1595,10 @@ mod tests {
     fn unique_test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "rome-ini-{name}-{}",
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ))
     }
 }
