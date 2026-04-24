@@ -1302,6 +1302,12 @@ mod tests {
     }
 
     #[test]
+    fn decodes_ini_with_selected_codepage() {
+        let parsed = parse_ini_bytes(b"[Movies]\nNew Game=caf\xe9.bik\n", TextEncoding::Win1252);
+        assert_eq!(values(&parsed, "Movies:New Game"), &["caf\u{e9}.bik".to_owned()]);
+    }
+
+    #[test]
     fn imports_merge_fallback_and_archives() {
         let importer = IniImporter::new(ImportOptions::default());
         let mut cfg = parse_cfg_str("no-sound=0\nfallback=old\n");
@@ -1317,6 +1323,34 @@ mod tests {
             &["Morrowind.bsa".to_owned(), "Tribunal.bsa".to_owned(), "Bloodmoon.bsa".to_owned()]
         );
         assert_eq!(values(&result.cfg, "fallback"), &["Movies_New_Game,intro.bik".to_owned()]);
+    }
+
+    #[test]
+    fn font_import_is_option_gated() {
+        let ini = parse_ini_str("[Fonts]\nFont 0=magic\n[Movies]\nNew Game=intro.bik\n");
+        let mut cfg = MultiMap::new();
+        let importer = IniImporter::new(ImportOptions::default());
+        let result = importer.import_maps(&mut cfg, &ini, Path::new("Morrowind.ini")).unwrap();
+        assert_eq!(values(&result.cfg, "fallback"), &["Movies_New_Game,intro.bik".to_owned()]);
+
+        let mut cfg = MultiMap::new();
+        let importer = IniImporter::new(ImportOptions {
+            import_fonts: true,
+            ..ImportOptions::default()
+        });
+        let result = importer.import_maps(&mut cfg, &ini, Path::new("Morrowind.ini")).unwrap();
+        assert_eq!(
+            values(&result.cfg, "fallback"),
+            &["Fonts_Font_0,magic".to_owned(), "Movies_New_Game,intro.bik".to_owned()]
+        );
+    }
+
+    #[test]
+    fn archive_import_stops_at_first_missing_index() {
+        let ini = parse_ini_str("[Archives]\nArchive 0=First.bsa\nArchive 2=Skipped.bsa\n");
+        let mut cfg = MultiMap::new();
+        import_archives(&mut cfg, &ini);
+        assert_eq!(values(&cfg, "fallback-archive"), &["Morrowind.bsa".to_owned(), "First.bsa".to_owned()]);
     }
 
     #[test]
@@ -1346,6 +1380,40 @@ mod tests {
 
         assert_eq!(header.name, "Patch.esp");
         assert_eq!(header.masters, vec!["Morrowind.esm", "Tribunal.esm"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_tes3_header() {
+        let dir = unique_test_dir("tes3-invalid");
+        fs::create_dir_all(&dir).unwrap();
+        let plugin = dir.join("Bad.esp");
+        fs::write(&plugin, b"TES4").unwrap();
+
+        let error = read_plugin_header(&plugin, PluginFormat::Tes3).unwrap_err();
+        assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn imports_game_files_using_tes3_dependencies() {
+        let dir = unique_test_dir("game-files");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+        fs::write(data_dir.join("Patch.esp"), tes3_bytes(&["Base.esm"])).unwrap();
+
+        let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Patch.esp\nGameFile1=Base.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        let result = importer.import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini")).unwrap();
+
+        assert_eq!(values(&result.cfg, "content"), &["Base.esm".to_owned(), "Patch.esp".to_owned()]);
         fs::remove_dir_all(dir).unwrap();
     }
 
