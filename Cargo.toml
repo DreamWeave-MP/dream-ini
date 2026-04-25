@@ -2,7 +2,19 @@
 name = "rome-ini"
 version = "0.1.0"
 edition = "2024"
+description = "Import Morrowind.ini settings into OpenMW configuration files"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+keywords = ["openmw", "morrowind", "ini", "config"]
+categories = ["command-line-utilities", "config"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 encoding_rs = "0.8"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "round_trip"
+harness = false

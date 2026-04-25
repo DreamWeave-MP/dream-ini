@@ -98,6 +98,12 @@ pub struct ImportResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportReport {
+    pub warnings: Vec<String>,
+    pub messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedIni {
     pub entries: MultiMap,
     pub warnings: Vec<String>,
@@ -155,9 +161,13 @@ impl IniImporter {
 
         let ini_bytes = read_bytes(ini_path)?;
         let parsed_ini = parse_ini_bytes_with_warnings(&ini_bytes, encoding);
-        let mut imported = self.import_maps(&mut cfg, &parsed_ini.entries, ini_path)?;
-        imported.warnings.splice(0..0, parsed_ini.warnings);
-        Ok(imported)
+        let mut report = self.import_maps(&mut cfg, &parsed_ini.entries, ini_path)?;
+        report.warnings.splice(0..0, parsed_ini.warnings);
+        Ok(ImportResult {
+            cfg,
+            warnings: report.warnings,
+            messages: report.messages,
+        })
     }
 
     /// Saves an imported configuration to an arbitrary output path.
@@ -184,7 +194,7 @@ impl IniImporter {
         cfg: &mut MultiMap,
         ini: &MultiMap,
         ini_path: &Path,
-    ) -> Result<ImportResult, ImportError> {
+    ) -> Result<ImportReport, ImportError> {
         let mut warnings = Vec::new();
         let mut messages = Vec::new();
 
@@ -199,11 +209,7 @@ impl IniImporter {
             import_archives(cfg, ini);
         }
 
-        Ok(ImportResult {
-            cfg: cfg.clone(),
-            warnings,
-            messages,
-        })
+        Ok(ImportReport { warnings, messages })
     }
 
     fn effective_encoding(&self, cfg: &MultiMap) -> Result<TextEncoding, ImportError> {
@@ -258,7 +264,7 @@ impl IniImporter {
                         messages.push(format!(
                             "content file: {} timestamp = ({})",
                             path.display(),
-                            system_time_key(modified)
+                            system_time_seconds(modified)
                         ));
                     }
                     found = Some((system_time_key(modified), path));
@@ -725,6 +731,12 @@ fn system_time_key(time: SystemTime) -> u128 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+fn system_time_seconds(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn read_c_string(bytes: &[u8], encoding: TextEncoding) -> String {
@@ -1389,9 +1401,9 @@ mod tests {
             .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
             .unwrap();
 
-        assert_eq!(values(&result.cfg, "no-sound"), &["0".to_owned()]);
+        assert_eq!(values(&cfg, "no-sound"), &["0".to_owned()]);
         assert_eq!(
-            values(&result.cfg, "fallback-archive"),
+            values(&cfg, "fallback-archive"),
             &[
                 "Morrowind.bsa".to_owned(),
                 "Tribunal.bsa".to_owned(),
@@ -1399,9 +1411,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            values(&result.cfg, "fallback"),
+            values(&cfg, "fallback"),
             &["Movies_New_Game,intro.bik".to_owned()]
         );
+        assert!(result.warnings.is_empty());
+        assert!(result.messages.is_empty());
     }
 
     #[test]
@@ -1413,9 +1427,10 @@ mod tests {
             .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
             .unwrap();
         assert_eq!(
-            values(&result.cfg, "fallback"),
+            values(&cfg, "fallback"),
             &["Movies_New_Game,intro.bik".to_owned()]
         );
+        assert!(result.messages.is_empty());
 
         let mut cfg = MultiMap::new();
         let importer = IniImporter::new(ImportOptions {
@@ -1426,12 +1441,13 @@ mod tests {
             .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
             .unwrap();
         assert_eq!(
-            values(&result.cfg, "fallback"),
+            values(&cfg, "fallback"),
             &[
                 "Fonts_Font_0,magic".to_owned(),
                 "Movies_New_Game,intro.bik".to_owned()
             ]
         );
+        assert!(result.messages.is_empty());
     }
 
     #[test]
@@ -1598,7 +1614,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            values(&result.cfg, "content"),
+            values(&cfg, "content"),
             &["Base.esm".to_owned(), "Patch.esp".to_owned()]
         );
         assert!(result.messages.is_empty());
@@ -1647,11 +1663,11 @@ mod tests {
             ..ImportOptions::default()
         });
 
-        let result = importer
+        importer
             .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
             .unwrap();
 
-        assert_eq!(values(&result.cfg, "content"), &["Base.esm".to_owned()]);
+        assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1672,7 +1688,7 @@ mod tests {
             .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
             .unwrap();
 
-        assert_eq!(values(&result.cfg, "content"), &[] as &[String]);
+        assert_eq!(values(&cfg, "content"), &[] as &[String]);
         assert_eq!(result.warnings, vec!["Missing.esp not found, ignoring"]);
         fs::remove_dir_all(dir).unwrap();
     }
