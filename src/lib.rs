@@ -104,6 +104,12 @@ pub struct ImportResult {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedIni {
+    pub entries: MultiMap,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct ConfigImportResult {
     pub config: OpenMWConfiguration,
@@ -160,8 +166,10 @@ impl IniImporter {
         set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
 
         let ini_bytes = read_bytes(ini_path)?;
-        let ini = parse_ini_bytes(&ini_bytes, encoding);
-        self.import_maps(&mut cfg, &ini, ini_path)
+        let parsed_ini = parse_ini_bytes_with_warnings(&ini_bytes, encoding);
+        let mut imported = self.import_maps(&mut cfg, &parsed_ini.entries, ini_path)?;
+        imported.warnings.splice(0..0, parsed_ini.warnings);
+        Ok(imported)
     }
 
     /// Imports from paths into an [`OpenMWConfiguration`].
@@ -181,8 +189,9 @@ impl IniImporter {
         set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
 
         let ini_bytes = read_bytes(ini_path)?;
-        let ini = parse_ini_bytes(&ini_bytes, encoding);
-        let imported = self.import_maps(&mut cfg, &ini, ini_path)?;
+        let parsed_ini = parse_ini_bytes_with_warnings(&ini_bytes, encoding);
+        let mut imported = self.import_maps(&mut cfg, &parsed_ini.entries, ini_path)?;
+        imported.warnings.splice(0..0, parsed_ini.warnings);
         apply_imported_cfg(&mut config, cfg_path, &imported.cfg)?;
 
         Ok(ConfigImportResult { config, imported })
@@ -328,14 +337,25 @@ impl IniImporter {
 
 #[must_use]
 pub fn parse_ini_bytes(bytes: &[u8], encoding: TextEncoding) -> MultiMap {
+    parse_ini_bytes_with_warnings(bytes, encoding).entries
+}
+
+#[must_use]
+pub fn parse_ini_bytes_with_warnings(bytes: &[u8], encoding: TextEncoding) -> ParsedIni {
     let (decoded, _, _) = encoding.encoding_rs().decode(bytes);
-    parse_ini_str(&decoded)
+    parse_ini_str_with_warnings(&decoded)
 }
 
 #[must_use]
 pub fn parse_ini_str(text: &str) -> MultiMap {
+    parse_ini_str_with_warnings(text).entries
+}
+
+#[must_use]
+pub fn parse_ini_str_with_warnings(text: &str) -> ParsedIni {
     let mut section = String::new();
     let mut map = MultiMap::new();
+    let mut warnings = Vec::new();
 
     for raw_line in text.lines() {
         let mut line = raw_line;
@@ -349,9 +369,15 @@ pub fn parse_ini_str(text: &str) -> MultiMap {
 
         if line.starts_with('[') {
             let Some(end) = line.find(']') else {
+                warnings.push(format!(
+                    "ini file wrongly formatted ({line}). Line ignored."
+                ));
                 continue;
             };
             if end < 2 {
+                warnings.push(format!(
+                    "ini file wrongly formatted ({line}). Line ignored."
+                ));
                 continue;
             }
             line[1..end].clone_into(&mut section);
@@ -372,12 +398,16 @@ pub fn parse_ini_str(text: &str) -> MultiMap {
         let key = format!("{}:{}", section, &line[..equals]);
         let value = &line[equals + 1..];
         if value.is_empty() {
+            warnings.push(format!("ignored empty value for key '{key}'."));
             continue;
         }
         insert_multimap(&mut map, key, value.to_owned());
     }
 
-    map
+    ParsedIni {
+        entries: map,
+        warnings,
+    }
 }
 
 #[must_use]
@@ -1393,6 +1423,20 @@ mod tests {
             &["a=b".to_owned(), "c".to_owned()]
         );
         assert!(!parsed.contains_key("General:Empty"));
+    }
+
+    #[test]
+    fn surfaces_ini_parse_warnings() {
+        let parsed = parse_ini_str_with_warnings("[General]\nEmpty=\n[bad\n[]=ignored\n");
+
+        assert_eq!(
+            parsed.warnings,
+            vec![
+                "ignored empty value for key 'General:Empty'.".to_owned(),
+                "ini file wrongly formatted ([bad). Line ignored.".to_owned(),
+                "ini file wrongly formatted ([]=ignored). Line ignored.".to_owned(),
+            ]
+        );
     }
 
     #[test]
