@@ -173,8 +173,7 @@ impl IniImporter {
         ini_path: &Path,
         cfg_path: &Path,
     ) -> Result<ConfigImportResult, ImportError> {
-        let mut config = OpenMWConfiguration::new(Some(cfg_path.to_owned()))
-            .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
+        let mut config = load_config_or_empty(cfg_path)?;
         let mut cfg = config_to_multimap(&config);
 
         let encoding = self.effective_encoding_from_config(&config);
@@ -648,6 +647,36 @@ fn config_to_multimap(config: &OpenMWConfiguration) -> MultiMap {
     }
 
     cfg
+}
+
+fn load_config_or_empty(cfg_path: &Path) -> Result<OpenMWConfiguration, ImportError> {
+    if cfg_path.exists() {
+        return OpenMWConfiguration::new(Some(cfg_path.to_owned()))
+            .map_err(|error| ImportError::OpenMwConfig(error.to_string()));
+    }
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "rome-ini-empty-config-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).map_err(|source| ImportError::Io {
+        path: temp_dir.clone(),
+        source,
+    })?;
+    let temp_cfg = temp_dir.join("openmw.cfg");
+    fs::write(&temp_cfg, "").map_err(|source| ImportError::Io {
+        path: temp_cfg.clone(),
+        source,
+    })?;
+
+    let config = OpenMWConfiguration::new(Some(temp_cfg))
+        .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
+    let _ = fs::remove_dir_all(temp_dir);
+    Ok(config)
 }
 
 fn apply_imported_cfg(
@@ -1589,6 +1618,29 @@ mod tests {
         assert!(written.contains("no-sound=1"));
         assert!(written.contains("fallback=Movies_New_Game,intro.bik"));
         assert!(written.contains("fallback-archive=Morrowind.bsa"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_cfg_starts_empty_without_creating_input_file() {
+        let dir = unique_test_dir("missing-cfg");
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("missing.cfg");
+        let ini = dir.join("Morrowind.ini");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        let importer = IniImporter::new(ImportOptions::default());
+        let result = importer.import_config_paths(&ini, &cfg).unwrap();
+
+        assert!(!cfg.exists());
+        let no_sound: Vec<_> = result
+            .config
+            .generic_settings_iter()
+            .filter(|setting| setting.key() == "no-sound")
+            .map(|setting| setting.value().to_owned())
+            .collect();
+        assert_eq!(no_sound, vec!["1"]);
 
         fs::remove_dir_all(dir).unwrap();
     }

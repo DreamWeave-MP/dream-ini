@@ -82,10 +82,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if !cfg_path.exists() {
         eprintln!("cfg file does not exist; starting from an empty config");
-        if let Some(parent) = cfg_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&cfg_path, "")?;
     }
 
     let encoding = cli
