@@ -211,6 +211,17 @@ mod tests {
     }
 
     #[test]
+    fn help_mentions_core_options() {
+        let help = Cli::command().render_help().to_string();
+
+        assert!(help.contains("--game-files"));
+        assert!(help.contains("--fonts"));
+        assert!(help.contains("--no-archives"));
+        assert!(help.contains("--encoding"));
+        assert!(help.contains("--output"));
+    }
+
+    #[test]
     fn run_with_writes_output_from_flag_paths() {
         let dir = unique_test_dir("flag-run");
         fs::create_dir_all(&dir).unwrap();
@@ -300,6 +311,98 @@ mod tests {
         assert_eq!(MISSING_INI_EXIT_CODE, 253);
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_unsupported_encoding_returns_error() {
+        let dir = unique_test_dir("bad-encoding-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let cfg = dir.join("openmw.cfg");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        fs::write(&cfg, "").unwrap();
+
+        let error = run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: Some(cfg),
+            output: None,
+            game_files: false,
+            fonts: false,
+            no_archives: false,
+            encoding: Some("bogus".to_owned()),
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap_err();
+
+        match error {
+            CliError::Other(error) => assert_eq!(error.to_string(), "unsupported encoding: bogus"),
+            CliError::MissingIni => panic!("expected unsupported encoding error"),
+        }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_verbose_game_files_writes_content() {
+        let dir = unique_test_dir("verbose-game-files-run");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let cfg = dir.join("openmw.cfg");
+        let output = dir.join("out.cfg");
+        fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+        fs::write(
+            &cfg,
+            format!("data={}\nencoding=win1252\n", data_dir.display()),
+        )
+        .unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        run_with(Cli {
+            verbose: true,
+            ini: Some(ini),
+            cfg: Some(cfg),
+            output: Some(output.clone()),
+            game_files: true,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
+
+        let written = fs::read_to_string(output).unwrap();
+        assert!(written.contains("content=Base.esm"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn tes3_bytes(masters: &[&str]) -> Vec<u8> {
+        let mut record = Vec::new();
+        subrecord(&mut record, *b"HEDR", &[0; 300]);
+        for master in masters {
+            let mut name = master.as_bytes().to_vec();
+            name.push(0);
+            subrecord(&mut record, *b"MAST", &name);
+            subrecord(&mut record, *b"DATA", &0u64.to_le_bytes());
+        }
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"TES3");
+        bytes.extend_from_slice(&u32::try_from(record.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&record);
+        bytes
+    }
+
+    fn subrecord(output: &mut Vec<u8>, name: [u8; 4], data: &[u8]) {
+        output.extend_from_slice(&name);
+        output.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
+        output.extend_from_slice(data);
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

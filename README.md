@@ -20,6 +20,7 @@ The existing cfg file is read first, imported keys are replaced, unrelated setti
 rome-ini Morrowind.ini openmw.cfg
 rome-ini --output imported.cfg Morrowind.ini openmw.cfg
 rome-ini --game-files Morrowind.ini openmw.cfg
+rome-ini --game-files --verbose Morrowind.ini openmw.cfg
 rome-ini --fonts --encoding win1252 Morrowind.ini openmw.cfg
 rome-ini --no-archives Morrowind.ini openmw.cfg
 ```
@@ -42,6 +43,7 @@ rome-ini --no-archives Morrowind.ini openmw.cfg
 - Missing cfg files are treated as empty configs and are not created unless they are also the output path.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
+- `--game-files` searches existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files`.
 
 ## Intentional Differences From OpenMW's C++ Importer
 
@@ -59,6 +61,8 @@ cargo clippy --all-targets -- -W clippy::pedantic -D warnings
 cargo test
 cargo bench
 ```
+
+The Criterion benchmark measures a large synthetic parse/import/serialize round trip. It does not include plugin header IO from `--game-files`. Use `cargo bench --no-run` to verify the benchmark builds without running measurements.
 
 ## License
 

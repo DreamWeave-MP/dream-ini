@@ -1735,6 +1735,41 @@ mod tests {
     }
 
     #[test]
+    fn import_paths_writes_exact_golden_output() {
+        let dir = unique_test_dir("golden-output");
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("openmw.cfg");
+        let ini = dir.join("Morrowind.ini");
+        fs::write(
+            &cfg,
+            "resources=resources\nno-sound=0\nfallback=Old_Setting,old\n",
+        )
+        .unwrap();
+        fs::write(
+            &ini,
+            "[General]\nDisable Audio=1\n[Movies]\nNew Game=intro.bik\n[Archives]\nArchive 0=Tribunal.bsa\n",
+        )
+        .unwrap();
+
+        let importer = IniImporter::new(ImportOptions::default());
+        let result = importer.import_paths(&ini, &cfg).unwrap();
+
+        assert_eq!(
+            serialize_cfg(&result.cfg),
+            concat!(
+                "encoding=win1252\n",
+                "fallback=Movies_New_Game,intro.bik\n",
+                "fallback-archive=Morrowind.bsa\n",
+                "fallback-archive=Tribunal.bsa\n",
+                "no-sound=1\n",
+                "resources=resources\n",
+            )
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn import_paths_does_not_include_composed_synthetic_entries() {
         let dir = unique_test_dir("user-output-only");
         let resources = dir.join("resources");
