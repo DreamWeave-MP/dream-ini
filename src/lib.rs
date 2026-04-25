@@ -1623,6 +1623,43 @@ mod tests {
     }
 
     #[test]
+    fn imports_fallback_values_with_legacy_shapes() {
+        let dir = unique_test_dir("fallback-shapes");
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("openmw.cfg");
+        let ini = dir.join("Morrowind.ini");
+        let output = dir.join("imported.cfg");
+        fs::write(&cfg, "encoding=win1252\n").unwrap();
+        fs::write(
+            &ini,
+            concat!(
+                "[Movies]\n",
+                "New Game=movie,with,commas.bik\n",
+                "[Weather]\n",
+                "Sunrise Time=6\n",
+                "Sun Glare Fader Max=0.75\n",
+                "[Weather Clear]\n",
+                "Sky Day Color=10,20,30\n",
+            ),
+        )
+        .unwrap();
+
+        let importer = IniImporter::new(ImportOptions::default());
+        let result = importer.import_config_paths(&ini, &cfg).unwrap();
+        importer
+            .save_config_output(&output, &result.config)
+            .unwrap();
+        let written = fs::read_to_string(&output).unwrap();
+
+        assert!(written.contains("fallback=Movies_New_Game,movie,with,commas.bik"));
+        assert!(written.contains("fallback=Weather_Sunrise_Time,6"));
+        assert!(written.contains("fallback=Weather_Sun_Glare_Fader_Max,0.75"));
+        assert!(written.contains("fallback=Weather_Clear_Sky_Day_Color,10,20,30"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn missing_cfg_starts_empty_without_creating_input_file() {
         let dir = unique_test_dir("missing-cfg");
         fs::create_dir_all(&dir).unwrap();
