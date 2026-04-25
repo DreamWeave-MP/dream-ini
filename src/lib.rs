@@ -74,6 +74,7 @@ pub struct ImportOptions {
     pub import_fonts: bool,
     pub import_archives: bool,
     pub encoding: Option<TextEncoding>,
+    pub verbose: bool,
 }
 
 impl Default for ImportOptions {
@@ -84,6 +85,7 @@ impl Default for ImportOptions {
             import_fonts: false,
             import_archives: true,
             encoding: None,
+            verbose: false,
         }
     }
 }
@@ -92,6 +94,7 @@ impl Default for ImportOptions {
 pub struct ImportResult {
     pub cfg: MultiMap,
     pub warnings: Vec<String>,
+    pub messages: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,12 +186,13 @@ impl IniImporter {
         ini_path: &Path,
     ) -> Result<ImportResult, ImportError> {
         let mut warnings = Vec::new();
+        let mut messages = Vec::new();
 
         merge(cfg, ini);
         merge_fallback(cfg, ini, self.options.import_fonts);
 
         if self.options.import_game_files {
-            self.import_game_files(cfg, ini, ini_path, &mut warnings)?;
+            self.import_game_files(cfg, ini, ini_path, &mut warnings, &mut messages)?;
         }
 
         if self.options.import_archives {
@@ -198,6 +202,7 @@ impl IniImporter {
         Ok(ImportResult {
             cfg: cfg.clone(),
             warnings,
+            messages,
         })
     }
 
@@ -219,6 +224,7 @@ impl IniImporter {
         ini: &MultiMap,
         ini_path: &Path,
         warnings: &mut Vec<String>,
+        messages: &mut Vec<String>,
     ) -> Result<(), ImportError> {
         let mut data_paths = Vec::new();
         if let Some(paths) = cfg.get("data") {
@@ -248,6 +254,13 @@ impl IniImporter {
                 if let Ok(metadata) = fs::metadata(&candidate) {
                     let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
                     let path = fs::canonicalize(&candidate).unwrap_or(candidate);
+                    if self.options.verbose {
+                        messages.push(format!(
+                            "content file: {} timestamp = ({})",
+                            path.display(),
+                            system_time_key(modified)
+                        ));
+                    }
                     found = Some((system_time_key(modified), path));
                     break;
                 }
@@ -541,6 +554,20 @@ fn read_tes3_header(path: &Path, encoding: TextEncoding) -> Result<PluginHeader,
                 path: path.to_owned(),
                 message: "TES3 record size overflow".to_owned(),
             })?;
+
+    let file_len = file
+        .metadata()
+        .map_err(|source| ImportError::Io {
+            path: path.to_owned(),
+            source,
+        })?
+        .len();
+    if file_len < record_end {
+        return Err(ImportError::InvalidPluginHeader {
+            path: path.to_owned(),
+            message: "TES3 record extends past end of file".to_owned(),
+        });
+    }
 
     let mut offset = 16u64;
     let mut masters = Vec::new();
@@ -1527,6 +1554,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_truncated_non_master_tes3_subrecord_data() {
+        let dir = unique_test_dir("tes3-truncated-non-master-data");
+        fs::create_dir_all(&dir).unwrap();
+        let plugin = dir.join("Bad.esp");
+        let mut record = Vec::new();
+        record.extend_from_slice(b"HEDR");
+        record.extend_from_slice(&300u32.to_le_bytes());
+        record.extend_from_slice(&[0; 8]);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"TES3");
+        bytes.extend_from_slice(&308u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&record);
+        fs::write(&plugin, bytes).unwrap();
+
+        let error = read_plugin_header(&plugin, PluginFormat::Tes3, TextEncoding::Win1252)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("TES3 record extends past end of file"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn imports_game_files_using_tes3_dependencies() {
         let dir = unique_test_dir("game-files");
         let data_dir = dir.join("Data Files");
@@ -1550,6 +1601,34 @@ mod tests {
             values(&result.cfg, "content"),
             &["Base.esm".to_owned(), "Patch.esp".to_owned()]
         );
+        assert!(result.messages.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn verbose_game_file_import_reports_content_file_messages() {
+        let dir = unique_test_dir("game-files-verbose");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            verbose: true,
+            ..ImportOptions::default()
+        });
+
+        let result = importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(result.messages.len(), 1);
+        assert!(result.messages[0].contains("content file:"));
+        assert!(result.messages[0].contains("Base.esm"));
+        assert!(result.messages[0].contains("timestamp = ("));
         fs::remove_dir_all(dir).unwrap();
     }
 

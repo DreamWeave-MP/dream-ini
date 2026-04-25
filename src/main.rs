@@ -119,6 +119,7 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
         encoding,
+        verbose: cli.verbose,
         ..ImportOptions::default()
     };
 
@@ -129,6 +130,9 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
     println!("load ini file: {}", ini_path.display());
 
     let result = importer.import_paths(&ini_path, &cfg_path)?;
+    for message in &result.messages {
+        println!("{message}");
+    }
     for warning in &result.warnings {
         eprintln!("Warning: {warning}");
     }
