@@ -446,6 +446,37 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn run_with_output_only_game_files_writes_default_data_path() {
+        let dir = unique_test_dir("output-only-game-files-run");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let output = dir.join("out.cfg");
+        fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: None,
+            output: Some(output.clone()),
+            game_files: true,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
+
+        let written = fs::read_to_string(output).unwrap();
+        assert!(written.contains(&format!("data={}\n", data_dir.display())));
+        assert!(written.contains("content=Base.esm"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     fn tes3_bytes(masters: &[&str]) -> Vec<u8> {
         let mut record = Vec::new();
         subrecord(&mut record, *b"HEDR", &[0; 300]);

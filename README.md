@@ -45,7 +45,7 @@ rome-ini --no-archives Morrowind.ini openmw.cfg
 - Omitting cfg is allowed when `--output` is provided; this starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
-- `--game-files` searches existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files`.
+- `--game-files` searches existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files`. If content is resolved from that default `Data Files` path and an equivalent path is not already present, `rome-ini` writes it as a `data=...` entry. This depends on `Morrowind.ini` being in the Morrowind install directory; if you pass an INI from another location, provide a cfg with the correct `data` or `data-local` paths or content files may be reported missing.
 
 ## Intentional Differences From OpenMW's C++ Importer
 

@@ -245,19 +245,23 @@ impl IniImporter {
     ) -> Result<(), ImportError> {
         let mut data_paths = Vec::new();
         if let Some(paths) = cfg.get("data") {
-            add_paths(&mut data_paths, paths);
+            add_paths(&mut data_paths, paths, DataPathOrigin::Config);
         }
         if let Some(paths) = cfg.get("data-local") {
-            add_paths(&mut data_paths, paths);
+            add_paths(&mut data_paths, paths, DataPathOrigin::Config);
         }
-        data_paths.push(
-            ini_path
-                .parent()
-                .unwrap_or_else(|| Path::new(""))
-                .join("Data Files"),
-        );
+        let default_data_path = ini_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join("Data Files");
+        let default_data_path = fs::canonicalize(&default_data_path).unwrap_or(default_data_path);
+        data_paths.push(DataPath {
+            path: default_data_path.clone(),
+            origin: DataPathOrigin::Default,
+        });
 
         let mut content_files = Vec::new();
+        let mut used_default_data_path = false;
         for file in sequential_ini_values(ini, "Game Files:GameFile") {
             if !ends_with_ignore_ascii_case(file, ".esm")
                 && !ends_with_ignore_ascii_case(file, ".esp")
@@ -267,10 +271,11 @@ impl IniImporter {
 
             let mut found = None;
             for data_path in &data_paths {
-                let candidate = data_path.join(file);
+                let candidate = data_path.path.join(file);
                 if let Ok(metadata) = fs::metadata(&candidate) {
                     let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
                     let path = fs::canonicalize(&candidate).unwrap_or(candidate);
+                    used_default_data_path |= data_path.origin == DataPathOrigin::Default;
                     if self.options.verbose {
                         messages.push(format!(
                             "content file: {} timestamp = ({})",
@@ -288,6 +293,14 @@ impl IniImporter {
             } else {
                 warnings.push(format!("{file} not found, ignoring"));
             }
+        }
+
+        if used_default_data_path && !has_equivalent_data_path(cfg, &default_data_path) {
+            insert_multimap(
+                cfg,
+                "data".to_owned(),
+                default_data_path.to_string_lossy().into_owned(),
+            );
         }
 
         content_files
@@ -465,14 +478,47 @@ fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<I
         .flat_map(|values| values.iter())
 }
 
-fn add_paths(output: &mut Vec<PathBuf>, input: &[String]) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DataPathOrigin {
+    Config,
+    Default,
+}
+
+#[derive(Debug, Clone)]
+struct DataPath {
+    path: PathBuf,
+    origin: DataPathOrigin,
+}
+
+fn add_paths(output: &mut Vec<DataPath>, input: &[String], origin: DataPathOrigin) {
     for path in input {
-        let unquoted = path
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-            .unwrap_or(path);
-        output.push(PathBuf::from(unquoted));
+        output.push(DataPath {
+            path: PathBuf::from(unquote_path(path)),
+            origin,
+        });
     }
+}
+
+fn unquote_path(path: &str) -> &str {
+    path.strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(path)
+}
+
+fn has_equivalent_data_path(cfg: &MultiMap, path: &Path) -> bool {
+    ["data", "data-local"].iter().any(|key| {
+        cfg.get(*key).is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| equivalent_paths(Path::new(unquote_path(value)), path))
+        })
+    })
+}
+
+fn equivalent_paths(left: &Path, right: &Path) -> bool {
+    let left = fs::canonicalize(left).unwrap_or_else(|_| left.to_owned());
+    let right = fs::canonicalize(right).unwrap_or_else(|_| right.to_owned());
+    left == right
 }
 
 fn dependency_sort(mut source: Vec<(String, Vec<String>)>) -> Vec<String> {
@@ -1679,6 +1725,90 @@ mod tests {
             .unwrap();
 
         assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+        assert_eq!(
+            values(&cfg, "data"),
+            &[data_dir.to_string_lossy().into_owned()]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn default_data_files_path_is_not_duplicated() {
+        let dir = unique_test_dir("game-files-default-data-duplicate");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+        assert_eq!(
+            values(&cfg, "data"),
+            &[data_dir.to_string_lossy().into_owned()]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn default_data_files_path_is_not_added_when_config_data_resolves_content() {
+        let dir = unique_test_dir("game-files-config-data-wins");
+        let default_data_dir = dir.join("Data Files");
+        let configured_data_dir = dir.join("Configured Data");
+        fs::create_dir_all(&default_data_dir).unwrap();
+        fs::create_dir_all(&configured_data_dir).unwrap();
+        fs::write(default_data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+        fs::write(configured_data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = parse_cfg_str(&format!("data={}\n", configured_data_dir.display()));
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+        assert_eq!(
+            values(&cfg, "data"),
+            &[configured_data_dir.to_string_lossy().into_owned()]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_default_data_files_path_is_not_added() {
+        let dir = unique_test_dir("game-files-default-data-missing");
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut cfg = MultiMap::new();
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Missing.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        let result = importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&cfg, "content"), &[] as &[String]);
+        assert_eq!(values(&cfg, "data"), &[] as &[String]);
+        assert_eq!(result.warnings, vec!["Missing.esm not found, ignoring"]);
         fs::remove_dir_all(dir).unwrap();
     }
 
