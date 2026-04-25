@@ -7,6 +7,8 @@ use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252};
 
 mod fallback_keys;
 mod importer;
+#[cfg(feature = "lua")]
+pub mod lua;
 mod parser;
 mod plugin;
 

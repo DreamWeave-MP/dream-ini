@@ -11,6 +11,10 @@ categories = ["command-line-utilities", "config"]
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 encoding_rs = "0.8"
+mlua = { version = "0.10", optional = true, features = ["luajit52", "vendored"] }
+
+[features]
+lua = ["dep:mlua"]
 
 [dev-dependencies]
 criterion = "0.5"

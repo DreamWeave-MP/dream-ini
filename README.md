@@ -62,6 +62,58 @@ rome-ini --dry-run Morrowind.ini openmw.cfg
 - Game-file timestamp sorting uses Rust's full `SystemTime` precision instead of C++ `time_t` seconds.
 - `--verbose` gates content-file timestamp messages. The C++ importer accepts `--verbose` but prints those messages unconditionally during game-file import.
 
+## Lua API
+
+Enable the optional Lua embedding API with the `lua` feature. It uses `mlua` with vendored LuaJIT 2.1 in Lua 5.2 compatibility mode.
+
+```bash
+cargo test --features lua
+```
+
+The crate does not build a Lua `require` module. Embedders create or register the API table explicitly:
+
+```rust
+let lua = mlua::Lua::new();
+let module = rome_ini::lua::create_module(&lua)?;
+lua.globals().set("rome_ini", module)?;
+```
+
+Lua usage:
+
+```lua
+local result = rome_ini.import_paths({
+  ini = "Morrowind.ini",
+  cfg = "openmw.cfg",
+  game_files = true,
+  archives = true,
+  fonts = false,
+  data_dirs = { "/games/Morrowind/Data Files" },
+  encoding = "win1252",
+})
+
+print(result.text)
+for _, warning in ipairs(result.warnings) do
+  print(warning)
+end
+```
+
+Available functions:
+
+- `parse_ini(text, opts)`: parses a Morrowind INI byte string and returns `{ entries = multimap, warnings = { ... } }`.
+- `parse_cfg(text)`: parses OpenMW cfg text and returns a multimap.
+- `serialize_cfg(multimap)`: serializes a multimap to normalized cfg text.
+- `import_maps(cfg, ini, opts)`: imports parsed multimap data and returns `{ cfg = multimap, text = string, warnings = { ... }, messages = { ... } }`.
+- `import_paths(opts)`: imports from `opts.ini` and optional `opts.cfg`, returning the same result shape as `import_maps`.
+
+Multimaps are represented as `key -> array of strings` to preserve duplicate keys:
+
+```lua
+{
+  encoding = { "win1252" },
+  content = { "Morrowind.esm", "Tribunal.esm" },
+}
+```
+
 ## Development
 
 ```bash
