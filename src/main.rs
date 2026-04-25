@@ -118,3 +118,69 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_positional_ini_and_cfg() {
+        let cli = Cli::parse_from(["rome-ini", "Morrowind.ini", "openmw.cfg"]);
+
+        assert_eq!(cli.positional_ini, Some(PathBuf::from("Morrowind.ini")));
+        assert_eq!(cli.positional_cfg, Some(PathBuf::from("openmw.cfg")));
+        assert!(cli.ini.is_none());
+        assert!(cli.cfg.is_none());
+    }
+
+    #[test]
+    fn accepts_flag_ini_and_cfg() {
+        let cli = Cli::parse_from(["rome-ini", "--ini", "mw.ini", "--cfg", "openmw.cfg"]);
+
+        assert_eq!(cli.ini, Some(PathBuf::from("mw.ini")));
+        assert_eq!(cli.cfg, Some(PathBuf::from("openmw.cfg")));
+        assert!(cli.positional_ini.is_none());
+        assert!(cli.positional_cfg.is_none());
+    }
+
+    #[test]
+    fn flag_paths_take_precedence_over_positionals() {
+        let cli = Cli::parse_from([
+            "rome-ini",
+            "positional.ini",
+            "positional.cfg",
+            "--ini",
+            "flag.ini",
+            "--cfg",
+            "flag.cfg",
+        ]);
+
+        let ini_path = cli.ini.or(cli.positional_ini);
+        let cfg_path = cli.cfg.or(cli.positional_cfg);
+
+        assert_eq!(ini_path, Some(PathBuf::from("flag.ini")));
+        assert_eq!(cfg_path, Some(PathBuf::from("flag.cfg")));
+    }
+
+    #[test]
+    fn parses_import_options() {
+        let cli = Cli::parse_from([
+            "rome-ini",
+            "--game-files",
+            "--fonts",
+            "--no-archives",
+            "--encoding",
+            "win1251",
+            "--output",
+            "out.cfg",
+            "mw.ini",
+            "openmw.cfg",
+        ]);
+
+        assert!(cli.game_files);
+        assert!(cli.fonts);
+        assert!(cli.no_archives);
+        assert_eq!(cli.encoding.as_deref(), Some("win1251"));
+        assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
+    }
+}
