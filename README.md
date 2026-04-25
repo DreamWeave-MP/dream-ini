@@ -11,13 +11,14 @@ cargo build --release
 ## Usage
 
 ```bash
-rome-ini [OPTIONS] <inifile> <configfile>
+rome-ini [OPTIONS] <inifile> [configfile]
 ```
 
-The existing cfg file is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output` is supplied.
+If a cfg path is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output` is supplied. If `--output` is supplied without a cfg path, import starts from an empty config and writes a new file.
 
 ```bash
 rome-ini Morrowind.ini openmw.cfg
+rome-ini --ini Morrowind.ini --output imported.cfg
 rome-ini --output imported.cfg Morrowind.ini openmw.cfg
 rome-ini --game-files Morrowind.ini openmw.cfg
 rome-ini --game-files --verbose Morrowind.ini openmw.cfg
@@ -28,7 +29,7 @@ rome-ini --no-archives Morrowind.ini openmw.cfg
 ## Options
 
 - `-i, --ini <FILE>`: Morrowind.ini input path.
-- `-c, --cfg <FILE>`: openmw.cfg input path.
+- `-c, --cfg <FILE>`: optional openmw.cfg input/base path. Required only when `--output` is omitted.
 - `-o, --output <FILE>`: output cfg path.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
 - `-f, --fonts`: import bitmap font fallback settings.
@@ -41,6 +42,7 @@ rome-ini --no-archives Morrowind.ini openmw.cfg
 
 - Output is normalized `key=value` data sorted by key. Comments and original formatting are not preserved.
 - Missing cfg files are treated as empty configs and are not created unless they are also the output path.
+- Omitting cfg is allowed when `--output` is provided; this starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
 - `--game-files` searches existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files`.

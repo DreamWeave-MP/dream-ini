@@ -150,10 +150,21 @@ impl IniImporter {
         ini_path: &Path,
         cfg_path: &Path,
     ) -> Result<ImportResult, ImportError> {
-        let mut cfg = if cfg_path.exists() {
-            parse_cfg_str(&read_to_string(cfg_path)?)
-        } else {
-            MultiMap::new()
+        self.import_optional_cfg_path(ini_path, Some(cfg_path))
+    }
+
+    /// Imports from an INI path and an optional cfg path.
+    ///
+    /// # Errors
+    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, or plugin headers are invalid.
+    pub fn import_optional_cfg_path(
+        &self,
+        ini_path: &Path,
+        cfg_path: Option<&Path>,
+    ) -> Result<ImportResult, ImportError> {
+        let mut cfg = match cfg_path {
+            Some(path) if path.exists() => parse_cfg_str(&read_to_string(path)?),
+            _ => MultiMap::new(),
         };
 
         let encoding = self.effective_encoding(&cfg)?;

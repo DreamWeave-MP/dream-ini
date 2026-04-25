@@ -11,7 +11,7 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
 #[command(
     name = "rome-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
-    override_usage = "rome-ini <options> inifile configfile"
+    override_usage = "rome-ini <options> inifile [configfile]"
 )]
 struct Cli {
     /// Verbose output
@@ -95,7 +95,12 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
         println!();
         return Ok(());
     };
-    let Some(cfg_path) = cli.cfg.or(cli.positional_cfg) else {
+    let cfg_path = cli.cfg.or(cli.positional_cfg);
+    let output_path = if let Some(output) = cli.output {
+        output
+    } else if let Some(cfg_path) = &cfg_path {
+        cfg_path.clone()
+    } else {
         Cli::command().print_help()?;
         println!();
         return Ok(());
@@ -105,7 +110,9 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
         return Err(CliError::MissingIni);
     }
 
-    if !cfg_path.exists() {
+    if let Some(cfg_path) = &cfg_path
+        && !cfg_path.exists()
+    {
         eprintln!("cfg file does not exist");
     }
 
@@ -123,13 +130,14 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
         ..ImportOptions::default()
     };
 
-    let output_path = cli.output.unwrap_or_else(|| cfg_path.clone());
     let importer = IniImporter::new(options);
 
-    println!("load cfg file: {}", cfg_path.display());
+    if let Some(cfg_path) = &cfg_path {
+        println!("load cfg file: {}", cfg_path.display());
+    }
     println!("load ini file: {}", ini_path.display());
 
-    let result = importer.import_paths(&ini_path, &cfg_path)?;
+    let result = importer.import_optional_cfg_path(&ini_path, cfg_path.as_deref())?;
     for message in &result.messages {
         println!("{message}");
     }
@@ -285,6 +293,64 @@ mod tests {
         let written = fs::read_to_string(output).unwrap();
         assert!(written.contains("no-sound=1"));
         assert!(!written.contains("fallback-archive="));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_output_without_cfg_starts_empty() {
+        let dir = unique_test_dir("output-no-cfg-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let output = dir.join("out.cfg");
+        fs::write(
+            &ini,
+            "[General]\nDisable Audio=1\n[Movies]\nNew Game=intro.bik\n",
+        )
+        .unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: None,
+            output: Some(output.clone()),
+            game_files: false,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
+
+        let written = fs::read_to_string(output).unwrap();
+        assert!(written.contains("encoding=win1252"));
+        assert!(written.contains("no-sound=1"));
+        assert!(written.contains("fallback=Movies_New_Game,intro.bik"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_without_cfg_or_output_prints_help() {
+        let dir = unique_test_dir("no-cfg-no-output-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: None,
+            output: None,
+            game_files: false,
+            fonts: false,
+            no_archives: false,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
 
         fs::remove_dir_all(dir).unwrap();
     }
