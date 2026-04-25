@@ -114,7 +114,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if cli.verbose {
         println!("write to: {}", output_path.display());
     }
-    importer.save_config_output(&output_path, &result.config)?;
+    importer.save_config_output(&output_path, &result.output_cfg)?;
 
     Ok(())
 }

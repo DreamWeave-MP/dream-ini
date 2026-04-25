@@ -114,6 +114,7 @@ pub struct ParsedIni {
 pub struct ConfigImportResult {
     pub config: OpenMWConfiguration,
     pub imported: ImportResult,
+    pub output_cfg: MultiMap,
 }
 
 #[derive(Debug)]
@@ -182,19 +183,31 @@ impl IniImporter {
         cfg_path: &Path,
     ) -> Result<ConfigImportResult, ImportError> {
         let mut config = load_config_or_empty(cfg_path)?;
-        let mut cfg = config_to_multimap(&config);
+        let mut output_cfg = if cfg_path.exists() {
+            parse_cfg_str(&read_to_string(cfg_path)?)
+        } else {
+            MultiMap::new()
+        };
+        let mut work_cfg = output_cfg.clone();
+        add_config_context_paths(&mut work_cfg, &config);
 
-        let encoding = self.effective_encoding_from_config(&config);
+        let encoding = self.effective_encoding_from_cfg_or_config(&output_cfg, &config)?;
         apply_encoding(&mut config, cfg_path, encoding)?;
-        set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
+        set_single_value(&mut output_cfg, "encoding", encoding.as_label().to_owned());
+        set_single_value(&mut work_cfg, "encoding", encoding.as_label().to_owned());
 
         let ini_bytes = read_bytes(ini_path)?;
         let parsed_ini = parse_ini_bytes_with_warnings(&ini_bytes, encoding);
-        let mut imported = self.import_maps(&mut cfg, &parsed_ini.entries, ini_path)?;
+        let mut imported = self.import_maps(&mut work_cfg, &parsed_ini.entries, ini_path)?;
         imported.warnings.splice(0..0, parsed_ini.warnings);
+        apply_imported_output_cfg(&mut output_cfg, &imported.cfg);
         apply_imported_cfg(&mut config, cfg_path, &imported.cfg)?;
 
-        Ok(ConfigImportResult { config, imported })
+        Ok(ConfigImportResult {
+            config,
+            imported,
+            output_cfg,
+        })
     }
 
     /// Saves an imported configuration to an arbitrary output path.
@@ -204,11 +217,12 @@ impl IniImporter {
     pub fn save_config_output(
         &self,
         output_path: &Path,
-        config: &OpenMWConfiguration,
+        cfg: &MultiMap,
     ) -> Result<(), ImportError> {
-        config
-            .save_to_path(output_path)
-            .map_err(|error| ImportError::OpenMwConfig(error.to_string()))
+        fs::write(output_path, serialize_cfg(cfg)).map_err(|source| ImportError::Io {
+            path: output_path.to_owned(),
+            source,
+        })
     }
 
     /// Imports already parsed maps into the lightweight map model.
@@ -259,16 +273,24 @@ impl IniImporter {
         Ok(TextEncoding::Win1252)
     }
 
-    fn effective_encoding_from_config(&self, config: &OpenMWConfiguration) -> TextEncoding {
+    fn effective_encoding_from_cfg_or_config(
+        &self,
+        cfg: &MultiMap,
+        config: &OpenMWConfiguration,
+    ) -> Result<TextEncoding, ImportError> {
         if let Some(encoding) = self.options.encoding {
-            return encoding;
+            return Ok(encoding);
+        }
+
+        if let Some(value) = cfg.get("encoding").and_then(|values| values.last()) {
+            return TextEncoding::parse(value);
         }
 
         let Some(setting) = config.encoding() else {
-            return TextEncoding::Win1252;
+            return Ok(TextEncoding::Win1252);
         };
 
-        TextEncoding::from_openmw(setting.value())
+        Ok(TextEncoding::from_openmw(setting.value()))
     }
 
     fn import_game_files(
@@ -619,22 +641,10 @@ fn read_tes3_header(path: &Path, encoding: TextEncoding) -> Result<PluginHeader,
     })
 }
 
-fn config_to_multimap(config: &OpenMWConfiguration) -> MultiMap {
-    let mut cfg = MultiMap::new();
-
-    if let Some(encoding) = config.encoding() {
-        insert_multimap(
-            &mut cfg,
-            "encoding".to_owned(),
-            TextEncoding::from_openmw(encoding.value())
-                .as_label()
-                .to_owned(),
-        );
-    }
-
+fn add_config_context_paths(cfg: &mut MultiMap, config: &OpenMWConfiguration) {
     if let Some(data_local) = config.data_local() {
         insert_multimap(
-            &mut cfg,
+            cfg,
             "data-local".to_owned(),
             data_local.parsed().to_string_lossy().into_owned(),
         );
@@ -642,41 +652,29 @@ fn config_to_multimap(config: &OpenMWConfiguration) -> MultiMap {
 
     for data in config.data_directories_iter() {
         insert_multimap(
-            &mut cfg,
+            cfg,
             "data".to_owned(),
             data.parsed().to_string_lossy().into_owned(),
         );
     }
+}
 
-    for archive in config.fallback_archives_iter() {
-        insert_multimap(
-            &mut cfg,
-            "fallback-archive".to_owned(),
-            archive.value().clone(),
-        );
+fn apply_imported_output_cfg(output_cfg: &mut MultiMap, imported_cfg: &MultiMap) {
+    set_from_import(output_cfg, imported_cfg, "encoding");
+    set_from_import(output_cfg, imported_cfg, "fallback");
+    set_from_import(output_cfg, imported_cfg, "fallback-archive");
+    set_from_import(output_cfg, imported_cfg, "content");
+    if imported_cfg.contains_key("no-sound") {
+        set_from_import(output_cfg, imported_cfg, "no-sound");
     }
+}
 
-    for content in config.content_files_iter() {
-        insert_multimap(&mut cfg, "content".to_owned(), content.value().clone());
+fn set_from_import(output_cfg: &mut MultiMap, imported_cfg: &MultiMap, key: &str) {
+    if let Some(values) = imported_cfg.get(key) {
+        output_cfg.insert(key.to_owned(), values.clone());
+    } else {
+        output_cfg.remove(key);
     }
-
-    for setting in config.game_settings() {
-        insert_multimap(
-            &mut cfg,
-            "fallback".to_owned(),
-            format!("{},{}", setting.key(), setting.value()),
-        );
-    }
-
-    for setting in config.generic_settings_iter() {
-        insert_multimap(
-            &mut cfg,
-            setting.key().to_owned(),
-            setting.value().to_owned(),
-        );
-    }
-
-    cfg
 }
 
 fn load_config_or_empty(cfg_path: &Path) -> Result<OpenMWConfiguration, ImportError> {
@@ -1656,12 +1654,33 @@ mod tests {
         assert!(result.config.has_archive_file("Tribunal.bsa"));
 
         importer
-            .save_config_output(&output, &result.config)
+            .save_config_output(&output, &result.output_cfg)
             .unwrap();
         let written = fs::read_to_string(&output).unwrap();
         assert!(written.contains("no-sound=1"));
         assert!(written.contains("fallback=Movies_New_Game,intro.bik"));
         assert!(written.contains("fallback-archive=Morrowind.bsa"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn output_cfg_does_not_include_composed_synthetic_entries() {
+        let dir = unique_test_dir("user-output-only");
+        let resources = dir.join("resources");
+        fs::create_dir_all(resources.join("vfs")).unwrap();
+        let cfg = dir.join("openmw.cfg");
+        let ini = dir.join("Morrowind.ini");
+        fs::write(&cfg, format!("resources={}\n", resources.display())).unwrap();
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        let importer = IniImporter::new(ImportOptions::default());
+        let result = importer.import_config_paths(&ini, &cfg).unwrap();
+        let output = serialize_cfg(&result.output_cfg);
+
+        assert!(output.contains("resources="));
+        assert!(output.contains("no-sound=1"));
+        assert!(!output.contains("data="));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1691,7 +1710,7 @@ mod tests {
         let importer = IniImporter::new(ImportOptions::default());
         let result = importer.import_config_paths(&ini, &cfg).unwrap();
         importer
-            .save_config_output(&output, &result.config)
+            .save_config_output(&output, &result.output_cfg)
             .unwrap();
         let written = fs::read_to_string(&output).unwrap();
 
