@@ -4,6 +4,8 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser};
 use rome_ini::{ImportOptions, IniImporter, TextEncoding};
 
+const MISSING_INI_EXIT_CODE: u8 = 253;
+
 #[derive(Debug, Parser)]
 #[allow(clippy::struct_excessive_bools)]
 #[command(
@@ -56,15 +58,38 @@ struct Cli {
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
+        Err(CliError::MissingIni) => {
+            eprintln!("ini file does not exist");
+            ExitCode::from(MISSING_INI_EXIT_CODE)
+        }
+        Err(CliError::Other(error)) => {
             eprintln!("ERROR: {error}");
             ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Debug)]
+enum CliError {
+    MissingIni,
+    Other(Box<dyn std::error::Error>),
+}
+
+impl<E> From<E> for CliError
+where
+    E: std::error::Error + 'static,
+{
+    fn from(error: E) -> Self {
+        Self::Other(Box::new(error))
+    }
+}
+
+fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
+    run_with(cli)
+}
+
+fn run_with(cli: Cli) -> Result<(), CliError> {
     let Some(ini_path) = cli.ini.or(cli.positional_ini) else {
         Cli::command().print_help()?;
         println!();
@@ -77,7 +102,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if !ini_path.exists() {
-        return Err("ini file does not exist".into());
+        return Err(CliError::MissingIni);
     }
 
     if !cfg_path.exists() {
@@ -101,19 +126,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let output_path = cli.output.unwrap_or_else(|| cfg_path.clone());
     let importer = IniImporter::new(options);
 
-    if cli.verbose {
-        println!("load cfg file: {}", cfg_path.display());
-        println!("load ini file: {}", ini_path.display());
-    }
+    println!("load cfg file: {}", cfg_path.display());
+    println!("load ini file: {}", ini_path.display());
 
     let result = importer.import_config_paths(&ini_path, &cfg_path)?;
     for warning in &result.imported.warnings {
         eprintln!("Warning: {warning}");
     }
 
-    if cli.verbose {
-        println!("write to: {}", output_path.display());
-    }
+    println!("write to: {}", output_path.display());
     importer.save_config_output(&output_path, &result.output_cfg)?;
 
     Ok(())
