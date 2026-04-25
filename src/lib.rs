@@ -1,3 +1,32 @@
+//! Library support for importing Morrowind INI settings into OpenMW-style configuration data.
+//!
+//! The crate exposes the same core importer used by the `rome-ini` CLI. Configuration data is
+//! represented as a multimap (`key -> Vec<value>`) so duplicate cfg keys such as `data`, `content`,
+//! and `fallback` are preserved without special cases.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use std::path::Path;
+//!
+//! use rome_ini::{ImportOptions, IniImporter};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let importer = IniImporter::new(ImportOptions::default());
+//! let result = importer.import_optional_cfg_path(
+//!     Path::new("Morrowind.ini"),
+//!     Some(Path::new("openmw.cfg")),
+//! )?;
+//!
+//! for warning in &result.warnings {
+//!     eprintln!("Warning: {warning}");
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Enable the `lua` feature to expose an embedding-oriented Lua API via [`lua::create_module`].
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;

@@ -9,6 +9,20 @@ use crate::{
 
 /// Creates a Lua table exposing the `rome-ini` embedding API.
 ///
+/// This is intended for Rust embedders. The crate does not provide a `cdylib` or `require` module;
+/// callers should assign the returned table into their Lua environment explicitly.
+///
+/// The table contains these functions:
+///
+/// - `parse_ini(text, opts) -> { entries = multimap, warnings = string[] }`
+/// - `parse_cfg(text) -> multimap`
+/// - `serialize_cfg(multimap) -> string`
+/// - `import_maps(cfg, ini, opts) -> { cfg = multimap, text = string, warnings = string[], messages = string[] }`
+/// - `import_paths(opts) -> { cfg = multimap, text = string, warnings = string[], messages = string[] }`
+///
+/// Multimaps are represented as Lua tables where each key maps to an array of strings, for example
+/// `{ encoding = { "win1252" }, content = { "Morrowind.esm" } }`.
+///
 /// # Errors
 /// Returns a Lua error if module functions cannot be created.
 pub fn create_module(lua: &Lua) -> LuaResult<Table> {
@@ -65,6 +79,9 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
 }
 
 /// Registers the `rome_ini` table in Lua globals.
+///
+/// This is a convenience wrapper around [`create_module`]. It does not modify Lua package loaders
+/// or enable `require("rome_ini")`.
 ///
 /// # Errors
 /// Returns a Lua error if the module cannot be created or assigned.

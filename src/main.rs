@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
-use rome_ini::{ImportOptions, IniImporter, TextEncoding, serialize_cfg};
+use clap_complete::Shell;
+use rome_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
+use serde::Serialize;
 
 const MISSING_INI_EXIT_CODE: u8 = 253;
 
@@ -41,8 +43,20 @@ struct Cli {
     dry_run: bool,
 
     /// Write resulting cfg to stdout instead of a file
-    #[arg(long = "stdout", visible_alias = "print")]
+    #[arg(long = "stdout", visible_alias = "print", conflicts_with = "json")]
     stdout: bool,
+
+    /// Write import result JSON to stdout instead of a file
+    #[arg(long, conflicts_with = "stdout")]
+    json: bool,
+
+    /// Generate shell completion script to stdout
+    #[arg(long, value_name = "SHELL", conflicts_with = "generate_manpage")]
+    generate_completion: Option<Shell>,
+
+    /// Generate roff manpage to stdout
+    #[arg(long, conflicts_with = "generate_completion")]
+    generate_manpage: bool,
 
     /// Import esm and esp files
     #[arg(short = 'g', long = "game-files")]
@@ -117,18 +131,21 @@ fn run_with_writers(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<(), CliError> {
-    let stdout_mode = cli.stdout;
+    if handle_generated_output(&cli, stdout)? {
+        return Ok(());
+    }
+    let stdout_mode = cli.stdout || cli.json;
     let Some(ini_path) = cli.ini.or(cli.positional_ini) else {
         write!(stdout, "{}", Cli::command().render_help())?;
         return Ok(());
     };
     let cfg_path = cli.cfg.or(cli.positional_cfg);
     let output_path = cli.output.clone().or_else(|| {
-        (!stdout_mode && !cli.dry_run)
+        (!stdout_mode && !cli.dry_run && !cli.json)
             .then(|| cfg_path.clone())
             .flatten()
     });
-    if output_path.is_none() && !stdout_mode && !cli.dry_run {
+    if output_path.is_none() && !stdout_mode && !cli.dry_run && !cli.json {
         write!(stdout, "{}", Cli::command().render_help())?;
         return Ok(());
     }
@@ -183,18 +200,72 @@ fn run_with_writers(
         writeln!(stderr, "Warning: {warning}")?;
     }
 
-    if stdout_mode {
+    write_result_output(
+        &importer,
+        &result,
+        OutputMode {
+            json: cli.json,
+            stdout: cli.stdout,
+            dry_run: cli.dry_run,
+            output_path,
+        },
+        stdout,
+        stderr,
+    )?;
+
+    Ok(())
+}
+
+fn handle_generated_output(cli: &Cli, stdout: &mut dyn Write) -> Result<bool, CliError> {
+    if let Some(shell) = cli.generate_completion {
+        clap_complete::generate(shell, &mut Cli::command(), "rome-ini", stdout);
+        return Ok(true);
+    }
+
+    if cli.generate_manpage {
+        clap_mangen::Man::new(Cli::command()).render(stdout)?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+#[derive(Debug)]
+struct OutputMode {
+    json: bool,
+    stdout: bool,
+    dry_run: bool,
+    output_path: Option<PathBuf>,
+}
+
+fn write_result_output(
+    importer: &IniImporter,
+    result: &ImportResult,
+    mode: OutputMode,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<(), CliError> {
+    if mode.json {
+        let output = JsonOutput {
+            cfg: &result.cfg,
+            text: serialize_cfg(&result.cfg),
+            warnings: &result.warnings,
+            messages: &result.messages,
+        };
+        serde_json::to_writer_pretty(&mut *stdout, &output)?;
+        writeln!(stdout)?;
+    } else if mode.stdout {
         write!(stdout, "{}", serialize_cfg(&result.cfg))?;
-    } else if let Some(output_path) = output_path {
+    } else if let Some(output_path) = mode.output_path {
         diagnostic(
-            stdout_mode,
+            false,
             stdout,
             stderr,
             format_args!("write to: {}", output_path.display()),
         )?;
-        if cli.dry_run {
+        if mode.dry_run {
             diagnostic(
-                stdout_mode,
+                false,
                 stdout,
                 stderr,
                 format_args!("dry run: not writing output"),
@@ -202,9 +273,9 @@ fn run_with_writers(
         } else {
             importer.save_config_output(&output_path, &result.cfg)?;
         }
-    } else if cli.dry_run {
+    } else if mode.dry_run {
         diagnostic(
-            stdout_mode,
+            false,
             stdout,
             stderr,
             format_args!("dry run: not writing output"),
@@ -212,6 +283,14 @@ fn run_with_writers(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct JsonOutput<'a> {
+    cfg: &'a rome_ini::MultiMap,
+    text: String,
+    warnings: &'a [String],
+    messages: &'a [String],
 }
 
 fn diagnostic(
@@ -318,6 +397,125 @@ mod tests {
         assert!(help.contains("--data-dir"));
         assert!(help.contains("--dry-run"));
         assert!(help.contains("--stdout"));
+        assert!(help.contains("--json"));
+        assert!(help.contains("--generate-completion"));
+        assert!(help.contains("--generate-manpage"));
+    }
+
+    #[test]
+    fn parses_generation_options() {
+        let completion = Cli::parse_from(["rome-ini", "--generate-completion", "bash"]);
+        assert_eq!(completion.generate_completion, Some(Shell::Bash));
+
+        let manpage = Cli::parse_from(["rome-ini", "--generate-manpage"]);
+        assert!(manpage.generate_manpage);
+    }
+
+    #[test]
+    fn run_with_json_writes_result_to_stdout() {
+        let dir = unique_test_dir("json-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        run_with_writers(
+            Cli {
+                verbose: false,
+                ini: Some(ini),
+                cfg: None,
+                output: None,
+                data_dirs: Vec::new(),
+                dry_run: false,
+                stdout: false,
+                json: true,
+                generate_completion: None,
+                generate_manpage: false,
+                game_files: false,
+                fonts: false,
+                no_archives: true,
+                encoding: None,
+                positional_ini: None,
+                positional_cfg: None,
+            },
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let json: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(json["cfg"]["encoding"][0], "win1252");
+        assert_eq!(json["cfg"]["no-sound"][0], "1");
+        assert!(json["text"].as_str().unwrap().contains("no-sound=1\n"));
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("load ini file:")
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_generation_options_do_not_require_ini() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run_with_writers(
+            Cli {
+                verbose: false,
+                ini: None,
+                cfg: None,
+                output: None,
+                data_dirs: Vec::new(),
+                dry_run: false,
+                stdout: false,
+                json: false,
+                generate_completion: Some(Shell::Bash),
+                generate_manpage: false,
+                game_files: false,
+                fonts: false,
+                no_archives: false,
+                encoding: None,
+                positional_ini: None,
+                positional_cfg: None,
+            },
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        assert!(String::from_utf8(stdout).unwrap().contains("rome-ini"));
+        assert!(stderr.is_empty());
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        run_with_writers(
+            Cli {
+                verbose: false,
+                ini: None,
+                cfg: None,
+                output: None,
+                data_dirs: Vec::new(),
+                dry_run: false,
+                stdout: false,
+                json: false,
+                generate_completion: None,
+                generate_manpage: true,
+                game_files: false,
+                fonts: false,
+                no_archives: false,
+                encoding: None,
+                positional_ini: None,
+                positional_cfg: None,
+            },
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        let manpage = String::from_utf8(stdout).unwrap();
+        assert!(manpage.contains("rome-ini"));
+        assert!(manpage.contains("Import Morrowind.ini settings"));
+        assert!(stderr.is_empty());
     }
 
     #[test]
@@ -342,6 +540,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -377,6 +578,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: true,
@@ -414,6 +618,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: true,
@@ -449,6 +656,9 @@ mod tests {
                 data_dirs: Vec::new(),
                 dry_run: false,
                 stdout: true,
+                json: false,
+                generate_completion: None,
+                generate_manpage: false,
                 game_files: false,
                 fonts: false,
                 no_archives: true,
@@ -487,6 +697,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: true,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: true,
@@ -515,6 +728,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: true,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: true,
@@ -542,6 +758,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -566,6 +785,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -598,6 +820,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -639,6 +864,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: true,
             fonts: false,
             no_archives: true,
@@ -672,6 +900,9 @@ mod tests {
             data_dirs: Vec::new(),
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: true,
             fonts: false,
             no_archives: true,
@@ -706,6 +937,9 @@ mod tests {
             data_dirs: vec![data_dir.clone()],
             dry_run: false,
             stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
             game_files: true,
             fonts: false,
             no_archives: true,

@@ -121,6 +121,76 @@ fn dry_run_reports_without_writing_output() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn json_mode_outputs_structured_result_to_stdout() {
+    let dir = unique_test_dir("json-mode");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--json", "--no-archives"])
+        .arg(&ini)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["cfg"]["encoding"][0], "win1252");
+    assert_eq!(json["cfg"]["no-sound"][0], "1");
+    assert!(json["text"].as_str().unwrap().contains("no-sound=1\n"));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("load ini file:")
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn json_conflicts_with_stdout() {
+    let output = Command::new(BIN)
+        .args(["--json", "--stdout"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("cannot be used")
+    );
+}
+
+#[test]
+fn generates_bash_completion_to_stdout() {
+    let output = Command::new(BIN)
+        .args(["--generate-completion", "bash"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("rome-ini"));
+    assert!(stdout.contains("--game-files"));
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+}
+
+#[test]
+fn generates_manpage_to_stdout() {
+    let output = Command::new(BIN)
+        .arg("--generate-manpage")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("rome-ini"));
+    assert!(stdout.contains("Import Morrowind.ini settings"));
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+}
+
 fn tes3_bytes(masters: &[&str]) -> Vec<u8> {
     let mut record = Vec::new();
     subrecord(&mut record, *b"HEDR", &[0; 300]);

@@ -14,7 +14,7 @@ cargo build --release
 rome-ini [OPTIONS] <inifile> [configfile]
 ```
 
-If a cfg path is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, or `--dry-run` is supplied. If `--output`, `--stdout`, or `--dry-run` is supplied without a cfg path, import starts from an empty config.
+If a cfg path is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, `--json`, or `--dry-run` is supplied. If `--output`, `--stdout`, `--json`, or `--dry-run` is supplied without a cfg path, import starts from an empty config.
 
 ```bash
 rome-ini Morrowind.ini openmw.cfg
@@ -22,20 +22,26 @@ rome-ini --ini Morrowind.ini --output imported.cfg
 rome-ini --output imported.cfg Morrowind.ini openmw.cfg
 rome-ini --game-files Morrowind.ini openmw.cfg
 rome-ini --game-files --data-dir "/games/Morrowind/Data Files" --stdout > openmw.cfg
+rome-ini --game-files --json Morrowind.ini > import.json
 rome-ini --game-files --verbose Morrowind.ini openmw.cfg
 rome-ini --fonts --encoding win1252 Morrowind.ini openmw.cfg
 rome-ini --no-archives Morrowind.ini openmw.cfg
 rome-ini --dry-run Morrowind.ini openmw.cfg
+rome-ini --generate-completion bash > rome-ini.bash
+rome-ini --generate-manpage > rome-ini.1
 ```
 
 ## Options
 
 - `-i, --ini <FILE>`: Morrowind.ini input path.
-- `-c, --cfg <FILE>`: optional openmw.cfg input/base path. Required only when `--output`, `--stdout`, and `--dry-run` are omitted.
+- `-c, --cfg <FILE>`: optional openmw.cfg input/base path. Required only when `--output`, `--stdout`, `--json`, and `--dry-run` are omitted.
 - `-o, --output <FILE>`: output cfg path.
 - `--data-dir <DIR>` / `--data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
 - `--dry-run`: parse, import, and print diagnostics without writing an output file.
 - `--stdout` / `--print`: write the resulting cfg to stdout instead of a file. Diagnostics are written to stderr so stdout is redirect-safe.
+- `--json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of a file. Diagnostics are written to stderr.
+- `--generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
+- `--generate-manpage`: write a roff manpage to stdout.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
 - `-f, --fonts`: import bitmap font fallback settings.
 - `-A, --no-archives`: disable BSA archive import.
@@ -48,7 +54,7 @@ rome-ini --dry-run Morrowind.ini openmw.cfg
 
 - Output is normalized `key=value` data sorted by key. Comments and original formatting are not preserved.
 - Missing cfg files are treated as empty configs and are not created unless they are also the output path.
-- Omitting cfg is allowed when `--output`, `--stdout`, or `--dry-run` is provided; this starts from an empty config.
+- Omitting cfg is allowed when `--output`, `--stdout`, `--json`, or `--dry-run` is provided; this starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
 - `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. If content is resolved from an explicit `--data-dir` and an equivalent path is not already present, `rome-ini` writes it as a `data=...` entry. The default `Data Files` fallback is searched but is not written automatically.
@@ -114,6 +120,16 @@ Multimaps are represented as `key -> array of strings` to preserve duplicate key
 }
 ```
 
+## Rust API
+
+Generate crate documentation with:
+
+```bash
+cargo doc --open
+```
+
+The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`.
+
 ## Development
 
 ```bash
@@ -121,6 +137,14 @@ cargo fmt --check
 cargo clippy --all-targets -- -W clippy::pedantic -D warnings
 cargo test
 cargo bench
+```
+
+Lua feature checks:
+
+```bash
+cargo clippy --all-targets --features lua -- -W clippy::pedantic -D warnings
+cargo test --features lua
+cargo bench --no-run --features lua
 ```
 
 The Criterion benchmark measures a large synthetic parse/import/serialize round trip. It does not include plugin header IO from `--game-files`. Use `cargo bench --no-run` to verify the benchmark builds without running measurements.
