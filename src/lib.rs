@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252};
-use openmw_config::{EncodingSetting, EncodingType, OpenMWConfiguration};
+use openmw_config::{EncodingSetting, OpenMWConfiguration};
 
 pub type MultiMap = BTreeMap<String, Vec<String>>;
 
@@ -64,14 +64,6 @@ impl TextEncoding {
             Self::Win1252 => WINDOWS_1252,
         }
     }
-
-    fn from_openmw(encoding: EncodingType) -> Self {
-        match encoding {
-            EncodingType::WIN1250 => Self::Win1250,
-            EncodingType::WIN1251 => Self::Win1251,
-            _ => Self::Win1252,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +74,6 @@ pub struct ImportOptions {
     pub import_fonts: bool,
     pub import_archives: bool,
     pub encoding: Option<TextEncoding>,
-    pub verbose: bool,
 }
 
 impl Default for ImportOptions {
@@ -93,7 +84,6 @@ impl Default for ImportOptions {
             import_fonts: false,
             import_archives: true,
             encoding: None,
-            verbose: false,
         }
     }
 }
@@ -160,8 +150,11 @@ impl IniImporter {
         ini_path: &Path,
         cfg_path: &Path,
     ) -> Result<ImportResult, ImportError> {
-        let cfg_text = read_to_string(cfg_path)?;
-        let mut cfg = parse_cfg_str(&cfg_text);
+        let mut cfg = if cfg_path.exists() {
+            parse_cfg_str(&read_to_string(cfg_path)?)
+        } else {
+            MultiMap::new()
+        };
 
         let encoding = self.effective_encoding(&cfg)?;
         set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
@@ -189,9 +182,8 @@ impl IniImporter {
             MultiMap::new()
         };
         let mut work_cfg = output_cfg.clone();
-        add_config_context_paths(&mut work_cfg, &config);
 
-        let encoding = self.effective_encoding_from_cfg_or_config(&output_cfg, &config)?;
+        let encoding = self.effective_encoding(&output_cfg)?;
         apply_encoding(&mut config, cfg_path, encoding)?;
         set_single_value(&mut output_cfg, "encoding", encoding.as_label().to_owned());
         set_single_value(&mut work_cfg, "encoding", encoding.as_label().to_owned());
@@ -273,26 +265,6 @@ impl IniImporter {
         Ok(TextEncoding::Win1252)
     }
 
-    fn effective_encoding_from_cfg_or_config(
-        &self,
-        cfg: &MultiMap,
-        config: &OpenMWConfiguration,
-    ) -> Result<TextEncoding, ImportError> {
-        if let Some(encoding) = self.options.encoding {
-            return Ok(encoding);
-        }
-
-        if let Some(value) = cfg.get("encoding").and_then(|values| values.last()) {
-            return TextEncoding::parse(value);
-        }
-
-        let Some(setting) = config.encoding() else {
-            return Ok(TextEncoding::Win1252);
-        };
-
-        Ok(TextEncoding::from_openmw(setting.value()))
-    }
-
     fn import_game_files(
         &self,
         cfg: &mut MultiMap,
@@ -327,7 +299,8 @@ impl IniImporter {
                 let candidate = data_path.join(file);
                 if let Ok(metadata) = fs::metadata(&candidate) {
                     let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
-                    found = Some((system_time_key(modified), candidate));
+                    let path = fs::canonicalize(&candidate).unwrap_or(candidate);
+                    found = Some((system_time_key(modified), path));
                     break;
                 }
             }
@@ -474,11 +447,10 @@ pub fn serialize_cfg(cfg: &MultiMap) -> String {
 }
 
 fn merge(cfg: &mut MultiMap, ini: &MultiMap) {
-    if let Some(values) = ini.get("General:Disable Audio") {
-        cfg.remove("no-sound");
-        for value in values {
-            insert_multimap(cfg, "no-sound".to_owned(), value.clone());
-        }
+    if let Some(values) = ini.get("General:Disable Audio")
+        && let Some(value) = values.last()
+    {
+        cfg.insert("no-sound".to_owned(), vec![value.clone()]);
     }
 }
 
@@ -639,24 +611,6 @@ fn read_tes3_header(path: &Path, encoding: TextEncoding) -> Result<PluginHeader,
         ),
         masters,
     })
-}
-
-fn add_config_context_paths(cfg: &mut MultiMap, config: &OpenMWConfiguration) {
-    if let Some(data_local) = config.data_local() {
-        insert_multimap(
-            cfg,
-            "data-local".to_owned(),
-            data_local.parsed().to_string_lossy().into_owned(),
-        );
-    }
-
-    for data in config.data_directories_iter() {
-        insert_multimap(
-            cfg,
-            "data".to_owned(),
-            data.parsed().to_string_lossy().into_owned(),
-        );
-    }
 }
 
 fn apply_imported_output_cfg(output_cfg: &mut MultiMap, imported_cfg: &MultiMap) {
@@ -1466,14 +1420,14 @@ mod tests {
         let importer = IniImporter::new(ImportOptions::default());
         let mut cfg = parse_cfg_str("no-sound=0\nfallback=old\n");
         let ini = parse_ini_str(
-            "[General]\nDisable Audio=1\n[Fonts]\nFont 0=magic\n[Archives]\nArchive 0=Tribunal.bsa\nArchive 1=Bloodmoon.bsa\n[Movies]\nNew Game=intro.bik\n",
+            "[General]\nDisable Audio=1\nDisable Audio=0\n[Fonts]\nFont 0=magic\n[Archives]\nArchive 0=Tribunal.bsa\nArchive 1=Bloodmoon.bsa\n[Movies]\nNew Game=intro.bik\n",
         );
 
         let result = importer
             .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
             .unwrap();
 
-        assert_eq!(values(&result.cfg, "no-sound"), &["1".to_owned()]);
+        assert_eq!(values(&result.cfg, "no-sound"), &["0".to_owned()]);
         assert_eq!(
             values(&result.cfg, "fallback-archive"),
             &[
@@ -1786,6 +1740,24 @@ mod tests {
             .map(|setting| setting.value().to_owned())
             .collect();
         assert_eq!(no_sound, vec!["1"]);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn import_paths_missing_cfg_starts_empty() {
+        let dir = unique_test_dir("import-paths-missing-cfg");
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("missing.cfg");
+        let ini = dir.join("Morrowind.ini");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        let importer = IniImporter::new(ImportOptions::default());
+        let result = importer.import_paths(&ini, &cfg).unwrap();
+
+        assert!(!cfg.exists());
+        assert_eq!(values(&result.cfg, "no-sound"), &["1".to_owned()]);
+        assert_eq!(values(&result.cfg, "encoding"), &["win1252".to_owned()]);
 
         fs::remove_dir_all(dir).unwrap();
     }

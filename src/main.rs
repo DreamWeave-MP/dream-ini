@@ -106,7 +106,7 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
     }
 
     if !cfg_path.exists() {
-        eprintln!("cfg file does not exist; starting from an empty config");
+        eprintln!("cfg file does not exist");
     }
 
     let encoding = cli
@@ -119,7 +119,6 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
         encoding,
-        verbose: cli.verbose,
         ..ImportOptions::default()
     };
 
