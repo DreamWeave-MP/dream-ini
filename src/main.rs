@@ -128,13 +128,13 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
     println!("load cfg file: {}", cfg_path.display());
     println!("load ini file: {}", ini_path.display());
 
-    let result = importer.import_config_paths(&ini_path, &cfg_path)?;
-    for warning in &result.imported.warnings {
+    let result = importer.import_paths(&ini_path, &cfg_path)?;
+    for warning in &result.warnings {
         eprintln!("Warning: {warning}");
     }
 
     println!("write to: {}", output_path.display());
-    importer.save_config_output(&output_path, &result.output_cfg)?;
+    importer.save_config_output(&output_path, &result.cfg)?;
 
     Ok(())
 }

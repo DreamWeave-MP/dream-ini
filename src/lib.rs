@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252};
-use openmw_config::{EncodingSetting, OpenMWConfiguration};
 
 pub type MultiMap = BTreeMap<String, Vec<String>>;
 
@@ -101,18 +101,10 @@ pub struct ParsedIni {
 }
 
 #[derive(Debug)]
-pub struct ConfigImportResult {
-    pub config: OpenMWConfiguration,
-    pub imported: ImportResult,
-    pub output_cfg: MultiMap,
-}
-
-#[derive(Debug)]
 pub enum ImportError {
     Io { path: PathBuf, source: io::Error },
     UnsupportedEncoding(String),
     InvalidPluginHeader { path: PathBuf, message: String },
-    OpenMwConfig(String),
 }
 
 impl fmt::Display for ImportError {
@@ -123,7 +115,6 @@ impl fmt::Display for ImportError {
             Self::InvalidPluginHeader { path, message } => {
                 write!(f, "invalid plugin header in {}: {message}", path.display())
             }
-            Self::OpenMwConfig(message) => write!(f, "openmw-config error: {message}"),
         }
     }
 }
@@ -166,46 +157,10 @@ impl IniImporter {
         Ok(imported)
     }
 
-    /// Imports from paths into an [`OpenMWConfiguration`].
-    ///
-    /// # Errors
-    /// Returns [`ImportError`] when config loading fails, files cannot be read, encoding is unsupported, or plugin headers are invalid.
-    pub fn import_config_paths(
-        &self,
-        ini_path: &Path,
-        cfg_path: &Path,
-    ) -> Result<ConfigImportResult, ImportError> {
-        let mut config = load_config_or_empty(cfg_path)?;
-        let mut output_cfg = if cfg_path.exists() {
-            parse_cfg_str(&read_to_string(cfg_path)?)
-        } else {
-            MultiMap::new()
-        };
-        let mut work_cfg = output_cfg.clone();
-
-        let encoding = self.effective_encoding(&output_cfg)?;
-        apply_encoding(&mut config, cfg_path, encoding)?;
-        set_single_value(&mut output_cfg, "encoding", encoding.as_label().to_owned());
-        set_single_value(&mut work_cfg, "encoding", encoding.as_label().to_owned());
-
-        let ini_bytes = read_bytes(ini_path)?;
-        let parsed_ini = parse_ini_bytes_with_warnings(&ini_bytes, encoding);
-        let mut imported = self.import_maps(&mut work_cfg, &parsed_ini.entries, ini_path)?;
-        imported.warnings.splice(0..0, parsed_ini.warnings);
-        apply_imported_output_cfg(&mut output_cfg, &imported.cfg);
-        apply_imported_cfg(&mut config, cfg_path, &imported.cfg)?;
-
-        Ok(ConfigImportResult {
-            config,
-            imported,
-            output_cfg,
-        })
-    }
-
     /// Saves an imported configuration to an arbitrary output path.
     ///
     /// # Errors
-    /// Returns [`ImportError`] when `openmw_config` cannot write the file.
+    /// Returns [`ImportError`] when the file cannot be written.
     pub fn save_config_output(
         &self,
         output_path: &Path,
@@ -228,23 +183,16 @@ impl IniImporter {
         ini_path: &Path,
     ) -> Result<ImportResult, ImportError> {
         let mut warnings = Vec::new();
-        let mut ini = ini.clone();
 
-        if !self.options.import_fonts {
-            ini.remove("Fonts:Font 0");
-            ini.remove("Fonts:Font 1");
-            ini.remove("Fonts:Font 2");
-        }
-
-        merge(cfg, &ini);
-        merge_fallback(cfg, &ini);
+        merge(cfg, ini);
+        merge_fallback(cfg, ini, self.options.import_fonts);
 
         if self.options.import_game_files {
-            self.import_game_files(cfg, &ini, ini_path, &mut warnings)?;
+            self.import_game_files(cfg, ini, ini_path, &mut warnings)?;
         }
 
         if self.options.import_archives {
-            import_archives(cfg, &ini);
+            import_archives(cfg, ini);
         }
 
         Ok(ImportResult {
@@ -316,9 +264,10 @@ impl IniImporter {
             .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
 
         let format = self.options.game.plugin_format();
+        let encoding = self.effective_encoding(cfg)?;
         let mut dependencies = Vec::new();
         for (_, path) in content_files {
-            let header = read_plugin_header(&path, format, self.effective_encoding(cfg)?)?;
+            let header = read_plugin_header(&path, format, encoding)?;
             dependencies.push((header.name, header.masters));
         }
 
@@ -454,9 +403,12 @@ fn merge(cfg: &mut MultiMap, ini: &MultiMap) {
     }
 }
 
-fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap) {
+fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap, import_fonts: bool) {
     cfg.remove("fallback");
     for key in MORROWIND_FALLBACK_KEYS {
+        if !import_fonts && matches!(*key, "Fonts:Font 0" | "Fonts:Font 1" | "Fonts:Font 2") {
+            continue;
+        }
         if let Some(values) = ini.get(*key) {
             for value in values {
                 let fallback_key = key.replace([' ', ':'], "_");
@@ -558,50 +510,88 @@ pub fn read_plugin_header(
 }
 
 fn read_tes3_header(path: &Path, encoding: TextEncoding) -> Result<PluginHeader, ImportError> {
-    let bytes = read_bytes(path)?;
-    if bytes.len() < 16 || &bytes[0..4] != b"TES3" {
+    let mut file = File::open(path).map_err(|source| ImportError::Io {
+        path: path.to_owned(),
+        source,
+    })?;
+    let mut record_header = [0; 16];
+    read_exact_plugin(
+        &mut file,
+        path,
+        &mut record_header,
+        "unexpected end of file",
+    )?;
+
+    if &record_header[0..4] != b"TES3" {
         return Err(ImportError::InvalidPluginHeader {
             path: path.to_owned(),
             message: "missing TES3 record".to_owned(),
         });
     }
 
-    let record_size = read_u32_le(&bytes, 4, path)? as usize;
-    let record_start = 16usize;
+    let record_size = u64::from(u32::from_le_bytes(
+        record_header[4..8]
+            .try_into()
+            .expect("slice length checked"),
+    ));
     let record_end =
-        record_start
+        16u64
             .checked_add(record_size)
             .ok_or_else(|| ImportError::InvalidPluginHeader {
                 path: path.to_owned(),
                 message: "TES3 record size overflow".to_owned(),
             })?;
 
-    if bytes.len() < record_end {
-        return Err(ImportError::InvalidPluginHeader {
-            path: path.to_owned(),
-            message: "TES3 record extends past end of file".to_owned(),
-        });
-    }
-
-    let mut offset = record_start;
+    let mut offset = 16u64;
     let mut masters = Vec::new();
+
     while offset + 8 <= record_end {
-        let name = &bytes[offset..offset + 4];
-        let size = read_u32_le(&bytes, offset + 4, path)? as usize;
+        let (name, size) = read_subrecord_header(&mut file, path)?;
         offset += 8;
 
-        if offset + size > record_end {
+        let subrecord_end =
+            offset
+                .checked_add(size)
+                .ok_or_else(|| ImportError::InvalidPluginHeader {
+                    path: path.to_owned(),
+                    message: "subrecord size overflow".to_owned(),
+                })?;
+        if subrecord_end > record_end {
             return Err(ImportError::InvalidPluginHeader {
                 path: path.to_owned(),
                 message: "subrecord extends past TES3 record".to_owned(),
             });
         }
 
-        if name == b"MAST" {
-            masters.push(read_c_string(&bytes[offset..offset + size], encoding));
+        if name == *b"MAST" {
+            let mut data = vec![
+                0;
+                usize::try_from(size).map_err(|_| {
+                    ImportError::InvalidPluginHeader {
+                        path: path.to_owned(),
+                        message: "subrecord size does not fit in memory".to_owned(),
+                    }
+                })?
+            ];
+            read_exact_plugin(
+                &mut file,
+                path,
+                &mut data,
+                "TES3 record extends past end of file",
+            )?;
+            masters.push(read_c_string(&data, encoding));
+        } else {
+            skip_subrecord_data(&mut file, path, size)?;
         }
 
-        offset += size;
+        offset = subrecord_end;
+    }
+
+    if offset != record_end {
+        return Err(ImportError::InvalidPluginHeader {
+            path: path.to_owned(),
+            message: "trailing partial subrecord header in TES3 record".to_owned(),
+        });
     }
 
     Ok(PluginHeader {
@@ -613,96 +603,53 @@ fn read_tes3_header(path: &Path, encoding: TextEncoding) -> Result<PluginHeader,
     })
 }
 
-fn apply_imported_output_cfg(output_cfg: &mut MultiMap, imported_cfg: &MultiMap) {
-    set_from_import(output_cfg, imported_cfg, "encoding");
-    set_from_import(output_cfg, imported_cfg, "fallback");
-    set_from_import(output_cfg, imported_cfg, "fallback-archive");
-    set_from_import(output_cfg, imported_cfg, "content");
-    if imported_cfg.contains_key("no-sound") {
-        set_from_import(output_cfg, imported_cfg, "no-sound");
-    }
-}
-
-fn set_from_import(output_cfg: &mut MultiMap, imported_cfg: &MultiMap, key: &str) {
-    if let Some(values) = imported_cfg.get(key) {
-        output_cfg.insert(key.to_owned(), values.clone());
-    } else {
-        output_cfg.remove(key);
-    }
-}
-
-fn load_config_or_empty(cfg_path: &Path) -> Result<OpenMWConfiguration, ImportError> {
-    if cfg_path.exists() {
-        return OpenMWConfiguration::new(Some(cfg_path.to_owned()))
-            .map_err(|error| ImportError::OpenMwConfig(error.to_string()));
-    }
-
-    let temp_dir = std::env::temp_dir().join(format!(
-        "rome-ini-empty-config-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
+fn read_subrecord_header(file: &mut File, path: &Path) -> Result<([u8; 4], u64), ImportError> {
+    let mut header = [0; 8];
+    read_exact_plugin(
+        file,
+        path,
+        &mut header,
+        "TES3 record extends past end of file",
+    )?;
+    let name = header[0..4].try_into().expect("slice length checked");
+    let size = u64::from(u32::from_le_bytes(
+        header[4..8].try_into().expect("slice length checked"),
     ));
-    fs::create_dir_all(&temp_dir).map_err(|source| ImportError::Io {
-        path: temp_dir.clone(),
-        source,
-    })?;
-    let temp_cfg = temp_dir.join("openmw.cfg");
-    fs::write(&temp_cfg, "").map_err(|source| ImportError::Io {
-        path: temp_cfg.clone(),
-        source,
-    })?;
-
-    let config = OpenMWConfiguration::new(Some(temp_cfg))
-        .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
-    let _ = fs::remove_dir_all(temp_dir);
-    Ok(config)
+    Ok((name, size))
 }
 
-fn apply_imported_cfg(
-    config: &mut OpenMWConfiguration,
-    cfg_path: &Path,
-    cfg: &MultiMap,
-) -> Result<(), ImportError> {
-    if let Some(values) = cfg.get("no-sound") {
-        config.set_generic_settings("no-sound", Some(values.clone()));
-    }
-
-    let encoding = cfg
-        .get("encoding")
-        .and_then(|values| values.last())
-        .map_or(Ok(TextEncoding::Win1252), |value| {
-            TextEncoding::parse(value)
-        })?;
-    apply_encoding(config, cfg_path, encoding)?;
-
-    config
-        .set_game_settings(cfg.get("fallback").cloned())
-        .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
-
-    if let Some(values) = cfg.get("fallback-archive") {
-        config.set_fallback_archives(Some(values.clone()));
-    }
-
-    if let Some(values) = cfg.get("content") {
-        config.set_content_files(Some(values.clone()));
-    }
-
-    Ok(())
+fn skip_subrecord_data(file: &mut File, path: &Path, size: u64) -> Result<(), ImportError> {
+    let offset = i64::try_from(size).map_err(|_| ImportError::InvalidPluginHeader {
+        path: path.to_owned(),
+        message: "subrecord size does not fit in seek offset".to_owned(),
+    })?;
+    file.seek(SeekFrom::Current(offset))
+        .map(|_| ())
+        .map_err(|source| ImportError::Io {
+            path: path.to_owned(),
+            source,
+        })
 }
 
-fn apply_encoding(
-    config: &mut OpenMWConfiguration,
-    cfg_path: &Path,
-    encoding: TextEncoding,
+fn read_exact_plugin(
+    file: &mut File,
+    path: &Path,
+    buffer: &mut [u8],
+    eof_message: &str,
 ) -> Result<(), ImportError> {
-    let mut empty = String::new();
-    let setting = EncodingSetting::try_from((encoding.as_label().to_owned(), cfg_path, &mut empty))
-        .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
-    config.set_encoding(Some(setting));
-    Ok(())
+    file.read_exact(buffer).map_err(|source| {
+        if source.kind() == io::ErrorKind::UnexpectedEof {
+            ImportError::InvalidPluginHeader {
+                path: path.to_owned(),
+                message: eof_message.to_owned(),
+            }
+        } else {
+            ImportError::Io {
+                path: path.to_owned(),
+                source,
+            }
+        }
+    })
 }
 
 fn read_to_string(path: &Path) -> Result<String, ImportError> {
@@ -751,18 +698,6 @@ fn system_time_key(time: SystemTime) -> u128 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
-}
-
-fn read_u32_le(bytes: &[u8], offset: usize, path: &Path) -> Result<u32, ImportError> {
-    let bytes = bytes
-        .get(offset..offset + 4)
-        .ok_or_else(|| ImportError::InvalidPluginHeader {
-            path: path.to_owned(),
-            message: "unexpected end of file".to_owned(),
-        })?;
-    Ok(u32::from_le_bytes(
-        bytes.try_into().expect("slice length checked"),
-    ))
 }
 
 fn read_c_string(bytes: &[u8], encoding: TextEncoding) -> String {
@@ -1549,6 +1484,49 @@ mod tests {
     }
 
     #[test]
+    fn rejects_truncated_tes3_record() {
+        let dir = unique_test_dir("tes3-truncated-record");
+        fs::create_dir_all(&dir).unwrap();
+        let plugin = dir.join("Bad.esp");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"TES3");
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        fs::write(&plugin, bytes).unwrap();
+
+        let error = read_plugin_header(&plugin, PluginFormat::Tes3, TextEncoding::Win1252)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("TES3 record extends past end of file"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_truncated_tes3_subrecord() {
+        let dir = unique_test_dir("tes3-truncated-subrecord");
+        fs::create_dir_all(&dir).unwrap();
+        let plugin = dir.join("Bad.esp");
+        let mut record = Vec::new();
+        record.extend_from_slice(b"MAST");
+        record.extend_from_slice(&8u32.to_le_bytes());
+        record.extend_from_slice(b"short");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"TES3");
+        bytes.extend_from_slice(&u32::try_from(record.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&record);
+        fs::write(&plugin, bytes).unwrap();
+
+        let error = read_plugin_header(&plugin, PluginFormat::Tes3, TextEncoding::Win1252)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("subrecord extends past TES3 record"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn imports_game_files_using_tes3_dependencies() {
         let dir = unique_test_dir("game-files");
         let data_dir = dir.join("Data Files");
@@ -1621,8 +1599,8 @@ mod tests {
     }
 
     #[test]
-    fn imports_into_openmw_config_with_generic_no_sound() {
-        let dir = unique_test_dir("openmw-config-import");
+    fn import_paths_preserves_existing_cfg_and_writes_imports() {
+        let dir = unique_test_dir("path-import");
         fs::create_dir_all(&dir).unwrap();
         let cfg = dir.join("openmw.cfg");
         let ini = dir.join("Morrowind.ini");
@@ -1639,22 +1617,20 @@ mod tests {
         .unwrap();
 
         let importer = IniImporter::new(ImportOptions::default());
-        let result = importer.import_config_paths(&ini, &cfg).unwrap();
+        let result = importer.import_paths(&ini, &cfg).unwrap();
 
-        let no_sound: Vec<_> = result
-            .config
-            .generic_settings_iter()
-            .filter(|setting| setting.key() == "no-sound")
-            .map(|setting| setting.value().to_owned())
-            .collect();
-        assert_eq!(no_sound, vec!["1"]);
-        assert!(result.config.get_game_setting("Movies_New_Game").is_some());
-        assert!(result.config.has_archive_file("Morrowind.bsa"));
-        assert!(result.config.has_archive_file("Tribunal.bsa"));
+        assert_eq!(values(&result.cfg, "no-sound"), &["1".to_owned()]);
+        assert_eq!(values(&result.cfg, "encoding"), &["win1252".to_owned()]);
+        assert_eq!(
+            values(&result.cfg, "fallback"),
+            &["Movies_New_Game,intro.bik".to_owned()]
+        );
+        assert_eq!(
+            values(&result.cfg, "fallback-archive"),
+            &["Morrowind.bsa".to_owned(), "Tribunal.bsa".to_owned()]
+        );
 
-        importer
-            .save_config_output(&output, &result.output_cfg)
-            .unwrap();
+        importer.save_config_output(&output, &result.cfg).unwrap();
         let written = fs::read_to_string(&output).unwrap();
         assert!(written.contains("no-sound=1"));
         assert!(written.contains("fallback=Movies_New_Game,intro.bik"));
@@ -1664,7 +1640,7 @@ mod tests {
     }
 
     #[test]
-    fn output_cfg_does_not_include_composed_synthetic_entries() {
+    fn import_paths_does_not_include_composed_synthetic_entries() {
         let dir = unique_test_dir("user-output-only");
         let resources = dir.join("resources");
         fs::create_dir_all(resources.join("vfs")).unwrap();
@@ -1674,8 +1650,8 @@ mod tests {
         fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
         let importer = IniImporter::new(ImportOptions::default());
-        let result = importer.import_config_paths(&ini, &cfg).unwrap();
-        let output = serialize_cfg(&result.output_cfg);
+        let result = importer.import_paths(&ini, &cfg).unwrap();
+        let output = serialize_cfg(&result.cfg);
 
         assert!(output.contains("resources="));
         assert!(output.contains("no-sound=1"));
@@ -1707,39 +1683,14 @@ mod tests {
         .unwrap();
 
         let importer = IniImporter::new(ImportOptions::default());
-        let result = importer.import_config_paths(&ini, &cfg).unwrap();
-        importer
-            .save_config_output(&output, &result.output_cfg)
-            .unwrap();
+        let result = importer.import_paths(&ini, &cfg).unwrap();
+        importer.save_config_output(&output, &result.cfg).unwrap();
         let written = fs::read_to_string(&output).unwrap();
 
         assert!(written.contains("fallback=Movies_New_Game,movie,with,commas.bik"));
         assert!(written.contains("fallback=Weather_Sunrise_Time,6"));
         assert!(written.contains("fallback=Weather_Sun_Glare_Fader_Max,0.75"));
         assert!(written.contains("fallback=Weather_Clear_Sky_Day_Color,10,20,30"));
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn missing_cfg_starts_empty_without_creating_input_file() {
-        let dir = unique_test_dir("missing-cfg");
-        fs::create_dir_all(&dir).unwrap();
-        let cfg = dir.join("missing.cfg");
-        let ini = dir.join("Morrowind.ini");
-        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
-
-        let importer = IniImporter::new(ImportOptions::default());
-        let result = importer.import_config_paths(&ini, &cfg).unwrap();
-
-        assert!(!cfg.exists());
-        let no_sound: Vec<_> = result
-            .config
-            .generic_settings_iter()
-            .filter(|setting| setting.key() == "no-sound")
-            .map(|setting| setting.value().to_owned())
-            .collect();
-        assert_eq!(no_sound, vec!["1"]);
 
         fs::remove_dir_all(dir).unwrap();
     }
