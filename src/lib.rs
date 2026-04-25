@@ -1622,6 +1622,51 @@ mod tests {
     }
 
     #[test]
+    fn imports_game_files_from_default_data_files_path() {
+        let dir = unique_test_dir("game-files-default-data");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = MultiMap::new();
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        let result = importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&result.cfg, "content"), &["Base.esm".to_owned()]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn missing_game_files_are_reported_as_warnings() {
+        let dir = unique_test_dir("game-files-missing");
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut cfg = MultiMap::new();
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Missing.esp\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        let result = importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&result.cfg, "content"), &[] as &[String]);
+        assert_eq!(result.warnings, vec!["Missing.esp not found, ignoring"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn imports_into_openmw_config_with_generic_no_sound() {
         let dir = unique_test_dir("openmw-config-import");
         fs::create_dir_all(&dir).unwrap();
