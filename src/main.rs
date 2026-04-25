@@ -12,6 +12,7 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
 #[command(
     name = "rome-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
+    version,
     override_usage = "rome-ini <options> inifile [configfile]"
 )]
 struct Cli {

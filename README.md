@@ -1,6 +1,6 @@
 # rome-ini
 
-`rome-ini` imports settings from `Morrowind.ini` into an `openmw.cfg`-style file. It is a standalone Rust implementation of the OpenMW `mwiniimporter` behavior with a reusable library core and a thin CLI.
+`rome-ini` imports settings from `Morrowind.ini` into an `openmw.cfg`-style file. It is a standalone Rust importer compatible with OpenMW's Morrowind.ini import needs, with deliberate UX improvements over the original C++ tool.
 
 ## Build
 
@@ -41,6 +41,7 @@ rome-ini --dry-run Morrowind.ini openmw.cfg
 - `-A, --no-archives`: disable BSA archive import.
 - `-e, --encoding <ENCODING>`: `win1250`, `win1251`, or `win1252`.
 - `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
+- `--version`: print version information.
 - `-h, --help`: print help.
 
 ## Behavior
@@ -53,7 +54,7 @@ rome-ini --dry-run Morrowind.ini openmw.cfg
 - `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. If content is resolved from an explicit `--data-dir` and an equivalent path is not already present, `rome-ini` writes it as a `data=...` entry. The default `Data Files` fallback is searched but is not written automatically.
 - If `--game-files` sees game-file entries but resolves none of them, a summary warning suggests providing a cfg with `data=...` or using `--data-dir`.
 
-## Intentional Differences From OpenMW's C++ Importer
+## Deliberate Differences From OpenMW's C++ Importer
 
 - Warnings are written to stderr instead of stdout.
 - Game-file import requires filenames ending in `.esm` or `.esp`; the C++ importer accepts any suffix ending in `esm` or `esp`.
