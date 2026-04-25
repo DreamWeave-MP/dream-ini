@@ -36,6 +36,10 @@ pub enum TextEncoding {
 }
 
 impl TextEncoding {
+    /// Parses an `OpenMW` encoding label.
+    ///
+    /// # Errors
+    /// Returns [`ImportError::UnsupportedEncoding`] if `value` is not supported.
     pub fn parse(value: &str) -> Result<Self, ImportError> {
         match value.to_ascii_lowercase().as_str() {
             "win1250" | "windows-1250" => Ok(Self::Win1250),
@@ -65,13 +69,13 @@ impl TextEncoding {
         match encoding {
             EncodingType::WIN1250 => Self::Win1250,
             EncodingType::WIN1251 => Self::Win1251,
-            EncodingType::WIN1252 => Self::Win1252,
             _ => Self::Win1252,
         }
     }
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ImportOptions {
     pub game: Game,
     pub import_game_files: bool,
@@ -135,10 +139,15 @@ pub struct IniImporter {
 }
 
 impl IniImporter {
+    #[must_use]
     pub fn new(options: ImportOptions) -> Self {
         Self { options }
     }
 
+    /// Imports from paths into the lightweight map model.
+    ///
+    /// # Errors
+    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, or plugin headers are invalid.
     pub fn import_paths(
         &self,
         ini_path: &Path,
@@ -155,6 +164,10 @@ impl IniImporter {
         self.import_maps(&mut cfg, &ini, ini_path)
     }
 
+    /// Imports from paths into an [`OpenMWConfiguration`].
+    ///
+    /// # Errors
+    /// Returns [`ImportError`] when config loading fails, files cannot be read, encoding is unsupported, or plugin headers are invalid.
     pub fn import_config_paths(
         &self,
         ini_path: &Path,
@@ -164,7 +177,7 @@ impl IniImporter {
             .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
         let mut cfg = config_to_multimap(&config);
 
-        let encoding = self.effective_encoding_from_config(&config)?;
+        let encoding = self.effective_encoding_from_config(&config);
         apply_encoding(&mut config, cfg_path, encoding)?;
         set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
 
@@ -176,10 +189,10 @@ impl IniImporter {
         Ok(ConfigImportResult { config, imported })
     }
 
-    pub fn write_output(&self, output_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
-        write_cfg_via_openmw_config(output_path, cfg)
-    }
-
+    /// Saves an imported configuration to an arbitrary output path.
+    ///
+    /// # Errors
+    /// Returns [`ImportError`] when `openmw_config` cannot write the file.
     pub fn save_config_output(
         &self,
         output_path: &Path,
@@ -190,6 +203,10 @@ impl IniImporter {
             .map_err(|error| ImportError::OpenMwConfig(error.to_string()))
     }
 
+    /// Imports already parsed maps into the lightweight map model.
+    ///
+    /// # Errors
+    /// Returns [`ImportError`] when plugin headers cannot be read or decoded.
     pub fn import_maps(
         &self,
         cfg: &mut MultiMap,
@@ -234,19 +251,16 @@ impl IniImporter {
         Ok(TextEncoding::Win1252)
     }
 
-    fn effective_encoding_from_config(
-        &self,
-        config: &OpenMWConfiguration,
-    ) -> Result<TextEncoding, ImportError> {
+    fn effective_encoding_from_config(&self, config: &OpenMWConfiguration) -> TextEncoding {
         if let Some(encoding) = self.options.encoding {
-            return Ok(encoding);
+            return encoding;
         }
 
         let Some(setting) = config.encoding() else {
-            return Ok(TextEncoding::Win1252);
+            return TextEncoding::Win1252;
         };
 
-        Ok(TextEncoding::from_openmw(setting.value()))
+        TextEncoding::from_openmw(setting.value())
     }
 
     fn import_game_files(
@@ -301,7 +315,7 @@ impl IniImporter {
         let format = self.options.game.plugin_format();
         let mut dependencies = Vec::new();
         for (_, path) in content_files {
-            let header = read_plugin_header(&path, format)?;
+            let header = read_plugin_header(&path, format, self.effective_encoding(cfg)?)?;
             dependencies.push((header.name, header.masters));
         }
 
@@ -313,11 +327,13 @@ impl IniImporter {
     }
 }
 
+#[must_use]
 pub fn parse_ini_bytes(bytes: &[u8], encoding: TextEncoding) -> MultiMap {
     let (decoded, _, _) = encoding.encoding_rs().decode(bytes);
     parse_ini_str(&decoded)
 }
 
+#[must_use]
 pub fn parse_ini_str(text: &str) -> MultiMap {
     let mut section = String::new();
     let mut map = MultiMap::new();
@@ -339,7 +355,7 @@ pub fn parse_ini_str(text: &str) -> MultiMap {
             if end < 2 {
                 continue;
             }
-            section = line[1..end].to_owned();
+            line[1..end].clone_into(&mut section);
             continue;
         }
 
@@ -365,6 +381,7 @@ pub fn parse_ini_str(text: &str) -> MultiMap {
     map
 }
 
+#[must_use]
 pub fn parse_cfg_str(text: &str) -> MultiMap {
     let mut map = MultiMap::new();
 
@@ -391,6 +408,7 @@ pub fn parse_cfg_str(text: &str) -> MultiMap {
     map
 }
 
+#[must_use]
 pub fn serialize_cfg(cfg: &MultiMap) -> String {
     let mut output = String::new();
     for (key, values) in cfg {
@@ -454,23 +472,24 @@ fn add_paths(output: &mut Vec<PathBuf>, input: &[String]) {
 
 fn dependency_sort(mut source: Vec<(String, Vec<String>)>) -> Vec<String> {
     let mut result = Vec::new();
-    while let Some((element, _)) = source.first().cloned() {
-        dependency_sort_step(element, &mut source, &mut result);
+    while let Some((element, _)) = source.first() {
+        let element = element.clone();
+        dependency_sort_step(&element, &mut source, &mut result);
     }
     result
 }
 
 fn dependency_sort_step(
-    element: String,
+    element: &str,
     source: &mut Vec<(String, Vec<String>)>,
     result: &mut Vec<String>,
 ) {
-    let Some(index) = source.iter().position(|(name, _)| *name == element) else {
+    let Some(index) = source.iter().position(|(name, _)| name == element) else {
         return;
     };
     let (name, dependencies) = source.remove(index);
     for dependency in dependencies {
-        dependency_sort_step(dependency, source, result);
+        dependency_sort_step(&dependency, source, result);
     }
     result.push(name);
 }
@@ -501,13 +520,21 @@ pub struct PluginHeader {
     pub masters: Vec<String>,
 }
 
-pub fn read_plugin_header(path: &Path, format: PluginFormat) -> Result<PluginHeader, ImportError> {
+/// Reads the dependency header from a plugin file.
+///
+/// # Errors
+/// Returns [`ImportError`] if the plugin cannot be read or its header is invalid.
+pub fn read_plugin_header(
+    path: &Path,
+    format: PluginFormat,
+    encoding: TextEncoding,
+) -> Result<PluginHeader, ImportError> {
     match format {
-        PluginFormat::Tes3 => read_tes3_header(path),
+        PluginFormat::Tes3 => read_tes3_header(path, encoding),
     }
 }
 
-fn read_tes3_header(path: &Path) -> Result<PluginHeader, ImportError> {
+fn read_tes3_header(path: &Path, encoding: TextEncoding) -> Result<PluginHeader, ImportError> {
     let bytes = read_bytes(path)?;
     if bytes.len() < 16 || &bytes[0..4] != b"TES3" {
         return Err(ImportError::InvalidPluginHeader {
@@ -548,38 +575,19 @@ fn read_tes3_header(path: &Path) -> Result<PluginHeader, ImportError> {
         }
 
         if name == b"MAST" {
-            masters.push(read_c_string(&bytes[offset..offset + size]));
+            masters.push(read_c_string(&bytes[offset..offset + size], encoding));
         }
 
         offset += size;
     }
 
     Ok(PluginHeader {
-        name: path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string()),
+        name: path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
         masters,
     })
-}
-
-fn write_cfg_via_openmw_config(output_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
-    let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).map_err(|source| ImportError::Io {
-        path: parent.to_owned(),
-        source,
-    })?;
-    fs::write(output_path, serialize_cfg(cfg)).map_err(|source| ImportError::Io {
-        path: output_path.to_owned(),
-        source,
-    })?;
-
-    let config = OpenMWConfiguration::new(Some(output_path.to_owned()))
-        .map_err(|error| ImportError::OpenMwConfig(error.to_string()))?;
-
-    config
-        .save_to_path(output_path)
-        .map_err(|error| ImportError::OpenMwConfig(error.to_string()))
 }
 
 fn config_to_multimap(config: &OpenMWConfiguration) -> MultiMap {
@@ -746,14 +754,16 @@ fn read_u32_le(bytes: &[u8], offset: usize, path: &Path) -> Result<u32, ImportEr
     ))
 }
 
-fn read_c_string(bytes: &[u8]) -> String {
+fn read_c_string(bytes: &[u8], encoding: TextEncoding) -> String {
     let end = bytes
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
+    let (decoded, _, _) = encoding.encoding_rs().decode(&bytes[..end]);
+    decoded.into_owned()
 }
 
+#[must_use]
 pub fn known_fallback_keys() -> &'static [&'static str] {
     MORROWIND_FALLBACK_KEYS
 }
@@ -1339,7 +1349,7 @@ mod tests {
     use super::*;
 
     fn values<'a>(map: &'a MultiMap, key: &str) -> &'a [String] {
-        map.get(key).map(Vec::as_slice).unwrap_or(&[])
+        map.get(key).map_or(&[], Vec::as_slice)
     }
 
     #[test]
@@ -1478,10 +1488,25 @@ mod tests {
         let plugin = dir.join("Patch.esp");
         fs::write(&plugin, tes3_bytes(&["Morrowind.esm", "Tribunal.esm"])).unwrap();
 
-        let header = read_plugin_header(&plugin, PluginFormat::Tes3).unwrap();
+        let header =
+            read_plugin_header(&plugin, PluginFormat::Tes3, TextEncoding::Win1252).unwrap();
 
         assert_eq!(header.name, "Patch.esp");
         assert_eq!(header.masters, vec!["Morrowind.esm", "Tribunal.esm"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reads_tes3_header_masters_with_selected_encoding() {
+        let dir = unique_test_dir("tes3-header-encoding");
+        fs::create_dir_all(&dir).unwrap();
+        let plugin = dir.join("Patch.esp");
+        fs::write(&plugin, tes3_bytes_from_master_bytes(&[b"caf\xe9.esm"])).unwrap();
+
+        let header =
+            read_plugin_header(&plugin, PluginFormat::Tes3, TextEncoding::Win1252).unwrap();
+
+        assert_eq!(header.masters, vec!["caf\u{e9}.esm"]);
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1492,7 +1517,8 @@ mod tests {
         let plugin = dir.join("Bad.esp");
         fs::write(&plugin, b"TES4").unwrap();
 
-        let error = read_plugin_header(&plugin, PluginFormat::Tes3).unwrap_err();
+        let error =
+            read_plugin_header(&plugin, PluginFormat::Tes3, TextEncoding::Win1252).unwrap_err();
         assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1568,27 +1594,32 @@ mod tests {
     }
 
     fn tes3_bytes(masters: &[&str]) -> Vec<u8> {
+        let masters: Vec<_> = masters.iter().map(|master| master.as_bytes()).collect();
+        tes3_bytes_from_master_bytes(&masters)
+    }
+
+    fn tes3_bytes_from_master_bytes(masters: &[&[u8]]) -> Vec<u8> {
         let mut record = Vec::new();
-        subrecord(&mut record, b"HEDR", &[0; 300]);
+        subrecord(&mut record, *b"HEDR", &[0; 300]);
         for master in masters {
-            let mut name = master.as_bytes().to_vec();
+            let mut name = (*master).to_vec();
             name.push(0);
-            subrecord(&mut record, b"MAST", &name);
-            subrecord(&mut record, b"DATA", &0u64.to_le_bytes());
+            subrecord(&mut record, *b"MAST", &name);
+            subrecord(&mut record, *b"DATA", &0u64.to_le_bytes());
         }
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"TES3");
-        bytes.extend_from_slice(&(record.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(record.len()).unwrap().to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&record);
         bytes
     }
 
-    fn subrecord(output: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
-        output.extend_from_slice(name);
-        output.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    fn subrecord(output: &mut Vec<u8>, name: [u8; 4], data: &[u8]) {
+        output.extend_from_slice(&name);
+        output.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
         output.extend_from_slice(data);
     }
 

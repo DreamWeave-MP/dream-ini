@@ -5,6 +5,7 @@ use clap::{CommandFactory, Parser};
 use rome_ini::{ImportOptions, IniImporter, TextEncoding};
 
 #[derive(Debug, Parser)]
+#[allow(clippy::struct_excessive_bools)]
 #[command(
     name = "rome-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
@@ -39,7 +40,7 @@ struct Cli {
     #[arg(short = 'A', long = "no-archives")]
     no_archives: bool,
 
-    /// Character encoding used in OpenMW game messages: win1250, win1251, or win1252
+    /// Character encoding used in `OpenMW` game messages: win1250, win1251, or win1252
     #[arg(short, long, value_name = "ENCODING")]
     encoding: Option<String>,
 
