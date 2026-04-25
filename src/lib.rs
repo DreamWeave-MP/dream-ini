@@ -448,9 +448,64 @@ mod tests {
             .unwrap();
 
         assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+        assert_eq!(values(&cfg, "data"), &[] as &[String]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn explicit_data_dir_is_written_when_it_resolves_content() {
+        let dir = unique_test_dir("game-files-explicit-data");
+        let data_dir = dir.join("External Data");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = MultiMap::new();
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            data_dirs: vec![data_dir.clone()],
+            ..ImportOptions::default()
+        });
+
+        importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
         assert_eq!(
             values(&cfg, "data"),
             &[data_dir.to_string_lossy().into_owned()]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn repeated_explicit_data_dirs_use_search_order() {
+        let dir = unique_test_dir("game-files-explicit-data-order");
+        let first_data_dir = dir.join("First Data");
+        let second_data_dir = dir.join("Second Data");
+        fs::create_dir_all(&first_data_dir).unwrap();
+        fs::create_dir_all(&second_data_dir).unwrap();
+        fs::write(second_data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = MultiMap::new();
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            data_dirs: vec![first_data_dir, second_data_dir.clone()],
+            ..ImportOptions::default()
+        });
+
+        importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+        assert_eq!(
+            values(&cfg, "data"),
+            &[second_data_dir.to_string_lossy().into_owned()]
         );
         fs::remove_dir_all(dir).unwrap();
     }
@@ -531,7 +586,13 @@ mod tests {
 
         assert_eq!(values(&cfg, "content"), &[] as &[String]);
         assert_eq!(values(&cfg, "data"), &[] as &[String]);
-        assert_eq!(result.warnings, vec!["Missing.esm not found, ignoring"]);
+        assert_eq!(
+            result.warnings,
+            vec![
+                "Missing.esm not found, ignoring".to_owned(),
+                "No content files were found. If Morrowind.ini is not in the install directory, pass a cfg with data=... or use --data-dir.".to_owned(),
+            ]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -553,7 +614,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(values(&cfg, "content"), &[] as &[String]);
-        assert_eq!(result.warnings, vec!["Missing.esp not found, ignoring"]);
+        assert_eq!(
+            result.warnings,
+            vec![
+                "Missing.esp not found, ignoring".to_owned(),
+                "No content files were found. If Morrowind.ini is not in the install directory, pass a cfg with data=... or use --data-dir.".to_owned(),
+            ]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

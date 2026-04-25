@@ -1,8 +1,9 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
-use rome_ini::{ImportOptions, IniImporter, TextEncoding};
+use rome_ini::{ImportOptions, IniImporter, TextEncoding, serialize_cfg};
 
 const MISSING_INI_EXIT_CODE: u8 = 253;
 
@@ -29,6 +30,18 @@ struct Cli {
     /// Output openmw.cfg file
     #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
+
+    /// Data Files directory to search before cfg/default data paths
+    #[arg(long = "data-dir", visible_alias = "data", value_name = "DIR")]
+    data_dirs: Vec<PathBuf>,
+
+    /// Parse and report without writing an output file
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Write resulting cfg to stdout instead of a file
+    #[arg(long = "stdout", visible_alias = "print")]
+    stdout: bool,
 
     /// Import esm and esp files
     #[arg(short = 'g', long = "game-files")]
@@ -86,25 +99,38 @@ where
 
 fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
-    run_with(cli)
+    let mut stdout = io::stdout().lock();
+    let mut stderr = io::stderr().lock();
+    run_with_writers(cli, &mut stdout, &mut stderr)
 }
 
+#[cfg(test)]
 fn run_with(cli: Cli) -> Result<(), CliError> {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    run_with_writers(cli, &mut stdout, &mut stderr)
+}
+
+fn run_with_writers(
+    cli: Cli,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<(), CliError> {
+    let stdout_mode = cli.stdout;
     let Some(ini_path) = cli.ini.or(cli.positional_ini) else {
-        Cli::command().print_help()?;
-        println!();
+        write!(stdout, "{}", Cli::command().render_help())?;
         return Ok(());
     };
     let cfg_path = cli.cfg.or(cli.positional_cfg);
-    let output_path = if let Some(output) = cli.output {
-        output
-    } else if let Some(cfg_path) = &cfg_path {
-        cfg_path.clone()
-    } else {
-        Cli::command().print_help()?;
-        println!();
+    let output_path = cli.output.clone().or_else(|| {
+        (!stdout_mode && !cli.dry_run)
+            .then(|| cfg_path.clone())
+            .flatten()
+    });
+    if output_path.is_none() && !stdout_mode && !cli.dry_run {
+        write!(stdout, "{}", Cli::command().render_help())?;
         return Ok(());
-    };
+    }
 
     if !ini_path.exists() {
         return Err(CliError::MissingIni);
@@ -113,7 +139,7 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
     if let Some(cfg_path) = &cfg_path
         && !cfg_path.exists()
     {
-        eprintln!("cfg file does not exist");
+        writeln!(stderr, "cfg file does not exist")?;
     }
 
     let encoding = cli
@@ -125,6 +151,7 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
         import_game_files: cli.game_files,
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
+        data_dirs: cli.data_dirs,
         encoding,
         verbose: cli.verbose,
         ..ImportOptions::default()
@@ -133,22 +160,70 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
     let importer = IniImporter::new(options);
 
     if let Some(cfg_path) = &cfg_path {
-        println!("load cfg file: {}", cfg_path.display());
+        diagnostic(
+            stdout_mode,
+            stdout,
+            stderr,
+            format_args!("load cfg file: {}", cfg_path.display()),
+        )?;
     }
-    println!("load ini file: {}", ini_path.display());
+    diagnostic(
+        stdout_mode,
+        stdout,
+        stderr,
+        format_args!("load ini file: {}", ini_path.display()),
+    )?;
 
     let result = importer.import_optional_cfg_path(&ini_path, cfg_path.as_deref())?;
     for message in &result.messages {
-        println!("{message}");
+        diagnostic(stdout_mode, stdout, stderr, format_args!("{message}"))?;
     }
     for warning in &result.warnings {
-        eprintln!("Warning: {warning}");
+        writeln!(stderr, "Warning: {warning}")?;
     }
 
-    println!("write to: {}", output_path.display());
-    importer.save_config_output(&output_path, &result.cfg)?;
+    if stdout_mode {
+        write!(stdout, "{}", serialize_cfg(&result.cfg))?;
+    } else if let Some(output_path) = output_path {
+        diagnostic(
+            stdout_mode,
+            stdout,
+            stderr,
+            format_args!("write to: {}", output_path.display()),
+        )?;
+        if cli.dry_run {
+            diagnostic(
+                stdout_mode,
+                stdout,
+                stderr,
+                format_args!("dry run: not writing output"),
+            )?;
+        } else {
+            importer.save_config_output(&output_path, &result.cfg)?;
+        }
+    } else if cli.dry_run {
+        diagnostic(
+            stdout_mode,
+            stdout,
+            stderr,
+            format_args!("dry run: not writing output"),
+        )?;
+    }
 
     Ok(())
+}
+
+fn diagnostic(
+    stdout_mode: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    args: std::fmt::Arguments<'_>,
+) -> io::Result<()> {
+    if stdout_mode {
+        writeln!(stderr, "{args}")
+    } else {
+        writeln!(stdout, "{args}")
+    }
 }
 
 #[cfg(test)]
@@ -205,6 +280,12 @@ mod tests {
             "--no-archives",
             "--encoding",
             "win1251",
+            "--data-dir",
+            "Data Files",
+            "--data",
+            "Alt Data",
+            "--dry-run",
+            "--stdout",
             "--output",
             "out.cfg",
             "mw.ini",
@@ -214,6 +295,12 @@ mod tests {
         assert!(cli.game_files);
         assert!(cli.fonts);
         assert!(cli.no_archives);
+        assert!(cli.dry_run);
+        assert!(cli.stdout);
+        assert_eq!(
+            cli.data_dirs,
+            vec![PathBuf::from("Data Files"), PathBuf::from("Alt Data")]
+        );
         assert_eq!(cli.encoding.as_deref(), Some("win1251"));
         assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
     }
@@ -227,6 +314,9 @@ mod tests {
         assert!(help.contains("--no-archives"));
         assert!(help.contains("--encoding"));
         assert!(help.contains("--output"));
+        assert!(help.contains("--data-dir"));
+        assert!(help.contains("--dry-run"));
+        assert!(help.contains("--stdout"));
     }
 
     #[test]
@@ -248,6 +338,9 @@ mod tests {
             ini: Some(ini),
             cfg: Some(cfg),
             output: Some(output.clone()),
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -280,6 +373,9 @@ mod tests {
             ini: None,
             cfg: None,
             output: Some(output.clone()),
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
             game_files: false,
             fonts: false,
             no_archives: true,
@@ -314,6 +410,9 @@ mod tests {
             ini: Some(ini),
             cfg: None,
             output: Some(output.clone()),
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
             game_files: false,
             fonts: false,
             no_archives: true,
@@ -332,6 +431,102 @@ mod tests {
     }
 
     #[test]
+    fn run_with_stdout_writes_config_to_stdout_and_diagnostics_to_stderr() {
+        let dir = unique_test_dir("stdout-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        run_with_writers(
+            Cli {
+                verbose: false,
+                ini: Some(ini),
+                cfg: None,
+                output: None,
+                data_dirs: Vec::new(),
+                dry_run: false,
+                stdout: true,
+                game_files: false,
+                fonts: false,
+                no_archives: true,
+                encoding: None,
+                positional_ini: None,
+                positional_cfg: None,
+            },
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+
+        let stdout = String::from_utf8(stdout).unwrap();
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stdout.contains("encoding=win1252"));
+        assert!(stdout.contains("no-sound=1"));
+        assert!(!stdout.contains("load ini file:"));
+        assert!(stderr.contains("load ini file:"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_dry_run_does_not_write_output() {
+        let dir = unique_test_dir("dry-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let output = dir.join("out.cfg");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: None,
+            output: Some(output.clone()),
+            data_dirs: Vec::new(),
+            dry_run: true,
+            stdout: false,
+            game_files: false,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
+
+        assert!(!output.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_dry_run_without_output_is_allowed() {
+        let dir = unique_test_dir("dry-run-no-output");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: None,
+            output: None,
+            data_dirs: Vec::new(),
+            dry_run: true,
+            stdout: false,
+            game_files: false,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn run_without_cfg_or_output_prints_help() {
         let dir = unique_test_dir("no-cfg-no-output-run");
         fs::create_dir_all(&dir).unwrap();
@@ -343,6 +538,9 @@ mod tests {
             ini: Some(ini),
             cfg: None,
             output: None,
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -364,6 +562,9 @@ mod tests {
             ini: Some(dir.join("missing.ini")),
             cfg: Some(dir.join("openmw.cfg")),
             output: None,
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -393,6 +594,9 @@ mod tests {
             ini: Some(ini),
             cfg: Some(cfg),
             output: None,
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
             game_files: false,
             fonts: false,
             no_archives: false,
@@ -431,6 +635,9 @@ mod tests {
             ini: Some(ini),
             cfg: Some(cfg),
             output: Some(output.clone()),
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
             game_files: true,
             fonts: false,
             no_archives: true,
@@ -447,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn run_with_output_only_game_files_writes_default_data_path() {
+    fn run_with_output_only_game_files_searches_default_data_path() {
         let dir = unique_test_dir("output-only-game-files-run");
         let data_dir = dir.join("Data Files");
         fs::create_dir_all(&data_dir).unwrap();
@@ -461,6 +668,43 @@ mod tests {
             ini: Some(ini),
             cfg: None,
             output: Some(output.clone()),
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
+            game_files: true,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
+
+        let written = fs::read_to_string(output).unwrap();
+        assert!(!written.contains("data="));
+        assert!(written.contains("content=Base.esm"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_explicit_data_dir_writes_data_path() {
+        let dir = unique_test_dir("explicit-data-dir-run");
+        let data_dir = dir.join("External Data");
+        fs::create_dir_all(&data_dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let output = dir.join("out.cfg");
+        fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: None,
+            output: Some(output.clone()),
+            data_dirs: vec![data_dir.clone()],
+            dry_run: false,
+            stdout: false,
             game_files: true,
             fonts: false,
             no_archives: true,

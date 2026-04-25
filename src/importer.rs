@@ -16,6 +16,7 @@ pub struct ImportOptions {
     pub import_game_files: bool,
     pub import_fonts: bool,
     pub import_archives: bool,
+    pub data_dirs: Vec<PathBuf>,
     pub encoding: Option<TextEncoding>,
     pub verbose: bool,
 }
@@ -27,6 +28,7 @@ impl Default for ImportOptions {
             import_game_files: false,
             import_fonts: false,
             import_archives: true,
+            data_dirs: Vec::new(),
             encoding: None,
             verbose: false,
         }
@@ -160,6 +162,10 @@ impl IniImporter {
         messages: &mut Vec<String>,
     ) -> Result<(), ImportError> {
         let mut data_paths = Vec::new();
+        data_paths.extend(self.options.data_dirs.iter().map(|path| DataPath {
+            path: fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
+            origin: DataPathOrigin::Explicit,
+        }));
         if let Some(paths) = cfg.get("data") {
             add_paths(&mut data_paths, paths, DataPathOrigin::Config);
         }
@@ -177,13 +183,15 @@ impl IniImporter {
         });
 
         let mut content_files = Vec::new();
-        let mut used_default_data_path = false;
+        let mut used_explicit_data_paths: Vec<PathBuf> = Vec::new();
+        let mut game_file_count = 0;
         for file in sequential_ini_values(ini, "Game Files:GameFile") {
             if !ends_with_ignore_ascii_case(file, ".esm")
                 && !ends_with_ignore_ascii_case(file, ".esp")
             {
                 continue;
             }
+            game_file_count += 1;
 
             let mut found = None;
             for data_path in &data_paths {
@@ -191,7 +199,13 @@ impl IniImporter {
                 if let Ok(metadata) = fs::metadata(&candidate) {
                     let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
                     let path = fs::canonicalize(&candidate).unwrap_or(candidate);
-                    used_default_data_path |= data_path.origin == DataPathOrigin::Default;
+                    if data_path.origin == DataPathOrigin::Explicit
+                        && !used_explicit_data_paths
+                            .iter()
+                            .any(|path| equivalent_paths(path.as_path(), &data_path.path))
+                    {
+                        used_explicit_data_paths.push(data_path.path.clone());
+                    }
                     if self.options.verbose {
                         messages.push(format!(
                             "content file: {} timestamp = ({})",
@@ -211,12 +225,21 @@ impl IniImporter {
             }
         }
 
-        if used_default_data_path && !has_equivalent_data_path(cfg, &default_data_path) {
-            insert_multimap(
-                cfg,
-                "data".to_owned(),
-                default_data_path.to_string_lossy().into_owned(),
+        if game_file_count > 0 && content_files.is_empty() {
+            warnings.push(
+                "No content files were found. If Morrowind.ini is not in the install directory, pass a cfg with data=... or use --data-dir."
+                    .to_owned(),
             );
+        }
+
+        for data_path in used_explicit_data_paths {
+            if !has_equivalent_data_path(cfg, &data_path) {
+                insert_multimap(
+                    cfg,
+                    "data".to_owned(),
+                    data_path.to_string_lossy().into_owned(),
+                );
+            }
         }
 
         content_files
@@ -280,6 +303,7 @@ fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<I
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataPathOrigin {
+    Explicit,
     Config,
     Default,
 }
