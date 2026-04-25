@@ -143,6 +143,8 @@ fn run_with(cli: Cli) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn accepts_positional_ini_and_cfg() {
@@ -203,5 +205,107 @@ mod tests {
         assert!(cli.no_archives);
         assert_eq!(cli.encoding.as_deref(), Some("win1251"));
         assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
+    }
+
+    #[test]
+    fn run_with_writes_output_from_flag_paths() {
+        let dir = unique_test_dir("flag-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let cfg = dir.join("openmw.cfg");
+        let output = dir.join("out.cfg");
+        fs::write(
+            &ini,
+            "[General]\nDisable Audio=1\n[Movies]\nNew Game=intro.bik\n",
+        )
+        .unwrap();
+        fs::write(&cfg, "encoding=win1252\n").unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: Some(ini),
+            cfg: Some(cfg),
+            output: Some(output.clone()),
+            game_files: false,
+            fonts: false,
+            no_archives: false,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap();
+
+        let written = fs::read_to_string(output).unwrap();
+        assert!(written.contains("encoding=win1252"));
+        assert!(written.contains("no-sound=1"));
+        assert!(written.contains("fallback=Movies_New_Game,intro.bik"));
+        assert!(written.contains("fallback-archive=Morrowind.bsa"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_missing_cfg_does_not_create_input_cfg() {
+        let dir = unique_test_dir("missing-cfg-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let cfg = dir.join("missing.cfg");
+        let output = dir.join("out.cfg");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            ini: None,
+            cfg: None,
+            output: Some(output.clone()),
+            game_files: false,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+            positional_ini: Some(ini),
+            positional_cfg: Some(cfg.clone()),
+        })
+        .unwrap();
+
+        assert!(!cfg.exists());
+        let written = fs::read_to_string(output).unwrap();
+        assert!(written.contains("no-sound=1"));
+        assert!(!written.contains("fallback-archive="));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_missing_ini_returns_parity_error() {
+        let dir = unique_test_dir("missing-ini-run");
+        fs::create_dir_all(&dir).unwrap();
+        let error = run_with(Cli {
+            verbose: false,
+            ini: Some(dir.join("missing.ini")),
+            cfg: Some(dir.join("openmw.cfg")),
+            output: None,
+            game_files: false,
+            fonts: false,
+            no_archives: false,
+            encoding: None,
+            positional_ini: None,
+            positional_cfg: None,
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, CliError::MissingIni));
+        assert_eq!(MISSING_INI_EXIT_CODE, 253);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rome-ini-cli-{name}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 }
