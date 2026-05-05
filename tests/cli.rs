@@ -63,7 +63,7 @@ fn missing_game_file_fails_without_writing_output() {
     assert!(!output_cfg.exists());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("content files not found: Missing.esp"));
-    assert!(stderr.contains("pass --data-dir or add data=..."));
+    assert!(stderr.contains("pass --data or add data=..."));
 
     fs::remove_dir_all(dir).unwrap();
 }
@@ -81,7 +81,7 @@ fn explicit_data_dir_imports_content_and_writes_data() {
     fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
     let output = Command::new(BIN)
-        .args(["--game-files", "--no-archives", "--data-dir"])
+        .args(["--game-files", "--no-archives", "--data"])
         .arg(&data_dir)
         .args(["--output"])
         .arg(&output_cfg)

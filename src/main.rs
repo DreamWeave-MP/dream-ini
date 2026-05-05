@@ -46,7 +46,7 @@ struct Cli {
     output: Option<PathBuf>,
 
     /// Data Files directory to search before cfg/default data paths
-    #[arg(long = "data-dir", visible_alias = "data", value_name = "DIR")]
+    #[arg(short = 'd', long = "data", value_name = "DIR")]
     data_dirs: Vec<PathBuf>,
 
     /// Write import result JSON to stdout instead of a file
@@ -397,9 +397,9 @@ mod tests {
             "--no-archives",
             "--encoding",
             "win1251",
-            "--data-dir",
-            "Data Files",
             "--data",
+            "Data Files",
+            "-d",
             "Alt Data",
             "--output",
             "out.cfg",
@@ -490,7 +490,7 @@ mod tests {
         assert!(help.contains("--no-archives"));
         assert!(help.contains("--encoding"));
         assert!(help.contains("--output"));
-        assert!(help.contains("--data-dir"));
+        assert!(help.contains("--data"));
         assert!(help.contains("--in-place"));
         assert!(help.contains("--json"));
         assert!(help.contains("--generate-completion"));

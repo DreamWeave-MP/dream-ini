@@ -154,7 +154,7 @@ impl fmt::Display for ImportError {
                             .join(", ")
                     )?;
                 }
-                write!(f, "; pass --data-dir or add data=... to the cfg")
+                write!(f, "; pass --data or add data=... to the cfg")
             }
             Self::InvalidContentFileName(file) => write!(
                 f,
@@ -658,7 +658,7 @@ mod tests {
         assert_eq!(values(&cfg, "content"), &[] as &[String]);
         assert_eq!(values(&cfg, "data"), &[] as &[String]);
         assert!(error.contains("content files not found: Missing.esm"));
-        assert!(error.contains("pass --data-dir or add data=..."));
+        assert!(error.contains("pass --data or add data=..."));
         fs::remove_dir_all(dir).unwrap();
     }
 

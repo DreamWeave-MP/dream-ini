@@ -23,7 +23,7 @@ dream-ini --ini Morrowind.ini --cfg openmw.cfg --in-place
 dream-ini --ini Morrowind.ini --output imported.cfg
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --output imported.cfg
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --in-place
-dream-ini --ini Morrowind.ini --game-files --data-dir "/games/Morrowind/Data Files" > openmw.cfg
+dream-ini --ini Morrowind.ini --game-files --data "/games/Morrowind/Data Files" > openmw.cfg
 dream-ini --ini Morrowind.ini --game-files --json > import.json
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --verbose --in-place
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --fonts --encoding win1252 --in-place
@@ -37,7 +37,7 @@ dream-ini --generate-manpage > dream-ini.1
 - `-i, --ini <FILE>`: Morrowind.ini input path.
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
 - `-o, --output <FILE>`: output cfg path.
-- `--data-dir <DIR>` / `--data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
+- `-d, --data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
 - `--in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output` and `--json`.
 - `--json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of cfg text. Diagnostics are written to stderr.
 - `--generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
@@ -58,7 +58,7 @@ dream-ini --generate-manpage > dream-ini.1
 - Omitting cfg starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
-- `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
+- `--game-files` searches explicit `--data` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
 
 ## Deliberate Differences From OpenMW's C++ Importer
 
