@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{ArgGroup, CommandFactory, Parser};
+use clap::{CommandFactory, Parser};
 use clap_complete::Shell;
 use dream_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
 use serde::Serialize;
@@ -15,13 +15,8 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     name = "dream-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
     version,
-    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
-    after_help = "Import mode requires --ini <FILE> and one of --cfg <FILE>, --output <FILE>, --stdout, --json, or --dry-run. Completion and manpage generation do not require --ini.",
-    group(
-        ArgGroup::new("import_output")
-            .args(["cfg", "output", "stdout", "json", "dry_run"])
-            .multiple(true)
-    )
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
+    after_help = "Import mode requires --ini <FILE>. By default cfg output is written to stdout. Use --output <FILE> to write a file or --in-place with --cfg <FILE> to write back to the base cfg. Completion and manpage generation do not require --ini."
 )]
 struct Cli {
     /// Verbose output
@@ -33,8 +28,7 @@ struct Cli {
         short,
         long,
         value_name = "FILE",
-        required_unless_present_any = ["generate_completion", "generate_manpage"],
-        requires = "import_output"
+        required_unless_present_any = ["generate_completion", "generate_manpage"]
     )]
     ini: Option<PathBuf>,
 
@@ -47,7 +41,7 @@ struct Cli {
         short,
         long,
         value_name = "FILE",
-        conflicts_with_all = ["stdout", "json", "dry_run"]
+        conflicts_with_all = ["json", "in_place"]
     )]
     output: Option<PathBuf>,
 
@@ -55,21 +49,13 @@ struct Cli {
     #[arg(long = "data-dir", visible_alias = "data", value_name = "DIR")]
     data_dirs: Vec<PathBuf>,
 
-    /// Parse and report without writing an output file
-    #[arg(long, conflicts_with_all = ["output", "stdout", "json"])]
-    dry_run: bool,
-
-    /// Write resulting cfg to stdout instead of a file
-    #[arg(
-        long = "stdout",
-        visible_alias = "print",
-        conflicts_with_all = ["output", "json", "dry_run"]
-    )]
-    stdout: bool,
-
     /// Write import result JSON to stdout instead of a file
-    #[arg(long, conflicts_with_all = ["output", "stdout", "dry_run"])]
+    #[arg(long, conflicts_with_all = ["output", "in_place"])]
     json: bool,
+
+    /// Write the imported result back to the --cfg file
+    #[arg(long, requires = "cfg", conflicts_with_all = ["output", "json"])]
+    in_place: bool,
 
     /// Generate shell completion script to stdout
     #[arg(
@@ -81,9 +67,8 @@ struct Cli {
             "cfg",
             "output",
             "data_dirs",
-            "dry_run",
-            "stdout",
             "json",
+            "in_place",
             "game_files",
             "fonts",
             "no_archives",
@@ -102,9 +87,8 @@ struct Cli {
             "cfg",
             "output",
             "data_dirs",
-            "dry_run",
-            "stdout",
             "json",
+            "in_place",
             "game_files",
             "fonts",
             "no_archives",
@@ -188,14 +172,13 @@ fn run_with_writers(
         return Ok(());
     }
     validate_import_usage(&cli)?;
-    let stdout_mode = cli.stdout || cli.json;
+    let stdout_mode = cli.json || (!cli.in_place && cli.output.is_none());
     let ini_path = cli.ini.expect("validated --ini");
     let cfg_path = cli.cfg;
-    let output_path = cli.output.clone().or_else(|| {
-        (!stdout_mode && !cli.dry_run && !cli.json)
-            .then(|| cfg_path.clone())
-            .flatten()
-    });
+    let output_path = cli
+        .output
+        .clone()
+        .or_else(|| cli.in_place.then(|| cfg_path.clone()).flatten());
 
     if !ini_path.exists() {
         return Err(CliError::MissingIni);
@@ -252,8 +235,6 @@ fn run_with_writers(
         &result,
         OutputMode {
             json: cli.json,
-            stdout: cli.stdout,
-            dry_run: cli.dry_run,
             output_path,
         },
         stdout,
@@ -270,20 +251,19 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
         ));
     }
 
-    if cli.cfg.is_none() && cli.output.is_none() && !cli.stdout && !cli.json && !cli.dry_run {
-        return Err(CliError::InvalidUsage(
-            "one of --cfg <FILE>, --output <FILE>, --stdout, --json, or --dry-run is required"
-                .to_owned(),
-        ));
-    }
-
-    let output_modes = [cli.output.is_some(), cli.stdout, cli.json, cli.dry_run]
+    let output_modes = [cli.output.is_some(), cli.json, cli.in_place]
         .into_iter()
         .filter(|selected| *selected)
         .count();
     if output_modes > 1 {
         return Err(CliError::InvalidUsage(
-            "--output, --stdout, --json, and --dry-run are mutually exclusive".to_owned(),
+            "--output, --json, and --in-place are mutually exclusive".to_owned(),
+        ));
+    }
+
+    if cli.in_place && cli.cfg.is_none() {
+        return Err(CliError::InvalidUsage(
+            "--in-place requires --cfg <FILE>".to_owned(),
         ));
     }
 
@@ -310,7 +290,7 @@ fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
     manpage.render_name_section(stdout)?;
     write!(
         stdout,
-        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
+        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
     )?;
     manpage.render_description_section(stdout)?;
     manpage.render_options_section(stdout)?;
@@ -322,8 +302,6 @@ fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
 #[derive(Debug)]
 struct OutputMode {
     json: bool,
-    stdout: bool,
-    dry_run: bool,
     output_path: Option<PathBuf>,
 }
 
@@ -343,8 +321,6 @@ fn write_result_output(
         };
         serde_json::to_writer_pretty(&mut *stdout, &output)?;
         writeln!(stdout)?;
-    } else if mode.stdout {
-        write!(stdout, "{}", serialize_cfg(&result.cfg))?;
     } else if let Some(output_path) = mode.output_path {
         diagnostic(
             false,
@@ -352,23 +328,9 @@ fn write_result_output(
             stderr,
             format_args!("write to: {}", output_path.display()),
         )?;
-        if mode.dry_run {
-            diagnostic(
-                false,
-                stdout,
-                stderr,
-                format_args!("dry run: not writing output"),
-            )?;
-        } else {
-            importer.save_config_output(&output_path, &result.cfg)?;
-        }
-    } else if mode.dry_run {
-        diagnostic(
-            false,
-            stdout,
-            stderr,
-            format_args!("dry run: not writing output"),
-        )?;
+        importer.save_config_output(&output_path, &result.cfg)?;
+    } else {
+        write!(stdout, "{}", serialize_cfg(&result.cfg))?;
     }
 
     Ok(())
@@ -450,14 +412,73 @@ mod tests {
         assert!(cli.game_files);
         assert!(cli.fonts);
         assert!(cli.no_archives);
-        assert!(!cli.dry_run);
-        assert!(!cli.stdout);
+        assert!(!cli.json);
+        assert!(!cli.in_place);
         assert_eq!(
             cli.data_dirs,
             vec![PathBuf::from("Data Files"), PathBuf::from("Alt Data")]
         );
         assert_eq!(cli.encoding.as_deref(), Some("win1251"));
         assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
+    }
+
+    #[test]
+    fn parses_in_place_output_mode() {
+        let cli = Cli::parse_from([
+            "dream-ini",
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+            "--in-place",
+        ]);
+
+        assert!(cli.in_place);
+        assert_eq!(cli.cfg, Some(PathBuf::from("openmw.cfg")));
+        assert_eq!(cli.output, None);
+        assert!(!cli.json);
+    }
+
+    #[test]
+    fn in_place_requires_cfg_at_parse_time() {
+        let error =
+            Cli::try_parse_from(["dream-ini", "--ini", "Morrowind.ini", "--in-place"]).unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn in_place_conflicts_with_other_output_modes_at_parse_time() {
+        let output_error = Cli::try_parse_from([
+            "dream-ini",
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+            "--in-place",
+            "--output",
+            "out.cfg",
+        ])
+        .unwrap_err();
+        let json_error = Cli::try_parse_from([
+            "dream-ini",
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+            "--in-place",
+            "--json",
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            output_error.kind(),
+            clap::error::ErrorKind::ArgumentConflict
+        );
+        assert_eq!(json_error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -470,8 +491,7 @@ mod tests {
         assert!(help.contains("--encoding"));
         assert!(help.contains("--output"));
         assert!(help.contains("--data-dir"));
-        assert!(help.contains("--dry-run"));
-        assert!(help.contains("--stdout"));
+        assert!(help.contains("--in-place"));
         assert!(help.contains("--json"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
@@ -502,9 +522,8 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                dry_run: false,
-                stdout: false,
                 json: true,
+                in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
                 game_files: false,
@@ -541,9 +560,8 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                dry_run: false,
-                stdout: false,
                 json: false,
+                in_place: false,
                 generate_completion: Some(Shell::Bash),
                 generate_manpage: false,
                 game_files: false,
@@ -567,9 +585,8 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                dry_run: false,
-                stdout: false,
                 json: false,
+                in_place: false,
                 generate_completion: None,
                 generate_manpage: true,
                 game_files: false,
@@ -607,9 +624,8 @@ mod tests {
             cfg: Some(cfg),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -643,9 +659,8 @@ mod tests {
             cfg: Some(cfg.clone()),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -681,9 +696,8 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -702,8 +716,8 @@ mod tests {
     }
 
     #[test]
-    fn run_with_stdout_writes_config_to_stdout_and_diagnostics_to_stderr() {
-        let dir = unique_test_dir("stdout-run");
+    fn run_without_output_writes_config_to_stdout_and_diagnostics_to_stderr() {
+        let dir = unique_test_dir("default-stdout-run");
         fs::create_dir_all(&dir).unwrap();
         let ini = dir.join("Morrowind.ini");
         fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
@@ -717,9 +731,8 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                dry_run: false,
-                stdout: true,
                 json: false,
+                in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
                 game_files: false,
@@ -743,32 +756,44 @@ mod tests {
     }
 
     #[test]
-    fn run_with_dry_run_does_not_write_output() {
-        let dir = unique_test_dir("dry-run");
+    fn run_with_cfg_without_in_place_previews_to_stdout() {
+        let dir = unique_test_dir("cfg-preview-run");
         fs::create_dir_all(&dir).unwrap();
         let ini = dir.join("Morrowind.ini");
-        let output = dir.join("out.cfg");
+        let cfg = dir.join("openmw.cfg");
         fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        fs::write(&cfg, "encoding=win1252\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
 
-        run_with(Cli {
-            verbose: false,
-            ini: Some(ini),
-            cfg: None,
-            output: None,
-            data_dirs: Vec::new(),
-            dry_run: true,
-            stdout: false,
-            json: false,
-            generate_completion: None,
-            generate_manpage: false,
-            game_files: false,
-            fonts: false,
-            no_archives: true,
-            encoding: None,
-        })
+        run_with_writers(
+            Cli {
+                verbose: false,
+                ini: Some(ini),
+                cfg: Some(cfg.clone()),
+                output: None,
+                data_dirs: Vec::new(),
+                json: false,
+                in_place: false,
+                generate_completion: None,
+                generate_manpage: false,
+                game_files: false,
+                fonts: false,
+                no_archives: true,
+                encoding: None,
+            },
+            &mut stdout,
+            &mut stderr,
+        )
         .unwrap();
 
-        assert!(!output.exists());
+        assert_eq!(fs::read_to_string(cfg).unwrap(), "encoding=win1252\n");
+        assert!(String::from_utf8(stdout).unwrap().contains("no-sound=1"));
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("load cfg file:")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -780,9 +805,8 @@ mod tests {
             cfg: None,
             output: Some(PathBuf::from("openmw.cfg")),
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: true,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -799,21 +823,22 @@ mod tests {
     }
 
     #[test]
-    fn run_with_dry_run_without_output_is_allowed() {
-        let dir = unique_test_dir("dry-run-no-output");
+    fn run_with_in_place_writes_cfg() {
+        let dir = unique_test_dir("in-place-run");
         fs::create_dir_all(&dir).unwrap();
         let ini = dir.join("Morrowind.ini");
+        let cfg = dir.join("openmw.cfg");
         fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        fs::write(&cfg, "encoding=win1252\n").unwrap();
 
         run_with(Cli {
             verbose: false,
             ini: Some(ini),
-            cfg: None,
+            cfg: Some(cfg.clone()),
             output: None,
             data_dirs: Vec::new(),
-            dry_run: true,
-            stdout: false,
             json: false,
+            in_place: true,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -823,6 +848,7 @@ mod tests {
         })
         .unwrap();
 
+        assert!(fs::read_to_string(cfg).unwrap().contains("no-sound=1"));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -834,9 +860,8 @@ mod tests {
             cfg: None,
             output: Some(PathBuf::from("out.cfg")),
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -853,34 +878,41 @@ mod tests {
     }
 
     #[test]
-    fn run_without_cfg_or_output_returns_usage_error() {
+    fn run_without_cfg_or_output_is_allowed() {
         let dir = unique_test_dir("no-cfg-no-output-run");
         fs::create_dir_all(&dir).unwrap();
         let ini = dir.join("Morrowind.ini");
         fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
 
-        let error = run_with(Cli {
-            verbose: false,
-            ini: Some(ini),
-            cfg: None,
-            output: None,
-            data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
-            json: false,
-            generate_completion: None,
-            generate_manpage: false,
-            game_files: false,
-            fonts: false,
-            no_archives: false,
-            encoding: None,
-        })
-        .unwrap_err();
+        run_with_writers(
+            Cli {
+                verbose: false,
+                ini: Some(ini),
+                cfg: None,
+                output: None,
+                data_dirs: Vec::new(),
+                json: false,
+                in_place: false,
+                generate_completion: None,
+                generate_manpage: false,
+                game_files: false,
+                fonts: false,
+                no_archives: false,
+                encoding: None,
+            },
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
 
-        match error {
-            CliError::InvalidUsage(error) => assert!(error.contains("--cfg <FILE>")),
-            CliError::MissingIni | CliError::Other(_) => panic!("expected invalid usage error"),
-        }
+        assert!(String::from_utf8(stdout).unwrap().contains("no-sound=1"));
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("load ini file:")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -895,9 +927,8 @@ mod tests {
             cfg: Some(dir.join("openmw.cfg")),
             output: None,
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: true,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -928,9 +959,8 @@ mod tests {
             cfg: Some(cfg),
             output: None,
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: true,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -972,9 +1002,8 @@ mod tests {
             cfg: Some(cfg),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: true,
@@ -1006,9 +1035,8 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: true,
@@ -1041,9 +1069,8 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: vec![data_dir.clone()],
-            dry_run: false,
-            stdout: false,
             json: false,
+            in_place: false,
             generate_completion: None,
             generate_manpage: false,
             game_files: true,

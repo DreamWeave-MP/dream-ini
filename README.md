@@ -11,22 +11,23 @@ cargo build --release
 ## Usage
 
 ```bash
-dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]
+dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]
 ```
 
-`--ini` is required for imports. Import mode also requires one output mode: `--cfg` to update a cfg in place, `--output` to write a separate file, `--stdout` or `--json` to print, or `--dry-run` to validate without writing. If `--cfg` is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, `--json`, or `--dry-run` is supplied. If an output/reporting mode is supplied without `--cfg`, import starts from an empty config.
+`--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file, `--json` to write structured JSON to stdout, or `--in-place` with `--cfg` to overwrite the base cfg. If `--cfg` is provided, it is read first, imported keys are replaced, and unrelated settings are preserved. If `--cfg` is omitted, import starts from an empty config.
 
 ```bash
-dream-ini --ini Morrowind.ini --cfg openmw.cfg
+dream-ini --ini Morrowind.ini > openmw.cfg
+dream-ini --ini Morrowind.ini --cfg openmw.cfg > preview.cfg
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --in-place
 dream-ini --ini Morrowind.ini --output imported.cfg
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --output imported.cfg
-dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files
-dream-ini --ini Morrowind.ini --game-files --data-dir "/games/Morrowind/Data Files" --stdout > openmw.cfg
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --in-place
+dream-ini --ini Morrowind.ini --game-files --data-dir "/games/Morrowind/Data Files" > openmw.cfg
 dream-ini --ini Morrowind.ini --game-files --json > import.json
-dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --verbose
-dream-ini --ini Morrowind.ini --cfg openmw.cfg --fonts --encoding win1252
-dream-ini --ini Morrowind.ini --cfg openmw.cfg --no-archives
-dream-ini --ini Morrowind.ini --cfg openmw.cfg --dry-run
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --verbose --in-place
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --fonts --encoding win1252 --in-place
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --no-archives --in-place
 dream-ini --generate-completion bash > dream-ini.bash
 dream-ini --generate-manpage > dream-ini.1
 ```
@@ -34,12 +35,11 @@ dream-ini --generate-manpage > dream-ini.1
 ## Options
 
 - `-i, --ini <FILE>`: Morrowind.ini input path.
-- `-c, --cfg <FILE>`: optional openmw.cfg input/base path; when `--output`, `--stdout`, `--json`, and `--dry-run` are omitted, this is also the write-back target.
+- `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
 - `-o, --output <FILE>`: output cfg path.
 - `--data-dir <DIR>` / `--data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
-- `--dry-run`: parse, import, and print diagnostics without writing an output file.
-- `--stdout` / `--print`: write the resulting cfg to stdout instead of a file. Diagnostics are written to stderr so stdout is redirect-safe.
-- `--json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of a file. Diagnostics are written to stderr.
+- `--in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output` and `--json`.
+- `--json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of cfg text. Diagnostics are written to stderr.
 - `--generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
 - `--generate-manpage`: write a roff manpage to stdout.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
@@ -53,8 +53,9 @@ dream-ini --generate-manpage > dream-ini.1
 ## Behavior
 
 - Output is normalized `key=value` data sorted by key. Comments and original formatting are not preserved.
-- Missing cfg files are treated as empty configs and are not created unless they are also the output path.
-- Omitting cfg is allowed when `--output`, `--stdout`, `--json`, or `--dry-run` is provided; this starts from an empty config.
+- When no `--output`, `--json`, or `--in-place` mode is selected, cfg text is written to stdout. Diagnostics are written to stderr in stdout modes.
+- Missing cfg files are treated as empty configs and are not created unless they are also the `--output` path or `--in-place` target.
+- Omitting cfg starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
 - `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.

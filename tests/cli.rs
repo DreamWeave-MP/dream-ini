@@ -99,14 +99,14 @@ fn explicit_data_dir_imports_content_and_writes_data() {
 }
 
 #[test]
-fn stdout_mode_keeps_config_output_clean() {
-    let dir = unique_test_dir("stdout-mode");
+fn default_stdout_keeps_config_output_clean() {
+    let dir = unique_test_dir("default-stdout");
     fs::create_dir_all(&dir).unwrap();
     let ini = dir.join("Morrowind.ini");
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["--stdout", "--no-archives", "--ini"])
+        .args(["--no-archives", "--ini"])
         .arg(&ini)
         .output()
         .unwrap();
@@ -123,26 +123,55 @@ fn stdout_mode_keeps_config_output_clean() {
 }
 
 #[test]
-fn dry_run_reports_without_writing_output() {
-    let dir = unique_test_dir("dry-run");
+fn cfg_without_in_place_prints_without_writing_cfg() {
+    let dir = unique_test_dir("cfg-preview");
     fs::create_dir_all(&dir).unwrap();
     let ini = dir.join("Morrowind.ini");
-    let output_cfg = dir.join("openmw.cfg");
+    let cfg = dir.join("openmw.cfg");
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "encoding=win1252\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["--dry-run", "--no-archives", "--ini"])
+        .args(["--no-archives", "--ini"])
         .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
         .output()
         .unwrap();
 
     assert!(output.status.success());
-    assert!(!output_cfg.exists());
-    assert!(
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .contains("dry run: not writing output")
-    );
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), "encoding=win1252\n");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("encoding=win1252\n"));
+    assert!(stdout.contains("no-sound=1\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn in_place_writes_back_to_cfg() {
+    let dir = unique_test_dir("in-place");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "encoding=win1252\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--in-place", "--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("write to:"));
+    let written = fs::read_to_string(&cfg).unwrap();
+    assert!(written.contains("encoding=win1252\n"));
+    assert!(written.contains("no-sound=1\n"));
 
     fs::remove_dir_all(dir).unwrap();
 }
@@ -191,9 +220,16 @@ fn output_conflicts_with_json() {
 }
 
 #[test]
-fn json_conflicts_with_stdout() {
+fn json_conflicts_with_in_place() {
     let output = Command::new(BIN)
-        .args(["--json", "--stdout"])
+        .args([
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+            "--json",
+            "--in-place",
+        ])
         .output()
         .unwrap();
 
@@ -203,6 +239,42 @@ fn json_conflicts_with_stdout() {
             .unwrap()
             .contains("cannot be used")
     );
+}
+
+#[test]
+fn output_conflicts_with_in_place() {
+    let output = Command::new(BIN)
+        .args([
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+            "--output",
+            "out.cfg",
+            "--in-place",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("cannot be used")
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+}
+
+#[test]
+fn in_place_requires_cfg() {
+    let output = Command::new(BIN)
+        .args(["--ini", "Morrowind.ini", "--in-place"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr).unwrap().contains("--cfg"));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
 }
 
 #[test]
@@ -218,7 +290,7 @@ fn missing_ini_fails_with_usage_error() {
 }
 
 #[test]
-fn missing_output_mode_fails_with_usage_error() {
+fn missing_output_mode_defaults_to_stdout() {
     let dir = unique_test_dir("missing-output-mode");
     fs::create_dir_all(&dir).unwrap();
     let ini = dir.join("Morrowind.ini");
@@ -230,10 +302,17 @@ fn missing_output_mode_fails_with_usage_error() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("--cfg <FILE>"));
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("no-sound=1\n")
+    );
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("load ini file:")
+    );
 
     fs::remove_dir_all(dir).unwrap();
 }
@@ -287,7 +366,10 @@ fn generates_manpage_to_stdout() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dream-ini"));
     assert!(stdout.contains("Import Morrowind.ini settings"));
-    assert!(stdout.contains("--ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]"));
+    assert!(
+        stdout
+            .contains("--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]")
+    );
     assert!(stdout.contains("Import mode requires"));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
