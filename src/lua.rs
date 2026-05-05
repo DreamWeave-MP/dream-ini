@@ -124,6 +124,15 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
             .map(|value| value.map(PathBuf::from))
             .collect::<LuaResult<Vec<_>>>()?;
     }
+    if let Some(value) = table.get::<Option<String>>("data_local")? {
+        options.data_local = Some(PathBuf::from(value));
+    }
+    if let Some(value) = table.get::<Option<String>>("resources")? {
+        options.resources = Some(PathBuf::from(value));
+    }
+    if let Some(value) = table.get::<Option<String>>("userdata")? {
+        options.userdata = Some(PathBuf::from(value));
+    }
 
     Ok(options)
 }

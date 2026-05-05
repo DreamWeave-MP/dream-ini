@@ -99,6 +99,82 @@ fn explicit_data_dir_imports_content_and_writes_data() {
 }
 
 #[test]
+fn singleton_path_options_replace_existing_values() {
+    let dir = unique_test_dir("singleton-path-options");
+    let resources = dir.join("resources");
+    fs::create_dir_all(&resources).unwrap();
+    fs::write(resources.join("version"), "installed").unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    let output_cfg = dir.join("imported.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!(
+            "data-local=old-local\n",
+            "data-local=other-local\n",
+            "resources=old-resources\n",
+            "userdata=old-userdata\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .args(["-l", "new-local", "-r", "resources", "-u", "new-userdata"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert_eq!(written.matches("data-local=").count(), 1);
+    assert_eq!(written.matches("resources=").count(), 1);
+    assert_eq!(written.matches("userdata=").count(), 1);
+    assert!(written.contains("data-local=new-local\n"));
+    assert!(written.contains("resources=resources\n"));
+    assert!(written.contains("userdata=new-userdata\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn resources_rejects_files_and_empty_directories() {
+    let dir = unique_test_dir("bad-resources");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let output_cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(dir.join("resources-file"), "not a directory").unwrap();
+    fs::create_dir_all(dir.join("empty-resources")).unwrap();
+
+    for resources in ["resources-file", "empty-resources"] {
+        let output = Command::new(BIN)
+            .args(["--no-archives", "--ini"])
+            .arg(&ini)
+            .args(["--output"])
+            .arg(&output_cfg)
+            .args(["--resources", resources])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("--resources")
+        );
+    }
+
+    assert!(!output_cfg.exists());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn default_stdout_keeps_config_output_clean() {
     let dir = unique_test_dir("default-stdout");
     fs::create_dir_all(&dir).unwrap();

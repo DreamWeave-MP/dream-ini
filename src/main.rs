@@ -1,5 +1,6 @@
+use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{ArgAction, CommandFactory, Parser};
@@ -21,7 +22,7 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
 )]
 struct Cli {
     /// Verbose output
-    #[arg(short, long, display_order = 9)]
+    #[arg(short, long, display_order = 11)]
     verbose: bool,
 
     /// Print help
@@ -29,7 +30,7 @@ struct Cli {
     help: Option<bool>,
 
     /// Print version
-    #[arg(short = 'V', long, action = ArgAction::Version, display_order = 15)]
+    #[arg(short = 'V', long, action = ArgAction::Version, display_order = 16)]
     version: Option<bool>,
 
     /// Morrowind.ini file
@@ -51,7 +52,7 @@ struct Cli {
         short = 'O',
         long,
         value_name = "FILE",
-        display_order = 14,
+        display_order = 15,
         conflicts_with_all = ["in_place"]
     )]
     output: Option<PathBuf>,
@@ -60,11 +61,28 @@ struct Cli {
     #[arg(short = 'd', long = "data", value_name = "DIR", display_order = 2)]
     data_dirs: Vec<PathBuf>,
 
+    /// Set data-local in the imported cfg, replacing any existing value
+    #[arg(
+        short = 'l',
+        long = "data-local",
+        value_name = "DIR",
+        display_order = 3
+    )]
+    data_local: Option<PathBuf>,
+
+    /// Set resources in the imported cfg, replacing any existing value; must be a non-empty directory
+    #[arg(short, long, value_name = "DIR", display_order = 9)]
+    resources: Option<PathBuf>,
+
+    /// Set userdata in the imported cfg, replacing any existing value
+    #[arg(short, long, value_name = "DIR", display_order = 10)]
+    userdata: Option<PathBuf>,
+
     /// Write the imported result back to the --cfg file
     #[arg(
         short = 'I',
         long,
-        display_order = 11,
+        display_order = 13,
         requires = "cfg",
         conflicts_with_all = ["output"]
     )]
@@ -75,13 +93,16 @@ struct Cli {
         short = 'C',
         long,
         value_name = "SHELL",
-        display_order = 10,
+        display_order = 12,
         conflicts_with_all = [
             "generate_manpage",
             "ini",
             "cfg",
             "output",
             "data_dirs",
+            "data_local",
+            "resources",
+            "userdata",
             "in_place",
             "game_files",
             "fonts",
@@ -96,13 +117,16 @@ struct Cli {
     #[arg(
         short = 'M',
         long,
-        display_order = 13,
+        display_order = 14,
         conflicts_with_all = [
             "generate_completion",
             "ini",
             "cfg",
             "output",
             "data_dirs",
+            "data_local",
+            "resources",
+            "userdata",
             "in_place",
             "game_files",
             "fonts",
@@ -194,10 +218,12 @@ fn run_with_writers(
         .output
         .clone()
         .or_else(|| cli.in_place.then(|| cfg_path.clone()).flatten());
+    let cfg_reference_path = output_path.as_deref().or(cfg_path.as_deref());
 
     if !ini_path.exists() {
         return Err(CliError::MissingIni);
     }
+    validate_resources_path(cli.resources.as_deref(), cfg_reference_path)?;
 
     if let Some(cfg_path) = &cfg_path
         && !cfg_path.exists()
@@ -215,6 +241,9 @@ fn run_with_writers(
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
         data_dirs: cli.data_dirs,
+        data_local: cli.data_local,
+        resources: cli.resources,
+        userdata: cli.userdata,
         encoding,
         verbose: cli.verbose,
         ..ImportOptions::default()
@@ -280,6 +309,61 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+fn validate_resources_path(
+    resources: Option<&Path>,
+    cfg_reference_path: Option<&Path>,
+) -> Result<(), CliError> {
+    let Some(resources) = resources else {
+        return Ok(());
+    };
+    let resolved = resolve_cfg_relative_path(resources, cfg_reference_path);
+    let metadata = fs::metadata(&resolved).map_err(|source| {
+        CliError::InvalidUsage(format!(
+            "--resources must resolve to an installed, non-empty directory: {} ({source})",
+            resources.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(CliError::InvalidUsage(format!(
+            "--resources must be a directory, not a file: {}",
+            resources.display()
+        )));
+    }
+    let mut entries = fs::read_dir(&resolved).map_err(|source| {
+        CliError::InvalidUsage(format!(
+            "--resources directory cannot be read: {} ({source})",
+            resources.display()
+        ))
+    })?;
+    if entries
+        .next()
+        .transpose()
+        .map_err(|source| {
+            CliError::InvalidUsage(format!(
+                "--resources directory cannot be read: {} ({source})",
+                resources.display()
+            ))
+        })?
+        .is_none()
+    {
+        return Err(CliError::InvalidUsage(format!(
+            "--resources must not be an empty directory: {}",
+            resources.display()
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_cfg_relative_path(path: &Path, cfg_reference_path: Option<&Path>) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_owned();
+    }
+    cfg_reference_path
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new(""))
+        .join(path)
 }
 
 fn handle_generated_output(cli: &Cli, stdout: &mut dyn Write) -> Result<bool, CliError> {
@@ -395,6 +479,12 @@ mod tests {
             "Data Files",
             "-d",
             "Alt Data",
+            "-l",
+            "local-data",
+            "-r",
+            "resources",
+            "-u",
+            "user-data",
             "--output",
             "out.cfg",
             "--ini",
@@ -411,6 +501,9 @@ mod tests {
             cli.data_dirs,
             vec![PathBuf::from("Data Files"), PathBuf::from("Alt Data")]
         );
+        assert_eq!(cli.data_local, Some(PathBuf::from("local-data")));
+        assert_eq!(cli.resources, Some(PathBuf::from("resources")));
+        assert_eq!(cli.userdata, Some(PathBuf::from("user-data")));
         assert_eq!(cli.encoding.as_deref(), Some("win1251"));
         assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
     }
@@ -487,6 +580,9 @@ mod tests {
         assert!(help.contains("--encoding"));
         assert!(help.contains("--output"));
         assert!(help.contains("--data"));
+        assert!(help.contains("--data-local"));
+        assert!(help.contains("--resources"));
+        assert!(help.contains("--userdata"));
         assert!(help.contains("--in-place"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
@@ -495,11 +591,14 @@ mod tests {
             "-c, --cfg",
             "-d, --data",
             "-e, --encoding",
+            "-l, --data-local",
             "-f, --fonts",
             "-g, --game-files",
             "-h, --help",
             "-i, --ini",
             "-n, --no-archives",
+            "-r, --resources",
+            "-u, --userdata",
             "-v, --verbose",
             "-C, --generate-completion",
             "-I, --in-place",
@@ -552,6 +651,9 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
+                data_local: None,
+                resources: None,
+                userdata: None,
                 in_place: false,
                 generate_completion: Some(Shell::Bash),
                 generate_manpage: false,
@@ -578,6 +680,9 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
+                data_local: None,
+                resources: None,
+                userdata: None,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: true,
@@ -618,6 +723,9 @@ mod tests {
             cfg: Some(cfg),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -654,6 +762,9 @@ mod tests {
             cfg: Some(cfg.clone()),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -692,6 +803,9 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -728,6 +842,9 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
+                data_local: None,
+                resources: None,
+                userdata: None,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
@@ -771,6 +888,9 @@ mod tests {
                 cfg: Some(cfg.clone()),
                 output: None,
                 data_dirs: Vec::new(),
+                data_local: None,
+                resources: None,
+                userdata: None,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
@@ -804,6 +924,9 @@ mod tests {
             cfg: Some(PathBuf::from("openmw.cfg")),
             output: Some(PathBuf::from("openmw.cfg")),
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: true,
             generate_completion: None,
             generate_manpage: false,
@@ -837,6 +960,9 @@ mod tests {
             cfg: Some(cfg.clone()),
             output: None,
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: true,
             generate_completion: None,
             generate_manpage: false,
@@ -852,6 +978,101 @@ mod tests {
     }
 
     #[test]
+    fn run_with_singleton_path_options_clobbers_existing_values() {
+        let dir = unique_test_dir("singleton-paths-run");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(dir.join("resources")).unwrap();
+        fs::write(dir.join("resources").join("version"), "installed").unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let cfg = dir.join("openmw.cfg");
+        let output = dir.join("out.cfg");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        fs::write(
+            &cfg,
+            concat!(
+                "data-local=old-local\n",
+                "data-local=other-local\n",
+                "resources=old-resources\n",
+                "userdata=old-userdata\n",
+            ),
+        )
+        .unwrap();
+
+        run_with(Cli {
+            verbose: false,
+            help: None,
+            version: None,
+            ini: Some(ini),
+            cfg: Some(cfg),
+            output: Some(output.clone()),
+            data_dirs: Vec::new(),
+            data_local: Some(PathBuf::from("new-local")),
+            resources: Some(PathBuf::from("resources")),
+            userdata: Some(PathBuf::from("new-userdata")),
+            in_place: false,
+            generate_completion: None,
+            generate_manpage: false,
+            game_files: false,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+        })
+        .unwrap();
+
+        let written = fs::read_to_string(output).unwrap();
+        assert_eq!(written.matches("data-local=").count(), 1);
+        assert_eq!(written.matches("resources=").count(), 1);
+        assert_eq!(written.matches("userdata=").count(), 1);
+        assert!(written.contains("data-local=new-local\n"));
+        assert!(written.contains("resources=resources\n"));
+        assert!(written.contains("userdata=new-userdata\n"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_with_resources_rejects_files_and_empty_directories() {
+        let dir = unique_test_dir("bad-resources-run");
+        fs::create_dir_all(&dir).unwrap();
+        let ini = dir.join("Morrowind.ini");
+        let output = dir.join("out.cfg");
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+        fs::write(dir.join("resources-file"), "not a directory").unwrap();
+        fs::create_dir_all(dir.join("empty-resources")).unwrap();
+
+        for resources in ["resources-file", "empty-resources"] {
+            let error = run_with(Cli {
+                verbose: false,
+                help: None,
+                version: None,
+                ini: Some(ini.clone()),
+                cfg: None,
+                output: Some(output.clone()),
+                data_dirs: Vec::new(),
+                data_local: None,
+                resources: Some(PathBuf::from(resources)),
+                userdata: None,
+                in_place: false,
+                generate_completion: None,
+                generate_manpage: false,
+                game_files: false,
+                fonts: false,
+                no_archives: true,
+                encoding: None,
+            })
+            .unwrap_err();
+
+            match error {
+                CliError::InvalidUsage(error) => assert!(error.contains("--resources")),
+                CliError::MissingIni | CliError::Other(_) => panic!("expected invalid usage error"),
+            }
+        }
+
+        assert!(!output.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn run_without_ini_returns_usage_error() {
         let error = run_with(Cli {
             verbose: false,
@@ -861,6 +1082,9 @@ mod tests {
             cfg: None,
             output: Some(PathBuf::from("out.cfg")),
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -895,6 +1119,9 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
+                data_local: None,
+                resources: None,
+                userdata: None,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
@@ -930,6 +1157,9 @@ mod tests {
             cfg: Some(dir.join("openmw.cfg")),
             output: None,
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: true,
             generate_completion: None,
             generate_manpage: false,
@@ -963,6 +1193,9 @@ mod tests {
             cfg: Some(cfg),
             output: None,
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: true,
             generate_completion: None,
             generate_manpage: false,
@@ -1007,6 +1240,9 @@ mod tests {
             cfg: Some(cfg),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -1041,6 +1277,9 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -1076,6 +1315,9 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: vec![data_dir.clone()],
+            data_local: None,
+            resources: None,
+            userdata: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,

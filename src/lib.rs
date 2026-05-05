@@ -888,6 +888,45 @@ mod tests {
     }
 
     #[test]
+    fn import_options_set_singleton_paths() {
+        let dir = unique_test_dir("singleton-path-options");
+        fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("openmw.cfg");
+        let ini = dir.join("Morrowind.ini");
+        fs::write(
+            &cfg,
+            concat!(
+                "data-local=old-local\n",
+                "data-local=other-local\n",
+                "resources=old-resources\n",
+                "userdata=old-userdata\n",
+            ),
+        )
+        .unwrap();
+        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+        let importer = IniImporter::new(ImportOptions {
+            data_local: Some(PathBuf::from("new-local")),
+            resources: Some(PathBuf::from("new-resources")),
+            userdata: Some(PathBuf::from("new-userdata")),
+            ..ImportOptions::default()
+        });
+        let result = importer.import_paths(&ini, &cfg).unwrap();
+
+        assert_eq!(values(&result.cfg, "data-local"), &["new-local".to_owned()]);
+        assert_eq!(
+            values(&result.cfg, "resources"),
+            &["new-resources".to_owned()]
+        );
+        assert_eq!(
+            values(&result.cfg, "userdata"),
+            &["new-userdata".to_owned()]
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn import_paths_does_not_include_composed_synthetic_entries() {
         let dir = unique_test_dir("user-output-only");
         let resources = dir.join("resources");

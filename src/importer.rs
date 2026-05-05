@@ -17,6 +17,9 @@ pub struct ImportOptions {
     pub import_fonts: bool,
     pub import_archives: bool,
     pub data_dirs: Vec<PathBuf>,
+    pub data_local: Option<PathBuf>,
+    pub resources: Option<PathBuf>,
+    pub userdata: Option<PathBuf>,
     pub encoding: Option<TextEncoding>,
     pub verbose: bool,
 }
@@ -29,6 +32,9 @@ impl Default for ImportOptions {
             import_fonts: false,
             import_archives: true,
             data_dirs: Vec::new(),
+            data_local: None,
+            resources: None,
+            userdata: None,
             encoding: None,
             verbose: false,
         }
@@ -133,6 +139,7 @@ impl IniImporter {
 
         merge(&mut imported_cfg, ini);
         merge_fallback(&mut imported_cfg, ini, self.options.import_fonts);
+        self.apply_singleton_path_overrides(&mut imported_cfg);
 
         if self.options.import_game_files {
             self.import_game_files(&mut imported_cfg, ini, ini_path, &mut messages)?;
@@ -156,6 +163,12 @@ impl IniImporter {
         }
 
         Ok(TextEncoding::Win1252)
+    }
+
+    fn apply_singleton_path_overrides(&self, cfg: &mut MultiMap) {
+        set_path_override(cfg, "data-local", self.options.data_local.as_deref());
+        set_path_override(cfg, "resources", self.options.resources.as_deref());
+        set_path_override(cfg, "userdata", self.options.userdata.as_deref());
     }
 
     fn import_game_files(
@@ -382,6 +395,12 @@ fn add_paths(output: &mut Vec<DataPath>, input: &[String], origin: DataPathOrigi
             path: PathBuf::from(unquote_path(path)),
             origin,
         });
+    }
+}
+
+fn set_path_override(cfg: &mut MultiMap, key: &str, path: Option<&Path>) {
+    if let Some(path) = path {
+        set_single_value(cfg, key, path.to_string_lossy().into_owned());
     }
 }
 

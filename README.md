@@ -26,6 +26,7 @@ dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --in-place
 dream-ini --ini Morrowind.ini --game-files --data "/games/Morrowind/Data Files" > openmw.cfg
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --verbose --in-place
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --fonts --encoding win1252 --in-place
+dream-ini --ini Morrowind.ini --cfg openmw.cfg -l local-data -r /usr/share/openmw/resources -u user-data --in-place
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --no-archives --in-place
 dream-ini -C bash > dream-ini.bash
 dream-ini -M > dream-ini.1
@@ -35,12 +36,15 @@ dream-ini -M > dream-ini.1
 
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
 - `-d, --data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
+- `-l, --data-local <DIR>`: set the singleton `data-local` cfg key, replacing any existing value. Relative paths are preserved for OpenMW to resolve relative to openmw.cfg.
 - `-e, --encoding <ENCODING>`: character encoding for imported content-file names; `win1250`, `win1251`, or `win1252`.
 - `-f, --fonts`: import bitmap font fallback settings.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
 - `-h, --help`: print help.
 - `-i, --ini <FILE>`: Morrowind.ini input path.
 - `-n, --no-archives`: disable BSA archive import.
+- `-r, --resources <DIR>`: set the singleton `resources` cfg key, replacing any existing value. The directory must resolve, must be a directory, and must not be empty.
+- `-u, --userdata <DIR>`: set the singleton `userdata` cfg key, replacing any existing value. Relative paths are preserved for OpenMW to resolve relative to openmw.cfg.
 - `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
 - `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
 - `-I, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output`.
@@ -55,7 +59,7 @@ dream-ini -M > dream-ini.1
 - Missing cfg files are treated as empty configs and are not created unless they are also the `--output` path or `--in-place` target.
 - Omitting cfg starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
-- Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
+- Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`, or by explicit singleton path options such as `--data-local`, `--resources`, and `--userdata`.
 - `--game-files` searches explicit `--data` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
 
 ## Deliberate Differences From OpenMW's C++ Importer
