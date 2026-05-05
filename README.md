@@ -28,8 +28,8 @@ dream-ini --ini Morrowind.ini --game-files --json > import.json
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --verbose --in-place
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --fonts --encoding win1252 --in-place
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --no-archives --in-place
-dream-ini --generate-completion bash > dream-ini.bash
-dream-ini --generate-manpage > dream-ini.1
+dream-ini -C bash > dream-ini.bash
+dream-ini -M > dream-ini.1
 ```
 
 ## Options
@@ -40,8 +40,8 @@ dream-ini --generate-manpage > dream-ini.1
 - `-d, --data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
 - `--in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output` and `--json`.
 - `--json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of cfg text. Diagnostics are written to stderr.
-- `--generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
-- `--generate-manpage`: write a roff manpage to stdout.
+- `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
+- `-M, --generate-manpage`: write a roff manpage to stdout.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
 - `-f, --fonts`: import bitmap font fallback settings.
 - `-n, --no-archives`: disable BSA archive import.

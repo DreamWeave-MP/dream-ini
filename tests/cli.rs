@@ -341,10 +341,7 @@ fn generation_mode_rejects_import_arguments() {
 
 #[test]
 fn generates_bash_completion_to_stdout() {
-    let output = Command::new(BIN)
-        .args(["--generate-completion", "bash"])
-        .output()
-        .unwrap();
+    let output = Command::new(BIN).args(["-C", "bash"]).output().unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
@@ -357,10 +354,7 @@ fn generates_bash_completion_to_stdout() {
 
 #[test]
 fn generates_manpage_to_stdout() {
-    let output = Command::new(BIN)
-        .arg("--generate-manpage")
-        .output()
-        .unwrap();
+    let output = Command::new(BIN).arg("-M").output().unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();

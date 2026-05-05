@@ -59,6 +59,7 @@ struct Cli {
 
     /// Generate shell completion script to stdout
     #[arg(
+        short = 'C',
         long,
         value_name = "SHELL",
         conflicts_with_all = [
@@ -80,6 +81,7 @@ struct Cli {
 
     /// Generate roff manpage to stdout
     #[arg(
+        short = 'M',
         long,
         conflicts_with_all = [
             "generate_completion",
@@ -511,6 +513,12 @@ mod tests {
 
         let manpage = Cli::parse_from(["dream-ini", "--generate-manpage"]);
         assert!(manpage.generate_manpage);
+
+        let short_completion = Cli::parse_from(["dream-ini", "-C", "bash"]);
+        assert_eq!(short_completion.generate_completion, Some(Shell::Bash));
+
+        let short_manpage = Cli::parse_from(["dream-ini", "-M"]);
+        assert!(short_manpage.generate_manpage);
     }
 
     #[test]
