@@ -7,7 +7,7 @@ use crate::{
     parse_ini_bytes_with_warnings, serialize_cfg,
 };
 
-/// Creates a Lua table exposing the `rome-ini` embedding API.
+/// Creates a Lua table exposing the `dream-ini` embedding API.
 ///
 /// This is intended for Rust embedders. The crate does not provide a `cdylib` or `require` module;
 /// callers should assign the returned table into their Lua environment explicitly.
@@ -78,16 +78,16 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
     Ok(module)
 }
 
-/// Registers the `rome_ini` table in Lua globals.
+/// Registers the `dream_ini` table in Lua globals.
 ///
 /// This is a convenience wrapper around [`create_module`]. It does not modify Lua package loaders
-/// or enable `require("rome_ini")`.
+/// or enable `require("dream_ini")`.
 ///
 /// # Errors
 /// Returns a Lua error if the module cannot be created or assigned.
 pub fn register(lua: &Lua) -> LuaResult<()> {
     let module = create_module(lua)?;
-    lua.globals().set("rome_ini", module)
+    lua.globals().set("dream_ini", module)
 }
 
 fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
@@ -203,7 +203,7 @@ mod tests {
 
         lua.load(
             r#"
-            local cfg = rome_ini.parse_cfg("key=one\nkey=two\n")
+            local cfg = dream_ini.parse_cfg("key=one\nkey=two\n")
             assert(cfg.key[1] == "one")
             assert(cfg.key[2] == "two")
             "#,
@@ -218,7 +218,7 @@ mod tests {
         register(&lua).unwrap();
 
         let text: String = lua
-            .load(r#"return rome_ini.serialize_cfg({ key = { "one", "two" } })"#)
+            .load(r#"return dream_ini.serialize_cfg({ key = { "one", "two" } })"#)
             .eval()
             .unwrap();
 
@@ -232,7 +232,7 @@ mod tests {
 
         lua.load(
             r#"
-            local result = rome_ini.parse_ini("[General]\nEmpty=\n", { encoding = "win1252" })
+            local result = dream_ini.parse_ini("[General]\nEmpty=\n", { encoding = "win1252" })
             assert(result.warnings[1] == "ignored empty value for key 'General:Empty'.")
             "#,
         )
@@ -249,7 +249,7 @@ mod tests {
             r#"
             local cfg = { encoding = { "win1252" } }
             local ini = { ["General:Disable Audio"] = { "1" } }
-            local result = rome_ini.import_maps(cfg, ini, { archives = false })
+            local result = dream_ini.import_maps(cfg, ini, { archives = false })
             assert(result.cfg["no-sound"][1] == "1")
             assert(result.text:find("no%-sound=1\n") ~= nil)
             assert(#result.warnings == 0)
@@ -271,7 +271,7 @@ mod tests {
 
         let lua = Lua::new();
         register(&lua).unwrap();
-        let module = lua.globals().get::<Table>("rome_ini").unwrap();
+        let module = lua.globals().get::<Table>("dream_ini").unwrap();
         let options = lua.create_table().unwrap();
         options.set("ini", ini.to_string_lossy().as_ref()).unwrap();
         options.set("game_files", true).unwrap();
@@ -300,7 +300,7 @@ mod tests {
         register(&lua).unwrap();
 
         let error = lua
-            .load(r#"return rome_ini.serialize_cfg({ key = "value" })"#)
+            .load(r#"return dream_ini.serialize_cfg({ key = "value" })"#)
             .eval::<String>()
             .unwrap_err()
             .to_string();
@@ -335,7 +335,7 @@ mod tests {
 
     fn unique_test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "rome-ini-lua-{name}-{}",
+            "dream-ini-lua-{name}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

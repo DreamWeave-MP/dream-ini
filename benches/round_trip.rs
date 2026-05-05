@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use rome_ini::{ImportOptions, IniImporter, serialize_cfg};
+use dream_ini::{ImportOptions, IniImporter, serialize_cfg};
 
 fn round_trip(c: &mut Criterion) {
     let dir = unique_bench_dir();
@@ -78,7 +78,7 @@ fn large_openmw_cfg() -> String {
 
 fn unique_bench_dir() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "rome-ini-bench-{}-{}",
+        "dream-ini-bench-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

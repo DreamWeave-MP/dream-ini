@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const BIN: &str = env!("CARGO_BIN_EXE_rome-ini");
+const BIN: &str = env!("CARGO_BIN_EXE_dream-ini");
 
 #[test]
 fn version_prints_package_version() {
@@ -12,7 +12,7 @@ fn version_prints_package_version() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        format!("rome-ini {}\n", env!("CARGO_PKG_VERSION"))
+        format!("dream-ini {}\n", env!("CARGO_PKG_VERSION"))
     );
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
@@ -172,7 +172,7 @@ fn generates_bash_completion_to_stdout() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("rome-ini"));
+    assert!(stdout.contains("dream-ini"));
     assert!(stdout.contains("--game-files"));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
@@ -186,7 +186,7 @@ fn generates_manpage_to_stdout() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("rome-ini"));
+    assert!(stdout.contains("dream-ini"));
     assert!(stdout.contains("Import Morrowind.ini settings"));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
@@ -218,7 +218,7 @@ fn subrecord(output: &mut Vec<u8>, name: [u8; 4], data: &[u8]) {
 
 fn unique_test_dir(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "rome-ini-integration-{name}-{}",
+        "dream-ini-integration-{name}-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

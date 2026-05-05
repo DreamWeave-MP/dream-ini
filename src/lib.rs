@@ -1,6 +1,6 @@
 //! Library support for importing Morrowind INI settings into OpenMW-style configuration data.
 //!
-//! The crate exposes the same core importer used by the `rome-ini` CLI. Configuration data is
+//! The crate exposes the same core importer used by the `dream-ini` CLI. Configuration data is
 //! represented as a multimap (`key -> Vec<value>`) so duplicate cfg keys such as `data`, `content`,
 //! and `fallback` are preserved without special cases.
 //!
@@ -9,7 +9,7 @@
 //! ```no_run
 //! use std::path::Path;
 //!
-//! use rome_ini::{ImportOptions, IniImporter};
+//! use dream_ini::{ImportOptions, IniImporter};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let importer = IniImporter::new(ImportOptions::default());
@@ -837,7 +837,7 @@ mod tests {
 
     fn unique_test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "rome-ini-{name}-{}",
+            "dream-ini-{name}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

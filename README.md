@@ -1,6 +1,6 @@
-# rome-ini
+# dream-ini
 
-`rome-ini` imports settings from `Morrowind.ini` into an `openmw.cfg`-style file. It is a standalone Rust importer compatible with OpenMW's Morrowind.ini import needs, with deliberate UX improvements over the original C++ tool.
+`dream-ini` imports settings from `Morrowind.ini` into an `openmw.cfg`-style file. It is a standalone Rust importer compatible with OpenMW's Morrowind.ini import needs, with deliberate UX improvements over the original C++ tool.
 
 ## Build
 
@@ -11,24 +11,24 @@ cargo build --release
 ## Usage
 
 ```bash
-rome-ini [OPTIONS] <inifile> [configfile]
+dream-ini [OPTIONS] <inifile> [configfile]
 ```
 
 If a cfg path is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, `--json`, or `--dry-run` is supplied. If `--output`, `--stdout`, `--json`, or `--dry-run` is supplied without a cfg path, import starts from an empty config.
 
 ```bash
-rome-ini Morrowind.ini openmw.cfg
-rome-ini --ini Morrowind.ini --output imported.cfg
-rome-ini --output imported.cfg Morrowind.ini openmw.cfg
-rome-ini --game-files Morrowind.ini openmw.cfg
-rome-ini --game-files --data-dir "/games/Morrowind/Data Files" --stdout > openmw.cfg
-rome-ini --game-files --json Morrowind.ini > import.json
-rome-ini --game-files --verbose Morrowind.ini openmw.cfg
-rome-ini --fonts --encoding win1252 Morrowind.ini openmw.cfg
-rome-ini --no-archives Morrowind.ini openmw.cfg
-rome-ini --dry-run Morrowind.ini openmw.cfg
-rome-ini --generate-completion bash > rome-ini.bash
-rome-ini --generate-manpage > rome-ini.1
+dream-ini Morrowind.ini openmw.cfg
+dream-ini --ini Morrowind.ini --output imported.cfg
+dream-ini --output imported.cfg Morrowind.ini openmw.cfg
+dream-ini --game-files Morrowind.ini openmw.cfg
+dream-ini --game-files --data-dir "/games/Morrowind/Data Files" --stdout > openmw.cfg
+dream-ini --game-files --json Morrowind.ini > import.json
+dream-ini --game-files --verbose Morrowind.ini openmw.cfg
+dream-ini --fonts --encoding win1252 Morrowind.ini openmw.cfg
+dream-ini --no-archives Morrowind.ini openmw.cfg
+dream-ini --dry-run Morrowind.ini openmw.cfg
+dream-ini --generate-completion bash > dream-ini.bash
+dream-ini --generate-manpage > dream-ini.1
 ```
 
 ## Options
@@ -57,7 +57,7 @@ rome-ini --generate-manpage > rome-ini.1
 - Omitting cfg is allowed when `--output`, `--stdout`, `--json`, or `--dry-run` is provided; this starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
-- `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. If content is resolved from an explicit `--data-dir` and an equivalent path is not already present, `rome-ini` writes it as a `data=...` entry. The default `Data Files` fallback is searched but is not written automatically.
+- `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. If content is resolved from an explicit `--data-dir` and an equivalent path is not already present, `dream-ini` writes it as a `data=...` entry. The default `Data Files` fallback is searched but is not written automatically.
 - If `--game-files` sees game-file entries but resolves none of them, a summary warning suggests providing a cfg with `data=...` or using `--data-dir`.
 
 ## Deliberate Differences From OpenMW's C++ Importer
@@ -80,14 +80,14 @@ The crate does not build a Lua `require` module. Embedders create or register th
 
 ```rust
 let lua = mlua::Lua::new();
-let module = rome_ini::lua::create_module(&lua)?;
-lua.globals().set("rome_ini", module)?;
+let module = dream_ini::lua::create_module(&lua)?;
+lua.globals().set("dream_ini", module)?;
 ```
 
 Lua usage:
 
 ```lua
-local result = rome_ini.import_paths({
+local result = dream_ini.import_paths({
   ini = "Morrowind.ini",
   cfg = "openmw.cfg",
   game_files = true,
@@ -151,4 +151,4 @@ The Criterion benchmark measures a large synthetic parse/import/serialize round 
 
 ## License
 
-`rome-ini` is licensed under GPL-3.0-or-later.
+`dream-ini` is licensed under GPL-3.0-or-later.

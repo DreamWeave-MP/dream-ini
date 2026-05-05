@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
 use clap_complete::Shell;
-use rome_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
+use dream_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
 use serde::Serialize;
 
 const MISSING_INI_EXIT_CODE: u8 = 253;
@@ -12,10 +12,10 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
 #[derive(Debug, Parser)]
 #[allow(clippy::struct_excessive_bools)]
 #[command(
-    name = "rome-ini",
+    name = "dream-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
     version,
-    override_usage = "rome-ini <options> inifile [configfile]"
+    override_usage = "dream-ini <options> inifile [configfile]"
 )]
 struct Cli {
     /// Verbose output
@@ -218,7 +218,7 @@ fn run_with_writers(
 
 fn handle_generated_output(cli: &Cli, stdout: &mut dyn Write) -> Result<bool, CliError> {
     if let Some(shell) = cli.generate_completion {
-        clap_complete::generate(shell, &mut Cli::command(), "rome-ini", stdout);
+        clap_complete::generate(shell, &mut Cli::command(), "dream-ini", stdout);
         return Ok(true);
     }
 
@@ -287,7 +287,7 @@ fn write_result_output(
 
 #[derive(Debug, Serialize)]
 struct JsonOutput<'a> {
-    cfg: &'a rome_ini::MultiMap,
+    cfg: &'a dream_ini::MultiMap,
     text: String,
     warnings: &'a [String],
     messages: &'a [String],
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn accepts_positional_ini_and_cfg() {
-        let cli = Cli::parse_from(["rome-ini", "Morrowind.ini", "openmw.cfg"]);
+        let cli = Cli::parse_from(["dream-ini", "Morrowind.ini", "openmw.cfg"]);
 
         assert_eq!(cli.positional_ini, Some(PathBuf::from("Morrowind.ini")));
         assert_eq!(cli.positional_cfg, Some(PathBuf::from("openmw.cfg")));
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn accepts_flag_ini_and_cfg() {
-        let cli = Cli::parse_from(["rome-ini", "--ini", "mw.ini", "--cfg", "openmw.cfg"]);
+        let cli = Cli::parse_from(["dream-ini", "--ini", "mw.ini", "--cfg", "openmw.cfg"]);
 
         assert_eq!(cli.ini, Some(PathBuf::from("mw.ini")));
         assert_eq!(cli.cfg, Some(PathBuf::from("openmw.cfg")));
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn flag_paths_take_precedence_over_positionals() {
         let cli = Cli::parse_from([
-            "rome-ini",
+            "dream-ini",
             "positional.ini",
             "positional.cfg",
             "--ini",
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn parses_import_options() {
         let cli = Cli::parse_from([
-            "rome-ini",
+            "dream-ini",
             "--game-files",
             "--fonts",
             "--no-archives",
@@ -404,10 +404,10 @@ mod tests {
 
     #[test]
     fn parses_generation_options() {
-        let completion = Cli::parse_from(["rome-ini", "--generate-completion", "bash"]);
+        let completion = Cli::parse_from(["dream-ini", "--generate-completion", "bash"]);
         assert_eq!(completion.generate_completion, Some(Shell::Bash));
 
-        let manpage = Cli::parse_from(["rome-ini", "--generate-manpage"]);
+        let manpage = Cli::parse_from(["dream-ini", "--generate-manpage"]);
         assert!(manpage.generate_manpage);
     }
 
@@ -484,7 +484,7 @@ mod tests {
             &mut stderr,
         )
         .unwrap();
-        assert!(String::from_utf8(stdout).unwrap().contains("rome-ini"));
+        assert!(String::from_utf8(stdout).unwrap().contains("dream-ini"));
         assert!(stderr.is_empty());
 
         let mut stdout = Vec::new();
@@ -513,7 +513,7 @@ mod tests {
         )
         .unwrap();
         let manpage = String::from_utf8(stdout).unwrap();
-        assert!(manpage.contains("rome-ini"));
+        assert!(manpage.contains("dream-ini"));
         assert!(manpage.contains("Import Morrowind.ini settings"));
         assert!(stderr.is_empty());
     }
@@ -983,7 +983,7 @@ mod tests {
 
     fn unique_test_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "rome-ini-cli-{name}-{}",
+            "dream-ini-cli-{name}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

@@ -1,5 +1,5 @@
 [package]
-name = "rome-ini"
+name = "dream-ini"
 version = "0.1.0"
 edition = "2024"
 description = "Import Morrowind.ini settings into OpenMW configuration files"
