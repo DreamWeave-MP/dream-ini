@@ -36,7 +36,7 @@ dream-ini -M > dream-ini.1
 
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
 - `-d, --data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
-- `-e, --encoding <ENCODING>`: `win1250`, `win1251`, or `win1252`.
+- `-e, --encoding <ENCODING>`: character encoding for imported content-file names; `win1250`, `win1251`, or `win1252`.
 - `-f, --fonts`: import bitmap font fallback settings.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
 - `-h, --help`: print help.

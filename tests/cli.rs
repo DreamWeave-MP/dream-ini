@@ -364,8 +364,8 @@ fn generates_manpage_to_stdout() {
         stdout
             .contains("--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]")
     );
-    assert!(stdout.contains("-C|--generate-completion <SHELL>"));
-    assert!(stdout.contains("-M|--generate-manpage"));
+    assert!(stdout.contains("--generate-completion <SHELL>"));
+    assert!(stdout.contains("--generate-manpage"));
     assert!(stdout.contains("Import mode requires"));
     assert!(stdout.contains("do not require"));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");

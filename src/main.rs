@@ -17,8 +17,8 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     version,
     disable_help_flag = true,
     disable_version_flag = true,
-    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini -C|--generate-completion <SHELL>\n       dream-ini -M|--generate-manpage",
-    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to overwrite the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
+    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, --in-place with --cfg <FILE> to overwrite the base cfg, or --json to print structured JSON to stdout for redirection or another tool. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
 )]
 struct Cli {
     /// Verbose output
@@ -137,7 +137,7 @@ struct Cli {
     #[arg(short = 'n', long = "no-archives", display_order = 8)]
     no_archives: bool,
 
-    /// Character encoding used in `OpenMW` game messages: win1250, win1251, or win1252
+    /// Character encoding for imported content-file names: win1250, win1251, or win1252
     #[arg(short, long, value_name = "ENCODING", display_order = 3)]
     encoding: Option<String>,
 }
@@ -317,7 +317,7 @@ fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
     manpage.render_name_section(stdout)?;
     write!(
         stdout,
-        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n.br\n.B dream-ini\n-C|--generate-completion <SHELL>\n.br\n.B dream-ini\n-M|--generate-manpage\n"
+        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
     )?;
     manpage.render_description_section(stdout)?;
     manpage.render_options_section(stdout)?;
