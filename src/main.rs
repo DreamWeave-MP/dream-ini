@@ -43,7 +43,12 @@ struct Cli {
     cfg: Option<PathBuf>,
 
     /// Output openmw.cfg file
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(
+        short,
+        long,
+        value_name = "FILE",
+        conflicts_with_all = ["stdout", "json", "dry_run"]
+    )]
     output: Option<PathBuf>,
 
     /// Data Files directory to search before cfg/default data paths
@@ -51,15 +56,19 @@ struct Cli {
     data_dirs: Vec<PathBuf>,
 
     /// Parse and report without writing an output file
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["output", "stdout", "json"])]
     dry_run: bool,
 
     /// Write resulting cfg to stdout instead of a file
-    #[arg(long = "stdout", visible_alias = "print", conflicts_with = "json")]
+    #[arg(
+        long = "stdout",
+        visible_alias = "print",
+        conflicts_with_all = ["output", "json", "dry_run"]
+    )]
     stdout: bool,
 
     /// Write import result JSON to stdout instead of a file
-    #[arg(long, conflicts_with = "stdout")]
+    #[arg(long, conflicts_with_all = ["output", "stdout", "dry_run"])]
     json: bool,
 
     /// Generate shell completion script to stdout
@@ -268,6 +277,16 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
         ));
     }
 
+    let output_modes = [cli.output.is_some(), cli.stdout, cli.json, cli.dry_run]
+        .into_iter()
+        .filter(|selected| *selected)
+        .count();
+    if output_modes > 1 {
+        return Err(CliError::InvalidUsage(
+            "--output, --stdout, --json, and --dry-run are mutually exclusive".to_owned(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -420,8 +439,6 @@ mod tests {
             "Data Files",
             "--data",
             "Alt Data",
-            "--dry-run",
-            "--stdout",
             "--output",
             "out.cfg",
             "--ini",
@@ -433,8 +450,8 @@ mod tests {
         assert!(cli.game_files);
         assert!(cli.fonts);
         assert!(cli.no_archives);
-        assert!(cli.dry_run);
-        assert!(cli.stdout);
+        assert!(!cli.dry_run);
+        assert!(!cli.stdout);
         assert_eq!(
             cli.data_dirs,
             vec![PathBuf::from("Data Files"), PathBuf::from("Alt Data")]
@@ -737,7 +754,7 @@ mod tests {
             verbose: false,
             ini: Some(ini),
             cfg: None,
-            output: Some(output.clone()),
+            output: None,
             data_dirs: Vec::new(),
             dry_run: true,
             stdout: false,
@@ -753,6 +770,32 @@ mod tests {
 
         assert!(!output.exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn run_rejects_multiple_output_modes() {
+        let error = run_with(Cli {
+            verbose: false,
+            ini: Some(PathBuf::from("Morrowind.ini")),
+            cfg: None,
+            output: Some(PathBuf::from("openmw.cfg")),
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
+            json: true,
+            generate_completion: None,
+            generate_manpage: false,
+            game_files: false,
+            fonts: false,
+            no_archives: true,
+            encoding: None,
+        })
+        .unwrap_err();
+
+        match error {
+            CliError::InvalidUsage(error) => assert!(error.contains("mutually exclusive")),
+            CliError::MissingIni | CliError::Other(_) => panic!("expected invalid usage error"),
+        }
     }
 
     #[test]

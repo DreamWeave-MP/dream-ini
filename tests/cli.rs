@@ -131,9 +131,7 @@ fn dry_run_reports_without_writing_output() {
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["--dry-run", "--no-archives", "--output"])
-        .arg(&output_cfg)
-        .args(["--ini"])
+        .args(["--dry-run", "--no-archives", "--ini"])
         .arg(&ini)
         .output()
         .unwrap();
@@ -174,6 +172,22 @@ fn json_mode_outputs_structured_result_to_stdout() {
     );
 
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn output_conflicts_with_json() {
+    let output = Command::new(BIN)
+        .args(["--ini", "Morrowind.ini", "--output", "openmw.cfg", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("cannot be used")
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
 }
 
 #[test]
