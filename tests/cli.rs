@@ -28,7 +28,7 @@ fn default_data_files_search_imports_content_and_writes_data() {
     fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
     let output = Command::new(BIN)
-        .args(["--game-files", "--no-archives", "-O"])
+        .args(["--game-files", "--no-archives", "-o"])
         .arg(&output_cfg)
         .args(["--ini"])
         .arg(&ini)
@@ -234,7 +234,7 @@ fn in_place_writes_back_to_cfg() {
     fs::write(&cfg, "encoding=win1252\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["-I", "--no-archives", "--ini"])
+        .args(["-w", "--no-archives", "--ini"])
         .arg(&ini)
         .args(["--cfg"])
         .arg(&cfg)

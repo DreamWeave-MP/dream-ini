@@ -49,10 +49,10 @@ struct Cli {
 
     /// Output openmw.cfg file
     #[arg(
-        short = 'O',
+        short = 'o',
         long,
         value_name = "FILE",
-        display_order = 15,
+        display_order = 12,
         conflicts_with_all = ["in_place"]
     )]
     output: Option<PathBuf>,
@@ -80,9 +80,9 @@ struct Cli {
 
     /// Write the imported result back to the --cfg file
     #[arg(
-        short = 'I',
+        short = 'w',
         long,
-        display_order = 13,
+        display_order = 11,
         requires = "cfg",
         conflicts_with_all = ["output"]
     )]
@@ -93,7 +93,7 @@ struct Cli {
         short = 'C',
         long,
         value_name = "SHELL",
-        display_order = 12,
+        display_order = 14,
         conflicts_with_all = [
             "generate_manpage",
             "ini",
@@ -117,7 +117,7 @@ struct Cli {
     #[arg(
         short = 'M',
         long,
-        display_order = 14,
+        display_order = 15,
         conflicts_with_all = [
             "generate_completion",
             "ini",
@@ -526,14 +526,14 @@ mod tests {
 
     #[test]
     fn parses_short_output_modes() {
-        let output = Cli::parse_from(["dream-ini", "--ini", "Morrowind.ini", "-O", "out.cfg"]);
+        let output = Cli::parse_from(["dream-ini", "--ini", "Morrowind.ini", "-o", "out.cfg"]);
         let in_place = Cli::parse_from([
             "dream-ini",
             "--ini",
             "Morrowind.ini",
             "--cfg",
             "openmw.cfg",
-            "-I",
+            "-w",
         ]);
 
         assert_eq!(output.output, Some(PathBuf::from("out.cfg")));
@@ -600,10 +600,10 @@ mod tests {
             "-r, --resources",
             "-u, --userdata",
             "-v, --verbose",
+            "-w, --in-place",
+            "-o, --output",
             "-C, --generate-completion",
-            "-I, --in-place",
             "-M, --generate-manpage",
-            "-O, --output",
             "-V, --version",
         ];
         let mut previous_position = 0;

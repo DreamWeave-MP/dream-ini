@@ -47,9 +47,9 @@ dream-ini -M > dream-ini.1
 - `-u, --userdata <DIR>`: set the singleton `userdata` cfg key, replacing any existing value. Relative paths are preserved for OpenMW to resolve relative to openmw.cfg.
 - `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
 - `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
-- `-I, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output`.
+- `-w, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output`.
 - `-M, --generate-manpage`: write a roff manpage to stdout.
-- `-O, --output <FILE>`: output cfg path.
+- `-o, --output <FILE>`: output cfg path.
 - `-V, --version`: print version information.
 
 ## Behavior
