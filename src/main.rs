@@ -18,7 +18,7 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     disable_help_flag = true,
     disable_version_flag = true,
     override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini -C|--generate-completion <SHELL>\n       dream-ini -M|--generate-manpage",
-    after_help = "Import mode requires --ini <FILE>. By default cfg output is written to stdout. Use --output <FILE> to write a file or --in-place with --cfg <FILE> to write back to the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
+    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to overwrite the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
 )]
 struct Cli {
     /// Verbose output
