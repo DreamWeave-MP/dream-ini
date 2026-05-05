@@ -15,7 +15,7 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     name = "dream-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
     version,
-    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]",
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
     after_help = "Import mode requires --ini <FILE> and one of --cfg <FILE>, --output <FILE>, --stdout, --json, or --dry-run. Completion and manpage generation do not require --ini.",
     group(
         ArgGroup::new("import_output")

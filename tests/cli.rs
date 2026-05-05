@@ -256,6 +256,8 @@ fn generates_bash_completion_to_stdout() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dream-ini"));
+    // clap_complete emits a static option inventory for bash. Clap still rejects invalid mixed
+    // generation/import modes at parse time; see generation_mode_rejects_import_arguments.
     assert!(stdout.contains("--game-files"));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
