@@ -107,7 +107,7 @@ struct Cli {
     fonts: bool,
 
     /// Disable bsa archives import
-    #[arg(short = 'A', long = "no-archives")]
+    #[arg(short = 'n', long = "no-archives")]
     no_archives: bool,
 
     /// Character encoding used in `OpenMW` game messages: win1250, win1251, or win1252
@@ -394,7 +394,7 @@ mod tests {
             "dream-ini",
             "--game-files",
             "--fonts",
-            "--no-archives",
+            "-n",
             "--encoding",
             "win1251",
             "--data",
@@ -495,6 +495,13 @@ mod tests {
         assert!(help.contains("--json"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
+    }
+
+    #[test]
+    fn rejects_old_no_archives_short_flag() {
+        let error = Cli::try_parse_from(["dream-ini", "--ini", "Morrowind.ini", "-A"]).unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

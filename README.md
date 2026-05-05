@@ -44,7 +44,7 @@ dream-ini --generate-manpage > dream-ini.1
 - `--generate-manpage`: write a roff manpage to stdout.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
 - `-f, --fonts`: import bitmap font fallback settings.
-- `-A, --no-archives`: disable BSA archive import.
+- `-n, --no-archives`: disable BSA archive import.
 - `-e, --encoding <ENCODING>`: `win1250`, `win1251`, or `win1252`.
 - `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
 - `--version`: print version information.
