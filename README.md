@@ -11,10 +11,10 @@ cargo build --release
 ## Usage
 
 ```bash
-dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]
+dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]
 ```
 
-`--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file, `--json` to write structured JSON to stdout, or `--in-place` with `--cfg` to overwrite the base cfg. If `--cfg` is provided, it is read first, imported keys are replaced, and unrelated settings are preserved. If `--cfg` is omitted, import starts from an empty config.
+`--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file or `--in-place` with `--cfg` to overwrite the base cfg. If `--cfg` is provided, it is read first, imported keys are replaced, and unrelated settings are preserved. If `--cfg` is omitted, import starts from an empty config.
 
 ```bash
 dream-ini --ini Morrowind.ini > openmw.cfg
@@ -24,7 +24,6 @@ dream-ini --ini Morrowind.ini --output imported.cfg
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --output imported.cfg
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --in-place
 dream-ini --ini Morrowind.ini --game-files --data "/games/Morrowind/Data Files" > openmw.cfg
-dream-ini --ini Morrowind.ini --game-files --json > import.json
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --verbose --in-place
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --fonts --encoding win1252 --in-place
 dream-ini --ini Morrowind.ini --cfg openmw.cfg --no-archives --in-place
@@ -44,8 +43,7 @@ dream-ini -M > dream-ini.1
 - `-n, --no-archives`: disable BSA archive import.
 - `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
 - `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
-- `-I, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output` and `--json`.
-- `-J, --json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of cfg text. Diagnostics are written to stderr.
+- `-I, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output`.
 - `-M, --generate-manpage`: write a roff manpage to stdout.
 - `-O, --output <FILE>`: output cfg path.
 - `-V, --version`: print version information.
@@ -53,7 +51,7 @@ dream-ini -M > dream-ini.1
 ## Behavior
 
 - Output is normalized `key=value` data sorted by key. Comments and original formatting are not preserved.
-- When no `--output`, `--json`, or `--in-place` mode is selected, cfg text is written to stdout. Diagnostics are written to stderr in stdout modes.
+- When no `--output` or `--in-place` mode is selected, cfg text is written to stdout. Diagnostics are written to stderr in stdout mode.
 - Missing cfg files are treated as empty configs and are not created unless they are also the `--output` path or `--in-place` target.
 - Omitting cfg starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.

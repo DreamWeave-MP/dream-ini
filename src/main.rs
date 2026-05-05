@@ -5,7 +5,6 @@ use std::process::ExitCode;
 use clap::{ArgAction, CommandFactory, Parser};
 use clap_complete::Shell;
 use dream_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
-use serde::Serialize;
 
 const MISSING_INI_EXIT_CODE: u8 = 253;
 
@@ -17,8 +16,8 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     version,
     disable_help_flag = true,
     disable_version_flag = true,
-    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
-    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, --in-place with --cfg <FILE> to overwrite the base cfg, or --json to print structured JSON to stdout for redirection or another tool. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
+    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to overwrite the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
 )]
 struct Cli {
     /// Verbose output
@@ -53,7 +52,7 @@ struct Cli {
         long,
         value_name = "FILE",
         display_order = 14,
-        conflicts_with_all = ["json", "in_place"]
+        conflicts_with_all = ["in_place"]
     )]
     output: Option<PathBuf>,
 
@@ -61,22 +60,13 @@ struct Cli {
     #[arg(short = 'd', long = "data", value_name = "DIR", display_order = 2)]
     data_dirs: Vec<PathBuf>,
 
-    /// Write import result JSON to stdout instead of a file
-    #[arg(
-        short = 'J',
-        long,
-        display_order = 12,
-        conflicts_with_all = ["output", "in_place"]
-    )]
-    json: bool,
-
     /// Write the imported result back to the --cfg file
     #[arg(
         short = 'I',
         long,
         display_order = 11,
         requires = "cfg",
-        conflicts_with_all = ["output", "json"]
+        conflicts_with_all = ["output"]
     )]
     in_place: bool,
 
@@ -92,7 +82,6 @@ struct Cli {
             "cfg",
             "output",
             "data_dirs",
-            "json",
             "in_place",
             "game_files",
             "fonts",
@@ -114,7 +103,6 @@ struct Cli {
             "cfg",
             "output",
             "data_dirs",
-            "json",
             "in_place",
             "game_files",
             "fonts",
@@ -199,7 +187,7 @@ fn run_with_writers(
         return Ok(());
     }
     validate_import_usage(&cli)?;
-    let stdout_mode = cli.json || (!cli.in_place && cli.output.is_none());
+    let stdout_mode = !cli.in_place && cli.output.is_none();
     let ini_path = cli.ini.expect("validated --ini");
     let cfg_path = cli.cfg;
     let output_path = cli
@@ -260,10 +248,7 @@ fn run_with_writers(
     write_result_output(
         &importer,
         &result,
-        OutputMode {
-            json: cli.json,
-            output_path,
-        },
+        OutputMode { output_path },
         stdout,
         stderr,
     )?;
@@ -278,13 +263,13 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
         ));
     }
 
-    let output_modes = [cli.output.is_some(), cli.json, cli.in_place]
+    let output_modes = [cli.output.is_some(), cli.in_place]
         .into_iter()
         .filter(|selected| *selected)
         .count();
     if output_modes > 1 {
         return Err(CliError::InvalidUsage(
-            "--output, --json, and --in-place are mutually exclusive".to_owned(),
+            "--output and --in-place are mutually exclusive".to_owned(),
         ));
     }
 
@@ -317,7 +302,7 @@ fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
     manpage.render_name_section(stdout)?;
     write!(
         stdout,
-        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
+        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
     )?;
     manpage.render_description_section(stdout)?;
     manpage.render_options_section(stdout)?;
@@ -328,7 +313,6 @@ fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
 
 #[derive(Debug)]
 struct OutputMode {
-    json: bool,
     output_path: Option<PathBuf>,
 }
 
@@ -339,16 +323,7 @@ fn write_result_output(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<(), CliError> {
-    if mode.json {
-        let output = JsonOutput {
-            cfg: &result.cfg,
-            text: serialize_cfg(&result.cfg),
-            warnings: &result.warnings,
-            messages: &result.messages,
-        };
-        serde_json::to_writer_pretty(&mut *stdout, &output)?;
-        writeln!(stdout)?;
-    } else if let Some(output_path) = mode.output_path {
+    if let Some(output_path) = mode.output_path {
         diagnostic(
             false,
             stdout,
@@ -361,14 +336,6 @@ fn write_result_output(
     }
 
     Ok(())
-}
-
-#[derive(Debug, Serialize)]
-struct JsonOutput<'a> {
-    cfg: &'a dream_ini::MultiMap,
-    text: String,
-    warnings: &'a [String],
-    messages: &'a [String],
 }
 
 fn diagnostic(
@@ -439,7 +406,6 @@ mod tests {
         assert!(cli.game_files);
         assert!(cli.fonts);
         assert!(cli.no_archives);
-        assert!(!cli.json);
         assert!(!cli.in_place);
         assert_eq!(
             cli.data_dirs,
@@ -463,13 +429,11 @@ mod tests {
         assert!(cli.in_place);
         assert_eq!(cli.cfg, Some(PathBuf::from("openmw.cfg")));
         assert_eq!(cli.output, None);
-        assert!(!cli.json);
     }
 
     #[test]
     fn parses_short_output_modes() {
         let output = Cli::parse_from(["dream-ini", "--ini", "Morrowind.ini", "-O", "out.cfg"]);
-        let json = Cli::parse_from(["dream-ini", "--ini", "Morrowind.ini", "-J"]);
         let in_place = Cli::parse_from([
             "dream-ini",
             "--ini",
@@ -480,10 +444,7 @@ mod tests {
         ]);
 
         assert_eq!(output.output, Some(PathBuf::from("out.cfg")));
-        assert!(json.json);
-        assert!(!json.in_place);
         assert!(in_place.in_place);
-        assert!(!in_place.json);
     }
 
     #[test]
@@ -510,22 +471,10 @@ mod tests {
             "out.cfg",
         ])
         .unwrap_err();
-        let json_error = Cli::try_parse_from([
-            "dream-ini",
-            "--ini",
-            "Morrowind.ini",
-            "--cfg",
-            "openmw.cfg",
-            "--in-place",
-            "--json",
-        ])
-        .unwrap_err();
-
         assert_eq!(
             output_error.kind(),
             clap::error::ErrorKind::ArgumentConflict
         );
-        assert_eq!(json_error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -539,7 +488,6 @@ mod tests {
         assert!(help.contains("--output"));
         assert!(help.contains("--data"));
         assert!(help.contains("--in-place"));
-        assert!(help.contains("--json"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
 
@@ -555,7 +503,6 @@ mod tests {
             "-v, --verbose",
             "-C, --generate-completion",
             "-I, --in-place",
-            "-J, --json",
             "-M, --generate-manpage",
             "-O, --output",
             "-V, --version",
@@ -593,51 +540,6 @@ mod tests {
     }
 
     #[test]
-    fn run_with_json_writes_result_to_stdout() {
-        let dir = unique_test_dir("json-run");
-        fs::create_dir_all(&dir).unwrap();
-        let ini = dir.join("Morrowind.ini");
-        fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-
-        run_with_writers(
-            Cli {
-                verbose: false,
-                help: None,
-                version: None,
-                ini: Some(ini),
-                cfg: None,
-                output: None,
-                data_dirs: Vec::new(),
-                json: true,
-                in_place: false,
-                generate_completion: None,
-                generate_manpage: false,
-                game_files: false,
-                fonts: false,
-                no_archives: true,
-                encoding: None,
-            },
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap();
-
-        let json: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
-        assert_eq!(json["cfg"]["encoding"][0], "win1252");
-        assert_eq!(json["cfg"]["no-sound"][0], "1");
-        assert!(json["text"].as_str().unwrap().contains("no-sound=1\n"));
-        assert!(
-            String::from_utf8(stderr)
-                .unwrap()
-                .contains("load ini file:")
-        );
-
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn run_with_generation_options_do_not_require_ini() {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -650,7 +552,6 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                json: false,
                 in_place: false,
                 generate_completion: Some(Shell::Bash),
                 generate_manpage: false,
@@ -677,7 +578,6 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                json: false,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: true,
@@ -718,7 +618,6 @@ mod tests {
             cfg: Some(cfg),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            json: false,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -755,7 +654,6 @@ mod tests {
             cfg: Some(cfg.clone()),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            json: false,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -794,7 +692,6 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            json: false,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -831,7 +728,6 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                json: false,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
@@ -875,7 +771,6 @@ mod tests {
                 cfg: Some(cfg.clone()),
                 output: None,
                 data_dirs: Vec::new(),
-                json: false,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
@@ -906,11 +801,10 @@ mod tests {
             help: None,
             version: None,
             ini: Some(PathBuf::from("Morrowind.ini")),
-            cfg: None,
+            cfg: Some(PathBuf::from("openmw.cfg")),
             output: Some(PathBuf::from("openmw.cfg")),
             data_dirs: Vec::new(),
-            json: true,
-            in_place: false,
+            in_place: true,
             generate_completion: None,
             generate_manpage: false,
             game_files: false,
@@ -943,7 +837,6 @@ mod tests {
             cfg: Some(cfg.clone()),
             output: None,
             data_dirs: Vec::new(),
-            json: false,
             in_place: true,
             generate_completion: None,
             generate_manpage: false,
@@ -968,7 +861,6 @@ mod tests {
             cfg: None,
             output: Some(PathBuf::from("out.cfg")),
             data_dirs: Vec::new(),
-            json: false,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -1003,7 +895,6 @@ mod tests {
                 cfg: None,
                 output: None,
                 data_dirs: Vec::new(),
-                json: false,
                 in_place: false,
                 generate_completion: None,
                 generate_manpage: false,
@@ -1039,7 +930,6 @@ mod tests {
             cfg: Some(dir.join("openmw.cfg")),
             output: None,
             data_dirs: Vec::new(),
-            json: false,
             in_place: true,
             generate_completion: None,
             generate_manpage: false,
@@ -1073,7 +963,6 @@ mod tests {
             cfg: Some(cfg),
             output: None,
             data_dirs: Vec::new(),
-            json: false,
             in_place: true,
             generate_completion: None,
             generate_manpage: false,
@@ -1118,7 +1007,6 @@ mod tests {
             cfg: Some(cfg),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            json: false,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -1153,7 +1041,6 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: Vec::new(),
-            json: false,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,
@@ -1189,7 +1076,6 @@ mod tests {
             cfg: None,
             output: Some(output.clone()),
             data_dirs: vec![data_dir.clone()],
-            json: false,
             in_place: false,
             generate_completion: None,
             generate_manpage: false,

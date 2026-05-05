@@ -177,71 +177,6 @@ fn in_place_writes_back_to_cfg() {
 }
 
 #[test]
-fn json_mode_outputs_structured_result_to_stdout() {
-    let dir = unique_test_dir("json-mode");
-    fs::create_dir_all(&dir).unwrap();
-    let ini = dir.join("Morrowind.ini");
-    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
-
-    let output = Command::new(BIN)
-        .args(["-J", "--no-archives", "--ini"])
-        .arg(&ini)
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["cfg"]["encoding"][0], "win1252");
-    assert_eq!(json["cfg"]["no-sound"][0], "1");
-    assert!(json["text"].as_str().unwrap().contains("no-sound=1\n"));
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("load ini file:")
-    );
-
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn output_conflicts_with_json() {
-    let output = Command::new(BIN)
-        .args(["--ini", "Morrowind.ini", "--output", "openmw.cfg", "--json"])
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("cannot be used")
-    );
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
-}
-
-#[test]
-fn json_conflicts_with_in_place() {
-    let output = Command::new(BIN)
-        .args([
-            "--ini",
-            "Morrowind.ini",
-            "--cfg",
-            "openmw.cfg",
-            "--json",
-            "--in-place",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("cannot be used")
-    );
-}
-
-#[test]
 fn output_conflicts_with_in_place() {
     let output = Command::new(BIN)
         .args([
@@ -360,10 +295,7 @@ fn generates_manpage_to_stdout() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dream-ini"));
     assert!(stdout.contains("Import Morrowind.ini settings"));
-    assert!(
-        stdout
-            .contains("--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]")
-    );
+    assert!(stdout.contains("--ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]"));
     assert!(stdout.contains("--generate-completion <SHELL>"));
     assert!(stdout.contains("--generate-manpage"));
     assert!(stdout.contains("Import mode requires"));

@@ -286,8 +286,6 @@ dependencies = [
  "criterion",
  "encoding_rs",
  "mlua",
- "serde",
- "serde_json",
 ]
 
 [[package]]
