@@ -192,6 +192,39 @@ fn json_conflicts_with_stdout() {
 }
 
 #[test]
+fn missing_ini_fails_with_usage_error() {
+    let output = Command::new(BIN)
+        .args(["--output", "openmw.cfg"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8(output.stderr).unwrap().contains("--ini"));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+}
+
+#[test]
+fn missing_output_mode_fails_with_usage_error() {
+    let dir = unique_test_dir("missing-output-mode");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--ini"])
+        .arg(&ini)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("--cfg <FILE>"));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn generates_bash_completion_to_stdout() {
     let output = Command::new(BIN)
         .args(["--generate-completion", "bash"])
@@ -216,6 +249,7 @@ fn generates_manpage_to_stdout() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dream-ini"));
     assert!(stdout.contains("Import Morrowind.ini settings"));
+    assert!(stdout.contains("Import mode requires"));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 

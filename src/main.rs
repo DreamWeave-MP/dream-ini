@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser};
+use clap::{ArgGroup, CommandFactory, Parser};
 use clap_complete::Shell;
 use dream_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
 use serde::Serialize;
@@ -15,7 +15,13 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     name = "dream-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
     version,
-    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]"
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]",
+    after_help = "Import mode requires --ini <FILE> and one of --cfg <FILE>, --output <FILE>, --stdout, --json, or --dry-run. Completion and manpage generation do not require --ini.",
+    group(
+        ArgGroup::new("import_output")
+            .args(["cfg", "output", "stdout", "json", "dry_run"])
+            .multiple(true)
+    )
 )]
 struct Cli {
     /// Verbose output
@@ -23,7 +29,12 @@ struct Cli {
     verbose: bool,
 
     /// Morrowind.ini file
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(
+        short,
+        long,
+        value_name = "FILE",
+        required_unless_present_any = ["generate_completion", "generate_manpage"]
+    )]
     ini: Option<PathBuf>,
 
     /// openmw.cfg file
@@ -82,6 +93,10 @@ fn main() -> ExitCode {
             eprintln!("ini file does not exist");
             ExitCode::from(MISSING_INI_EXIT_CODE)
         }
+        Err(CliError::InvalidUsage(error)) => {
+            eprintln!("ERROR: {error}");
+            ExitCode::FAILURE
+        }
         Err(CliError::Other(error)) => {
             eprintln!("ERROR: {error}");
             ExitCode::FAILURE
@@ -92,6 +107,7 @@ fn main() -> ExitCode {
 #[derive(Debug)]
 enum CliError {
     MissingIni,
+    InvalidUsage(String),
     Other(Box<dyn std::error::Error>),
 }
 
@@ -126,21 +142,15 @@ fn run_with_writers(
     if handle_generated_output(&cli, stdout)? {
         return Ok(());
     }
+    validate_import_usage(&cli)?;
     let stdout_mode = cli.stdout || cli.json;
-    let Some(ini_path) = cli.ini else {
-        write!(stdout, "{}", Cli::command().render_help())?;
-        return Ok(());
-    };
+    let ini_path = cli.ini.expect("validated --ini");
     let cfg_path = cli.cfg;
     let output_path = cli.output.clone().or_else(|| {
         (!stdout_mode && !cli.dry_run && !cli.json)
             .then(|| cfg_path.clone())
             .flatten()
     });
-    if output_path.is_none() && !stdout_mode && !cli.dry_run && !cli.json {
-        write!(stdout, "{}", Cli::command().render_help())?;
-        return Ok(());
-    }
 
     if !ini_path.exists() {
         return Err(CliError::MissingIni);
@@ -204,6 +214,23 @@ fn run_with_writers(
         stdout,
         stderr,
     )?;
+
+    Ok(())
+}
+
+fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
+    if cli.ini.is_none() {
+        return Err(CliError::InvalidUsage(
+            "--ini <FILE> is required for imports".to_owned(),
+        ));
+    }
+
+    if cli.cfg.is_none() && cli.output.is_none() && !cli.stdout && !cli.json && !cli.dry_run {
+        return Err(CliError::InvalidUsage(
+            "one of --cfg <FILE>, --output <FILE>, --stdout, --json, or --dry-run is required"
+                .to_owned(),
+        ));
+    }
 
     Ok(())
 }
@@ -317,6 +344,16 @@ mod tests {
         let error = Cli::try_parse_from(["dream-ini", "Morrowind.ini", "openmw.cfg"]).unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn clap_requires_ini_for_import_options() {
+        let error = Cli::try_parse_from(["dream-ini", "--output", "openmw.cfg"]).unwrap_err();
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
     }
 
     #[test]
@@ -696,13 +733,39 @@ mod tests {
     }
 
     #[test]
-    fn run_without_cfg_or_output_prints_help() {
+    fn run_without_ini_returns_usage_error() {
+        let error = run_with(Cli {
+            verbose: false,
+            ini: None,
+            cfg: None,
+            output: Some(PathBuf::from("out.cfg")),
+            data_dirs: Vec::new(),
+            dry_run: false,
+            stdout: false,
+            json: false,
+            generate_completion: None,
+            generate_manpage: false,
+            game_files: false,
+            fonts: false,
+            no_archives: false,
+            encoding: None,
+        })
+        .unwrap_err();
+
+        match error {
+            CliError::InvalidUsage(error) => assert!(error.contains("--ini <FILE>")),
+            CliError::MissingIni | CliError::Other(_) => panic!("expected invalid usage error"),
+        }
+    }
+
+    #[test]
+    fn run_without_cfg_or_output_returns_usage_error() {
         let dir = unique_test_dir("no-cfg-no-output-run");
         fs::create_dir_all(&dir).unwrap();
         let ini = dir.join("Morrowind.ini");
         fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
-        run_with(Cli {
+        let error = run_with(Cli {
             verbose: false,
             ini: Some(ini),
             cfg: None,
@@ -718,7 +781,12 @@ mod tests {
             no_archives: false,
             encoding: None,
         })
-        .unwrap();
+        .unwrap_err();
+
+        match error {
+            CliError::InvalidUsage(error) => assert!(error.contains("--cfg <FILE>")),
+            CliError::MissingIni | CliError::Other(_) => panic!("expected invalid usage error"),
+        }
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -780,7 +848,9 @@ mod tests {
 
         match error {
             CliError::Other(error) => assert_eq!(error.to_string(), "unsupported encoding: bogus"),
-            CliError::MissingIni => panic!("expected unsupported encoding error"),
+            CliError::MissingIni | CliError::InvalidUsage(_) => {
+                panic!("expected unsupported encoding error")
+            }
         }
 
         fs::remove_dir_all(dir).unwrap();

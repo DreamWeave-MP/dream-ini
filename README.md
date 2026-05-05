@@ -14,7 +14,7 @@ cargo build --release
 dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]
 ```
 
-`--ini` is required for imports. If `--cfg` is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, `--json`, or `--dry-run` is supplied. If `--output`, `--stdout`, `--json`, or `--dry-run` is supplied without `--cfg`, import starts from an empty config.
+`--ini` is required for imports. Import mode also requires one output mode: `--cfg` to update a cfg in place, `--output` to write a separate file, `--stdout` or `--json` to print, or `--dry-run` to validate without writing. If `--cfg` is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, `--json`, or `--dry-run` is supplied. If an output/reporting mode is supplied without `--cfg`, import starts from an empty config.
 
 ```bash
 dream-ini --ini Morrowind.ini --cfg openmw.cfg
@@ -34,7 +34,7 @@ dream-ini --generate-manpage > dream-ini.1
 ## Options
 
 - `-i, --ini <FILE>`: Morrowind.ini input path.
-- `-c, --cfg <FILE>`: optional openmw.cfg input/base path. Required only when `--output`, `--stdout`, `--json`, and `--dry-run` are omitted.
+- `-c, --cfg <FILE>`: optional openmw.cfg input/base path; when `--output` is omitted, this is also the write-back target.
 - `-o, --output <FILE>`: output cfg path.
 - `--data-dir <DIR>` / `--data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
 - `--dry-run`: parse, import, and print diagnostics without writing an output file.
