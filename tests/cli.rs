@@ -30,6 +30,7 @@ fn default_data_files_search_imports_content_and_writes_data() {
     let output = Command::new(BIN)
         .args(["--game-files", "--no-archives", "--output"])
         .arg(&output_cfg)
+        .args(["--ini"])
         .arg(&ini)
         .output()
         .unwrap();
@@ -53,6 +54,7 @@ fn missing_game_file_fails_without_writing_output() {
     let output = Command::new(BIN)
         .args(["--game-files", "--no-archives", "--output"])
         .arg(&output_cfg)
+        .args(["--ini"])
         .arg(&ini)
         .output()
         .unwrap();
@@ -83,6 +85,7 @@ fn explicit_data_dir_imports_content_and_writes_data() {
         .arg(&data_dir)
         .args(["--output"])
         .arg(&output_cfg)
+        .args(["--ini"])
         .arg(&ini)
         .output()
         .unwrap();
@@ -103,7 +106,7 @@ fn stdout_mode_keeps_config_output_clean() {
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["--stdout", "--no-archives"])
+        .args(["--stdout", "--no-archives", "--ini"])
         .arg(&ini)
         .output()
         .unwrap();
@@ -130,6 +133,7 @@ fn dry_run_reports_without_writing_output() {
     let output = Command::new(BIN)
         .args(["--dry-run", "--no-archives", "--output"])
         .arg(&output_cfg)
+        .args(["--ini"])
         .arg(&ini)
         .output()
         .unwrap();
@@ -153,7 +157,7 @@ fn json_mode_outputs_structured_result_to_stdout() {
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["--json", "--no-archives"])
+        .args(["--json", "--no-archives", "--ini"])
         .arg(&ini)
         .output()
         .unwrap();

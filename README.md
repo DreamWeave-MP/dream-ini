@@ -11,22 +11,22 @@ cargo build --release
 ## Usage
 
 ```bash
-dream-ini [OPTIONS] <inifile> [configfile]
+dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]
 ```
 
-If a cfg path is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, `--json`, or `--dry-run` is supplied. If `--output`, `--stdout`, `--json`, or `--dry-run` is supplied without a cfg path, import starts from an empty config.
+`--ini` is required for imports. If `--cfg` is provided, it is read first, imported keys are replaced, unrelated settings are preserved, and the result is written back to the cfg path unless `--output`, `--stdout`, `--json`, or `--dry-run` is supplied. If `--output`, `--stdout`, `--json`, or `--dry-run` is supplied without `--cfg`, import starts from an empty config.
 
 ```bash
-dream-ini Morrowind.ini openmw.cfg
+dream-ini --ini Morrowind.ini --cfg openmw.cfg
 dream-ini --ini Morrowind.ini --output imported.cfg
-dream-ini --output imported.cfg Morrowind.ini openmw.cfg
-dream-ini --game-files Morrowind.ini openmw.cfg
-dream-ini --game-files --data-dir "/games/Morrowind/Data Files" --stdout > openmw.cfg
-dream-ini --game-files --json Morrowind.ini > import.json
-dream-ini --game-files --verbose Morrowind.ini openmw.cfg
-dream-ini --fonts --encoding win1252 Morrowind.ini openmw.cfg
-dream-ini --no-archives Morrowind.ini openmw.cfg
-dream-ini --dry-run Morrowind.ini openmw.cfg
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --output imported.cfg
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files
+dream-ini --ini Morrowind.ini --game-files --data-dir "/games/Morrowind/Data Files" --stdout > openmw.cfg
+dream-ini --ini Morrowind.ini --game-files --json > import.json
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --game-files --verbose
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --fonts --encoding win1252
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --no-archives
+dream-ini --ini Morrowind.ini --cfg openmw.cfg --dry-run
 dream-ini --generate-completion bash > dream-ini.bash
 dream-ini --generate-manpage > dream-ini.1
 ```

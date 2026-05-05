@@ -15,7 +15,7 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     name = "dream-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
     version,
-    override_usage = "dream-ini <options> inifile [configfile]"
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]"
 )]
 struct Cli {
     /// Verbose output
@@ -73,14 +73,6 @@ struct Cli {
     /// Character encoding used in `OpenMW` game messages: win1250, win1251, or win1252
     #[arg(short, long, value_name = "ENCODING")]
     encoding: Option<String>,
-
-    /// Positional Morrowind.ini file
-    #[arg(value_name = "inifile")]
-    positional_ini: Option<PathBuf>,
-
-    /// Positional openmw.cfg file
-    #[arg(value_name = "configfile")]
-    positional_cfg: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -135,11 +127,11 @@ fn run_with_writers(
         return Ok(());
     }
     let stdout_mode = cli.stdout || cli.json;
-    let Some(ini_path) = cli.ini.or(cli.positional_ini) else {
+    let Some(ini_path) = cli.ini else {
         write!(stdout, "{}", Cli::command().render_help())?;
         return Ok(());
     };
-    let cfg_path = cli.cfg.or(cli.positional_cfg);
+    let cfg_path = cli.cfg;
     let output_path = cli.output.clone().or_else(|| {
         (!stdout_mode && !cli.dry_run && !cli.json)
             .then(|| cfg_path.clone())
@@ -313,42 +305,18 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn accepts_positional_ini_and_cfg() {
-        let cli = Cli::parse_from(["dream-ini", "Morrowind.ini", "openmw.cfg"]);
-
-        assert_eq!(cli.positional_ini, Some(PathBuf::from("Morrowind.ini")));
-        assert_eq!(cli.positional_cfg, Some(PathBuf::from("openmw.cfg")));
-        assert!(cli.ini.is_none());
-        assert!(cli.cfg.is_none());
-    }
-
-    #[test]
     fn accepts_flag_ini_and_cfg() {
         let cli = Cli::parse_from(["dream-ini", "--ini", "mw.ini", "--cfg", "openmw.cfg"]);
 
         assert_eq!(cli.ini, Some(PathBuf::from("mw.ini")));
         assert_eq!(cli.cfg, Some(PathBuf::from("openmw.cfg")));
-        assert!(cli.positional_ini.is_none());
-        assert!(cli.positional_cfg.is_none());
     }
 
     #[test]
-    fn flag_paths_take_precedence_over_positionals() {
-        let cli = Cli::parse_from([
-            "dream-ini",
-            "positional.ini",
-            "positional.cfg",
-            "--ini",
-            "flag.ini",
-            "--cfg",
-            "flag.cfg",
-        ]);
+    fn rejects_positional_paths() {
+        let error = Cli::try_parse_from(["dream-ini", "Morrowind.ini", "openmw.cfg"]).unwrap_err();
 
-        let ini_path = cli.ini.or(cli.positional_ini);
-        let cfg_path = cli.cfg.or(cli.positional_cfg);
-
-        assert_eq!(ini_path, Some(PathBuf::from("flag.ini")));
-        assert_eq!(cfg_path, Some(PathBuf::from("flag.cfg")));
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -368,7 +336,9 @@ mod tests {
             "--stdout",
             "--output",
             "out.cfg",
+            "--ini",
             "mw.ini",
+            "--cfg",
             "openmw.cfg",
         ]);
 
@@ -436,8 +406,6 @@ mod tests {
                 fonts: false,
                 no_archives: true,
                 encoding: None,
-                positional_ini: None,
-                positional_cfg: None,
             },
             &mut stdout,
             &mut stderr,
@@ -477,8 +445,6 @@ mod tests {
                 fonts: false,
                 no_archives: false,
                 encoding: None,
-                positional_ini: None,
-                positional_cfg: None,
             },
             &mut stdout,
             &mut stderr,
@@ -505,8 +471,6 @@ mod tests {
                 fonts: false,
                 no_archives: false,
                 encoding: None,
-                positional_ini: None,
-                positional_cfg: None,
             },
             &mut stdout,
             &mut stderr,
@@ -547,8 +511,6 @@ mod tests {
             fonts: false,
             no_archives: false,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
@@ -572,8 +534,8 @@ mod tests {
 
         run_with(Cli {
             verbose: false,
-            ini: None,
-            cfg: None,
+            ini: Some(ini),
+            cfg: Some(cfg.clone()),
             output: Some(output.clone()),
             data_dirs: Vec::new(),
             dry_run: false,
@@ -585,8 +547,6 @@ mod tests {
             fonts: false,
             no_archives: true,
             encoding: None,
-            positional_ini: Some(ini),
-            positional_cfg: Some(cfg.clone()),
         })
         .unwrap();
 
@@ -625,8 +585,6 @@ mod tests {
             fonts: false,
             no_archives: true,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
@@ -663,8 +621,6 @@ mod tests {
                 fonts: false,
                 no_archives: true,
                 encoding: None,
-                positional_ini: None,
-                positional_cfg: None,
             },
             &mut stdout,
             &mut stderr,
@@ -704,8 +660,6 @@ mod tests {
             fonts: false,
             no_archives: true,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
@@ -735,8 +689,6 @@ mod tests {
             fonts: false,
             no_archives: true,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
@@ -765,8 +717,6 @@ mod tests {
             fonts: false,
             no_archives: false,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
@@ -792,8 +742,6 @@ mod tests {
             fonts: false,
             no_archives: false,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap_err();
 
@@ -827,8 +775,6 @@ mod tests {
             fonts: false,
             no_archives: false,
             encoding: Some("bogus".to_owned()),
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap_err();
 
@@ -871,8 +817,6 @@ mod tests {
             fonts: false,
             no_archives: true,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
@@ -907,8 +851,6 @@ mod tests {
             fonts: false,
             no_archives: true,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
@@ -944,8 +886,6 @@ mod tests {
             fonts: false,
             no_archives: true,
             encoding: None,
-            positional_ini: None,
-            positional_cfg: None,
         })
         .unwrap();
 
