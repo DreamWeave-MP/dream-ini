@@ -15,8 +15,8 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     name = "dream-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
     version,
-    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
-    after_help = "Import mode requires --ini <FILE>. By default cfg output is written to stdout. Use --output <FILE> to write a file or --in-place with --cfg <FILE> to write back to the base cfg. Completion and manpage generation do not require --ini."
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini -C|--generate-completion <SHELL>\n       dream-ini -M|--generate-manpage",
+    after_help = "Import mode requires --ini <FILE>. By default cfg output is written to stdout. Use --output <FILE> to write a file or --in-place with --cfg <FILE> to write back to the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
 )]
 struct Cli {
     /// Verbose output
@@ -292,7 +292,7 @@ fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
     manpage.render_name_section(stdout)?;
     write!(
         stdout,
-        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
+        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n.br\n.B dream-ini\n-C|--generate-completion <SHELL>\n.br\n.B dream-ini\n-M|--generate-manpage\n"
     )?;
     manpage.render_description_section(stdout)?;
     manpage.render_options_section(stdout)?;
