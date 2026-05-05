@@ -34,21 +34,21 @@ dream-ini -M > dream-ini.1
 
 ## Options
 
-- `-i, --ini <FILE>`: Morrowind.ini input path.
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
-- `-O, --output <FILE>`: output cfg path.
 - `-d, --data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
+- `-e, --encoding <ENCODING>`: `win1250`, `win1251`, or `win1252`.
+- `-f, --fonts`: import bitmap font fallback settings.
+- `-g, --game-files`: import `.esm` and `.esp` content files.
+- `-h, --help`: print help.
+- `-i, --ini <FILE>`: Morrowind.ini input path.
+- `-n, --no-archives`: disable BSA archive import.
+- `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
+- `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
 - `-I, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output` and `--json`.
 - `-J, --json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of cfg text. Diagnostics are written to stderr.
-- `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
 - `-M, --generate-manpage`: write a roff manpage to stdout.
-- `-g, --game-files`: import `.esm` and `.esp` content files.
-- `-f, --fonts`: import bitmap font fallback settings.
-- `-n, --no-archives`: disable BSA archive import.
-- `-e, --encoding <ENCODING>`: `win1250`, `win1251`, or `win1252`.
-- `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
-- `--version`: print version information.
-- `-h, --help`: print help.
+- `-O, --output <FILE>`: output cfg path.
+- `-V, --version`: print version information.
 
 ## Behavior
 

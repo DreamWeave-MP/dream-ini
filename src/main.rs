@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser};
+use clap::{ArgAction, CommandFactory, Parser};
 use clap_complete::Shell;
 use dream_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
 use serde::Serialize;
@@ -15,25 +15,36 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
     name = "dream-ini",
     about = "Import Morrowind.ini settings into openmw.cfg",
     version,
+    disable_help_flag = true,
+    disable_version_flag = true,
     override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--json|--in-place] [options]\n       dream-ini -C|--generate-completion <SHELL>\n       dream-ini -M|--generate-manpage",
     after_help = "Import mode requires --ini <FILE>. By default cfg output is written to stdout. Use --output <FILE> to write a file or --in-place with --cfg <FILE> to write back to the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
 )]
 struct Cli {
     /// Verbose output
-    #[arg(short, long)]
+    #[arg(short, long, display_order = 9)]
     verbose: bool,
+
+    /// Print help
+    #[arg(short, long, action = ArgAction::Help, display_order = 6)]
+    help: Option<bool>,
+
+    /// Print version
+    #[arg(short = 'V', long, action = ArgAction::Version, display_order = 15)]
+    version: Option<bool>,
 
     /// Morrowind.ini file
     #[arg(
         short,
         long,
         value_name = "FILE",
+        display_order = 7,
         required_unless_present_any = ["generate_completion", "generate_manpage"]
     )]
     ini: Option<PathBuf>,
 
     /// openmw.cfg file
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(short, long, value_name = "FILE", display_order = 1)]
     cfg: Option<PathBuf>,
 
     /// Output openmw.cfg file
@@ -41,20 +52,32 @@ struct Cli {
         short = 'O',
         long,
         value_name = "FILE",
+        display_order = 14,
         conflicts_with_all = ["json", "in_place"]
     )]
     output: Option<PathBuf>,
 
     /// Data Files directory to search before cfg/default data paths
-    #[arg(short = 'd', long = "data", value_name = "DIR")]
+    #[arg(short = 'd', long = "data", value_name = "DIR", display_order = 2)]
     data_dirs: Vec<PathBuf>,
 
     /// Write import result JSON to stdout instead of a file
-    #[arg(short = 'J', long, conflicts_with_all = ["output", "in_place"])]
+    #[arg(
+        short = 'J',
+        long,
+        display_order = 12,
+        conflicts_with_all = ["output", "in_place"]
+    )]
     json: bool,
 
     /// Write the imported result back to the --cfg file
-    #[arg(short = 'I', long, requires = "cfg", conflicts_with_all = ["output", "json"])]
+    #[arg(
+        short = 'I',
+        long,
+        display_order = 11,
+        requires = "cfg",
+        conflicts_with_all = ["output", "json"]
+    )]
     in_place: bool,
 
     /// Generate shell completion script to stdout
@@ -62,6 +85,7 @@ struct Cli {
         short = 'C',
         long,
         value_name = "SHELL",
+        display_order = 10,
         conflicts_with_all = [
             "generate_manpage",
             "ini",
@@ -83,6 +107,7 @@ struct Cli {
     #[arg(
         short = 'M',
         long,
+        display_order = 13,
         conflicts_with_all = [
             "generate_completion",
             "ini",
@@ -101,19 +126,19 @@ struct Cli {
     generate_manpage: bool,
 
     /// Import esm and esp files
-    #[arg(short = 'g', long = "game-files")]
+    #[arg(short = 'g', long = "game-files", display_order = 5)]
     game_files: bool,
 
     /// Import bitmap fonts
-    #[arg(short, long)]
+    #[arg(short, long, display_order = 4)]
     fonts: bool,
 
     /// Disable bsa archives import
-    #[arg(short = 'n', long = "no-archives")]
+    #[arg(short = 'n', long = "no-archives", display_order = 8)]
     no_archives: bool,
 
     /// Character encoding used in `OpenMW` game messages: win1250, win1251, or win1252
-    #[arg(short, long, value_name = "ENCODING")]
+    #[arg(short, long, value_name = "ENCODING", display_order = 3)]
     encoding: Option<String>,
 }
 
@@ -517,6 +542,32 @@ mod tests {
         assert!(help.contains("--json"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
+
+        let ordered_options = [
+            "-c, --cfg",
+            "-d, --data",
+            "-e, --encoding",
+            "-f, --fonts",
+            "-g, --game-files",
+            "-h, --help",
+            "-i, --ini",
+            "-n, --no-archives",
+            "-v, --verbose",
+            "-C, --generate-completion",
+            "-I, --in-place",
+            "-J, --json",
+            "-M, --generate-manpage",
+            "-O, --output",
+            "-V, --version",
+        ];
+        let mut previous_position = 0;
+        for option in ordered_options {
+            let position = help
+                .find(option)
+                .unwrap_or_else(|| panic!("missing {option}"));
+            assert!(position >= previous_position, "{option} is out of order");
+            previous_position = position;
+        }
     }
 
     #[test]
@@ -553,6 +604,8 @@ mod tests {
         run_with_writers(
             Cli {
                 verbose: false,
+                help: None,
+                version: None,
                 ini: Some(ini),
                 cfg: None,
                 output: None,
@@ -591,6 +644,8 @@ mod tests {
         run_with_writers(
             Cli {
                 verbose: false,
+                help: None,
+                version: None,
                 ini: None,
                 cfg: None,
                 output: None,
@@ -616,6 +671,8 @@ mod tests {
         run_with_writers(
             Cli {
                 verbose: false,
+                help: None,
+                version: None,
                 ini: None,
                 cfg: None,
                 output: None,
@@ -655,6 +712,8 @@ mod tests {
 
         run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: Some(cfg),
             output: Some(output.clone()),
@@ -690,6 +749,8 @@ mod tests {
 
         run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: Some(cfg.clone()),
             output: Some(output.clone()),
@@ -727,6 +788,8 @@ mod tests {
 
         run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: None,
             output: Some(output.clone()),
@@ -762,6 +825,8 @@ mod tests {
         run_with_writers(
             Cli {
                 verbose: false,
+                help: None,
+                version: None,
                 ini: Some(ini),
                 cfg: None,
                 output: None,
@@ -804,6 +869,8 @@ mod tests {
         run_with_writers(
             Cli {
                 verbose: false,
+                help: None,
+                version: None,
                 ini: Some(ini),
                 cfg: Some(cfg.clone()),
                 output: None,
@@ -836,6 +903,8 @@ mod tests {
     fn run_rejects_multiple_output_modes() {
         let error = run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(PathBuf::from("Morrowind.ini")),
             cfg: None,
             output: Some(PathBuf::from("openmw.cfg")),
@@ -868,6 +937,8 @@ mod tests {
 
         run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: Some(cfg.clone()),
             output: None,
@@ -891,6 +962,8 @@ mod tests {
     fn run_without_ini_returns_usage_error() {
         let error = run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: None,
             cfg: None,
             output: Some(PathBuf::from("out.cfg")),
@@ -924,6 +997,8 @@ mod tests {
         run_with_writers(
             Cli {
                 verbose: false,
+                help: None,
+                version: None,
                 ini: Some(ini),
                 cfg: None,
                 output: None,
@@ -958,6 +1033,8 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let error = run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(dir.join("missing.ini")),
             cfg: Some(dir.join("openmw.cfg")),
             output: None,
@@ -990,6 +1067,8 @@ mod tests {
 
         let error = run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: Some(cfg),
             output: None,
@@ -1033,6 +1112,8 @@ mod tests {
 
         run_with(Cli {
             verbose: true,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: Some(cfg),
             output: Some(output.clone()),
@@ -1066,6 +1147,8 @@ mod tests {
 
         run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: None,
             output: Some(output.clone()),
@@ -1100,6 +1183,8 @@ mod tests {
 
         run_with(Cli {
             verbose: false,
+            help: None,
+            version: None,
             ini: Some(ini),
             cfg: None,
             output: Some(output.clone()),
