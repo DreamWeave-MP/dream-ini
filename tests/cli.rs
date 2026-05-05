@@ -225,6 +225,28 @@ fn missing_output_mode_fails_with_usage_error() {
 }
 
 #[test]
+fn generation_mode_rejects_import_arguments() {
+    let output = Command::new(BIN)
+        .args([
+            "--generate-manpage",
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("cannot be used")
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+}
+
+#[test]
 fn generates_bash_completion_to_stdout() {
     let output = Command::new(BIN)
         .args(["--generate-completion", "bash"])
@@ -249,6 +271,7 @@ fn generates_manpage_to_stdout() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dream-ini"));
     assert!(stdout.contains("Import Morrowind.ini settings"));
+    assert!(stdout.contains("--ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]"));
     assert!(stdout.contains("Import mode requires"));
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }

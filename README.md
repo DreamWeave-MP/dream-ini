@@ -34,7 +34,7 @@ dream-ini --generate-manpage > dream-ini.1
 ## Options
 
 - `-i, --ini <FILE>`: Morrowind.ini input path.
-- `-c, --cfg <FILE>`: optional openmw.cfg input/base path; when `--output` is omitted, this is also the write-back target.
+- `-c, --cfg <FILE>`: optional openmw.cfg input/base path; when `--output`, `--stdout`, `--json`, and `--dry-run` are omitted, this is also the write-back target.
 - `-o, --output <FILE>`: output cfg path.
 - `--data-dir <DIR>` / `--data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
 - `--dry-run`: parse, import, and print diagnostics without writing an output file.

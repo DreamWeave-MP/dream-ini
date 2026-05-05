@@ -33,7 +33,8 @@ struct Cli {
         short,
         long,
         value_name = "FILE",
-        required_unless_present_any = ["generate_completion", "generate_manpage"]
+        required_unless_present_any = ["generate_completion", "generate_manpage"],
+        requires = "import_output"
     )]
     ini: Option<PathBuf>,
 
@@ -62,11 +63,46 @@ struct Cli {
     json: bool,
 
     /// Generate shell completion script to stdout
-    #[arg(long, value_name = "SHELL", conflicts_with = "generate_manpage")]
+    #[arg(
+        long,
+        value_name = "SHELL",
+        conflicts_with_all = [
+            "generate_manpage",
+            "ini",
+            "cfg",
+            "output",
+            "data_dirs",
+            "dry_run",
+            "stdout",
+            "json",
+            "game_files",
+            "fonts",
+            "no_archives",
+            "encoding",
+            "verbose"
+        ]
+    )]
     generate_completion: Option<Shell>,
 
     /// Generate roff manpage to stdout
-    #[arg(long, conflicts_with = "generate_completion")]
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "generate_completion",
+            "ini",
+            "cfg",
+            "output",
+            "data_dirs",
+            "dry_run",
+            "stdout",
+            "json",
+            "game_files",
+            "fonts",
+            "no_archives",
+            "encoding",
+            "verbose"
+        ]
+    )]
     generate_manpage: bool,
 
     /// Import esm and esp files
@@ -242,11 +278,26 @@ fn handle_generated_output(cli: &Cli, stdout: &mut dyn Write) -> Result<bool, Cl
     }
 
     if cli.generate_manpage {
-        clap_mangen::Man::new(Cli::command()).render(stdout)?;
+        render_manpage(stdout)?;
         return Ok(true);
     }
 
     Ok(false)
+}
+
+fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
+    let manpage = clap_mangen::Man::new(Cli::command());
+    manpage.render_title(stdout)?;
+    manpage.render_name_section(stdout)?;
+    write!(
+        stdout,
+        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
+    )?;
+    manpage.render_description_section(stdout)?;
+    manpage.render_options_section(stdout)?;
+    manpage.render_extra_section(stdout)?;
+    manpage.render_version_section(stdout)?;
+    Ok(())
 }
 
 #[derive(Debug)]
