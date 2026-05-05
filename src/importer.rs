@@ -124,14 +124,14 @@ impl IniImporter {
         ini: &MultiMap,
         ini_path: &Path,
     ) -> Result<ImportReport, ImportError> {
-        let mut warnings = Vec::new();
+        let warnings = Vec::new();
         let mut messages = Vec::new();
 
         merge(cfg, ini);
         merge_fallback(cfg, ini, self.options.import_fonts);
 
         if self.options.import_game_files {
-            self.import_game_files(cfg, ini, ini_path, &mut warnings, &mut messages)?;
+            self.import_game_files(cfg, ini, ini_path, &mut messages)?;
         }
 
         if self.options.import_archives {
@@ -158,7 +158,6 @@ impl IniImporter {
         cfg: &mut MultiMap,
         ini: &MultiMap,
         ini_path: &Path,
-        warnings: &mut Vec<String>,
         messages: &mut Vec<String>,
     ) -> Result<(), ImportError> {
         let mut data_paths = Vec::new();
@@ -183,15 +182,13 @@ impl IniImporter {
         });
 
         let mut content_files = Vec::new();
-        let mut used_explicit_data_paths: Vec<PathBuf> = Vec::new();
-        let mut game_file_count = 0;
+        let mut missing_content_files = Vec::new();
         for file in sequential_ini_values(ini, "Game Files:GameFile") {
             if !ends_with_ignore_ascii_case(file, ".esm")
                 && !ends_with_ignore_ascii_case(file, ".esp")
             {
                 continue;
             }
-            game_file_count += 1;
 
             let mut found = None;
             for data_path in &data_paths {
@@ -199,13 +196,6 @@ impl IniImporter {
                 if let Ok(metadata) = fs::metadata(&candidate) {
                     let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
                     let path = fs::canonicalize(&candidate).unwrap_or(candidate);
-                    if data_path.origin == DataPathOrigin::Explicit
-                        && !used_explicit_data_paths
-                            .iter()
-                            .any(|path| equivalent_paths(path.as_path(), &data_path.path))
-                    {
-                        used_explicit_data_paths.push(data_path.path.clone());
-                    }
                     if self.options.verbose {
                         messages.push(format!(
                             "content file: {} timestamp = ({})",
@@ -213,7 +203,12 @@ impl IniImporter {
                             system_time_seconds(modified)
                         ));
                     }
-                    found = Some((system_time_key(modified), path));
+                    found = Some(ResolvedContentFile {
+                        sort_key: system_time_key(modified),
+                        path,
+                        data_path: data_path.path.clone(),
+                        data_path_origin: data_path.origin,
+                    });
                     break;
                 }
             }
@@ -221,19 +216,26 @@ impl IniImporter {
             if let Some(entry) = found {
                 content_files.push(entry);
             } else {
-                warnings.push(format!("{file} not found, ignoring"));
+                missing_content_files.push(file.clone());
             }
         }
 
-        if game_file_count > 0 && content_files.is_empty() {
-            warnings.push(
-                "No content files were found. If Morrowind.ini is not in the install directory, pass a cfg with data=... or use --data-dir."
-                    .to_owned(),
-            );
+        if !missing_content_files.is_empty() {
+            return Err(ImportError::MissingContentFiles {
+                files: missing_content_files,
+                searched_paths: data_paths
+                    .iter()
+                    .map(|data_path| data_path.path.clone())
+                    .collect(),
+            });
         }
 
-        for data_path in used_explicit_data_paths {
+        for data_path in used_non_config_data_paths(&content_files) {
             if !has_equivalent_data_path(cfg, &data_path) {
+                messages.push(format!(
+                    "adding data directory used to resolve content files: {}",
+                    data_path.display()
+                ));
                 insert_multimap(
                     cfg,
                     "data".to_owned(),
@@ -242,14 +244,17 @@ impl IniImporter {
             }
         }
 
-        content_files
-            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        content_files.sort_by(|left, right| {
+            left.sort_key
+                .cmp(&right.sort_key)
+                .then_with(|| left.path.cmp(&right.path))
+        });
 
         let format = self.options.game.plugin_format();
         let encoding = self.effective_encoding(cfg)?;
         let mut dependencies = Vec::new();
-        for (_, path) in content_files {
-            let header = read_plugin_header(&path, format, encoding)?;
+        for content_file in content_files {
+            let header = read_plugin_header(&content_file.path, format, encoding)?;
             dependencies.push((header.name, header.masters));
         }
 
@@ -312,6 +317,30 @@ enum DataPathOrigin {
 struct DataPath {
     path: PathBuf,
     origin: DataPathOrigin,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedContentFile {
+    sort_key: u128,
+    path: PathBuf,
+    data_path: PathBuf,
+    data_path_origin: DataPathOrigin,
+}
+
+fn used_non_config_data_paths(content_files: &[ResolvedContentFile]) -> Vec<PathBuf> {
+    let mut used_paths: Vec<PathBuf> = Vec::new();
+    for content_file in content_files {
+        if content_file.data_path_origin == DataPathOrigin::Config {
+            continue;
+        }
+        if !used_paths
+            .iter()
+            .any(|path| equivalent_paths(path.as_path(), &content_file.data_path))
+        {
+            used_paths.push(content_file.data_path.clone());
+        }
+    }
+    used_paths
 }
 
 fn add_paths(output: &mut Vec<DataPath>, input: &[String], origin: DataPathOrigin) {

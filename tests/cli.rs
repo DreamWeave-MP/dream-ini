@@ -18,7 +18,7 @@ fn version_prints_package_version() {
 }
 
 #[test]
-fn default_data_files_search_imports_content_without_writing_data() {
+fn default_data_files_search_imports_content_and_writes_data() {
     let dir = unique_test_dir("default-data-files");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
@@ -37,7 +37,31 @@ fn default_data_files_search_imports_content_without_writing_data() {
     assert!(output.status.success());
     let written = fs::read_to_string(&output_cfg).unwrap();
     assert!(written.contains("content=Base.esm\n"));
-    assert!(!written.contains("data="));
+    assert!(written.contains(&format!("data={}\n", data_dir.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn missing_game_file_fails_without_writing_output() {
+    let dir = unique_test_dir("missing-game-file");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let output_cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[Game Files]\nGameFile0=Missing.esp\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--game-files", "--no-archives", "--output"])
+        .arg(&output_cfg)
+        .arg(&ini)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(!output_cfg.exists());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("content files not found: Missing.esp"));
+    assert!(stderr.contains("pass --data-dir or add data=..."));
 
     fs::remove_dir_all(dir).unwrap();
 }

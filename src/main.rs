@@ -913,7 +913,7 @@ mod tests {
         .unwrap();
 
         let written = fs::read_to_string(output).unwrap();
-        assert!(!written.contains("data="));
+        assert!(written.contains(&format!("data={}\n", data_dir.display())));
         assert!(written.contains("content=Base.esm"));
 
         fs::remove_dir_all(dir).unwrap();

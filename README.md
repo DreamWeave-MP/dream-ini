@@ -57,8 +57,7 @@ dream-ini --generate-manpage > dream-ini.1
 - Omitting cfg is allowed when `--output`, `--stdout`, `--json`, or `--dry-run` is provided; this starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`.
-- `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. If content is resolved from an explicit `--data-dir` and an equivalent path is not already present, `dream-ini` writes it as a `data=...` entry. The default `Data Files` fallback is searched but is not written automatically.
-- If `--game-files` sees game-file entries but resolves none of them, a summary warning suggests providing a cfg with `data=...` or using `--data-dir`.
+- `--game-files` searches explicit `--data-dir` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
 
 ## Deliberate Differences From OpenMW's C++ Importer
 

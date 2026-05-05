@@ -113,9 +113,19 @@ impl TextEncoding {
 
 #[derive(Debug)]
 pub enum ImportError {
-    Io { path: PathBuf, source: io::Error },
+    Io {
+        path: PathBuf,
+        source: io::Error,
+    },
     UnsupportedEncoding(String),
-    InvalidPluginHeader { path: PathBuf, message: String },
+    InvalidPluginHeader {
+        path: PathBuf,
+        message: String,
+    },
+    MissingContentFiles {
+        files: Vec<String>,
+        searched_paths: Vec<PathBuf>,
+    },
 }
 
 impl fmt::Display for ImportError {
@@ -125,6 +135,24 @@ impl fmt::Display for ImportError {
             Self::UnsupportedEncoding(value) => write!(f, "unsupported encoding: {value}"),
             Self::InvalidPluginHeader { path, message } => {
                 write!(f, "invalid plugin header in {}: {message}", path.display())
+            }
+            Self::MissingContentFiles {
+                files,
+                searched_paths,
+            } => {
+                write!(f, "content files not found: {}", files.join(", "))?;
+                if !searched_paths.is_empty() {
+                    write!(
+                        f,
+                        "; searched: {}",
+                        searched_paths
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
+                }
+                write!(f, "; pass --data-dir or add data=... to the cfg")
             }
         }
     }
@@ -460,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn imports_game_files_from_default_data_files_path() {
+    fn imports_game_files_from_default_data_files_path_and_writes_data() {
         let dir = unique_test_dir("game-files-default-data");
         let data_dir = dir.join("Data Files");
         fs::create_dir_all(&data_dir).unwrap();
@@ -474,12 +502,17 @@ mod tests {
             ..ImportOptions::default()
         });
 
-        importer
+        let result = importer
             .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
             .unwrap();
 
         assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
-        assert_eq!(values(&cfg, "data"), &[] as &[String]);
+        assert_eq!(
+            values(&cfg, "data"),
+            &[data_dir.to_string_lossy().into_owned()]
+        );
+        assert_eq!(result.messages.len(), 1);
+        assert!(result.messages[0].contains("adding data directory"));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -599,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_default_data_files_path_is_not_added() {
+    fn missing_default_data_files_path_fails_import() {
         let dir = unique_test_dir("game-files-default-data-missing");
         fs::create_dir_all(&dir).unwrap();
 
@@ -611,24 +644,20 @@ mod tests {
             ..ImportOptions::default()
         });
 
-        let result = importer
+        let error = importer
             .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-            .unwrap();
+            .unwrap_err()
+            .to_string();
 
         assert_eq!(values(&cfg, "content"), &[] as &[String]);
         assert_eq!(values(&cfg, "data"), &[] as &[String]);
-        assert_eq!(
-            result.warnings,
-            vec![
-                "Missing.esm not found, ignoring".to_owned(),
-                "No content files were found. If Morrowind.ini is not in the install directory, pass a cfg with data=... or use --data-dir.".to_owned(),
-            ]
-        );
+        assert!(error.contains("content files not found: Missing.esm"));
+        assert!(error.contains("pass --data-dir or add data=..."));
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn missing_game_files_are_reported_as_warnings() {
+    fn missing_game_files_fail_import() {
         let dir = unique_test_dir("game-files-missing");
         fs::create_dir_all(&dir).unwrap();
 
@@ -640,18 +669,39 @@ mod tests {
             ..ImportOptions::default()
         });
 
-        let result = importer
+        let error = importer
             .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-            .unwrap();
+            .unwrap_err()
+            .to_string();
 
         assert_eq!(values(&cfg, "content"), &[] as &[String]);
-        assert_eq!(
-            result.warnings,
-            vec![
-                "Missing.esp not found, ignoring".to_owned(),
-                "No content files were found. If Morrowind.ini is not in the install directory, pass a cfg with data=... or use --data-dir.".to_owned(),
-            ]
-        );
+        assert!(error.contains("content files not found: Missing.esp"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn partially_resolved_game_files_fail_without_writing_partial_content() {
+        let dir = unique_test_dir("game-files-partial");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = MultiMap::new();
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\nGameFile1=Missing.esp\n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        let error = importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(values(&cfg, "content"), &[] as &[String]);
+        assert_eq!(values(&cfg, "data"), &[] as &[String]);
+        assert!(error.contains("content files not found: Missing.esp"));
         fs::remove_dir_all(dir).unwrap();
     }
 
