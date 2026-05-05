@@ -22,7 +22,7 @@ const MISSING_INI_EXIT_CODE: u8 = 253;
 )]
 struct Cli {
     /// Verbose output
-    #[arg(short, long, display_order = 11)]
+    #[arg(short, long, display_order = 13)]
     verbose: bool,
 
     /// Print help
@@ -30,7 +30,7 @@ struct Cli {
     help: Option<bool>,
 
     /// Print version
-    #[arg(short = 'V', long, action = ArgAction::Version, display_order = 16)]
+    #[arg(short = 'V', long, action = ArgAction::Version, display_order = 17)]
     version: Option<bool>,
 
     /// Morrowind.ini file
@@ -52,7 +52,7 @@ struct Cli {
         short = 'o',
         long,
         value_name = "FILE",
-        display_order = 12,
+        display_order = 10,
         conflicts_with_all = ["in_place"]
     )]
     output: Option<PathBuf>,
@@ -66,23 +66,23 @@ struct Cli {
         short = 'l',
         long = "data-local",
         value_name = "DIR",
-        display_order = 3
+        display_order = 8
     )]
     data_local: Option<PathBuf>,
 
     /// Set resources in the imported cfg, replacing any existing value; must be a non-empty directory
-    #[arg(short, long, value_name = "DIR", display_order = 9)]
+    #[arg(short, long, value_name = "DIR", display_order = 11)]
     resources: Option<PathBuf>,
 
     /// Set userdata in the imported cfg, replacing any existing value
-    #[arg(short, long, value_name = "DIR", display_order = 10)]
+    #[arg(short, long, value_name = "DIR", display_order = 12)]
     userdata: Option<PathBuf>,
 
     /// Write the imported result back to the --cfg file
     #[arg(
         short = 'w',
         long,
-        display_order = 11,
+        display_order = 14,
         requires = "cfg",
         conflicts_with_all = ["output"]
     )]
@@ -93,7 +93,7 @@ struct Cli {
         short = 'C',
         long,
         value_name = "SHELL",
-        display_order = 14,
+        display_order = 15,
         conflicts_with_all = [
             "generate_manpage",
             "ini",
@@ -117,7 +117,7 @@ struct Cli {
     #[arg(
         short = 'M',
         long,
-        display_order = 15,
+        display_order = 16,
         conflicts_with_all = [
             "generate_completion",
             "ini",
@@ -591,17 +591,17 @@ mod tests {
             "-c, --cfg",
             "-d, --data",
             "-e, --encoding",
-            "-l, --data-local",
             "-f, --fonts",
             "-g, --game-files",
             "-h, --help",
             "-i, --ini",
+            "-l, --data-local",
             "-n, --no-archives",
+            "-o, --output",
             "-r, --resources",
             "-u, --userdata",
             "-v, --verbose",
             "-w, --in-place",
-            "-o, --output",
             "-C, --generate-completion",
             "-M, --generate-manpage",
             "-V, --version",
