@@ -126,18 +126,20 @@ impl IniImporter {
     ) -> Result<ImportReport, ImportError> {
         let warnings = Vec::new();
         let mut messages = Vec::new();
+        let mut imported_cfg = cfg.clone();
 
-        merge(cfg, ini);
-        merge_fallback(cfg, ini, self.options.import_fonts);
+        merge(&mut imported_cfg, ini);
+        merge_fallback(&mut imported_cfg, ini, self.options.import_fonts);
 
         if self.options.import_game_files {
-            self.import_game_files(cfg, ini, ini_path, &mut messages)?;
+            self.import_game_files(&mut imported_cfg, ini, ini_path, &mut messages)?;
         }
 
         if self.options.import_archives {
-            import_archives(cfg, ini);
+            import_archives(&mut imported_cfg, ini);
         }
 
+        *cfg = imported_cfg;
         Ok(ImportReport { warnings, messages })
     }
 
@@ -183,11 +185,14 @@ impl IniImporter {
 
         let mut content_files = Vec::new();
         let mut missing_content_files = Vec::new();
-        for file in sequential_ini_values(ini, "Game Files:GameFile") {
+        for file in game_file_values(ini) {
             if !ends_with_ignore_ascii_case(file, ".esm")
                 && !ends_with_ignore_ascii_case(file, ".esp")
             {
                 continue;
+            }
+            if !is_plugin_filename(file) {
+                return Err(ImportError::InvalidContentFileName(file.clone()));
             }
 
             let mut found = None;
@@ -304,6 +309,31 @@ fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<I
         .map(move |index| format!("{prefix}{index}"))
         .map_while(move |key| ini.get(&key))
         .flat_map(|values| values.iter())
+}
+
+fn game_file_values(ini: &MultiMap) -> Vec<&String> {
+    let mut values = Vec::new();
+    for (key, entries) in ini {
+        if let Some(index) = key
+            .strip_prefix("Game Files:GameFile")
+            .and_then(|suffix| suffix.parse::<usize>().ok())
+        {
+            for (entry_index, entry) in entries.iter().enumerate() {
+                values.push((index, entry_index, entry));
+            }
+        }
+    }
+    values.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    values.into_iter().map(|(_, _, value)| value).collect()
+}
+
+fn is_plugin_filename(file: &str) -> bool {
+    !file.is_empty()
+        && !file.contains('/')
+        && !file.contains('\\')
+        && Path::new(file)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
