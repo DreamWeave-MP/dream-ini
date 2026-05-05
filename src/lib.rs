@@ -112,6 +112,7 @@ impl TextEncoding {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ImportError {
     Io {
         path: PathBuf,
@@ -738,6 +739,29 @@ mod tests {
     }
 
     #[test]
+    fn game_file_values_are_trimmed_before_resolution() {
+        let dir = unique_test_dir("game-files-trimmed");
+        let data_dir = dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+        let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm \n");
+        let importer = IniImporter::new(ImportOptions {
+            import_game_files: true,
+            import_archives: false,
+            ..ImportOptions::default()
+        });
+
+        importer
+            .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+            .unwrap();
+
+        assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn content_file_paths_are_rejected() {
         let dir = unique_test_dir("game-files-path-entry");
         let data_dir = dir.join("Data Files");
@@ -745,7 +769,7 @@ mod tests {
         fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
         let mut cfg = MultiMap::new();
-        let ini = parse_ini_str("[Game Files]\nGameFile0=../Data Files/Base.esm\n");
+        let ini = parse_ini_str("[Game Files]\nGameFile0=../Data Files/Base.esm \n");
         let importer = IniImporter::new(ImportOptions {
             import_game_files: true,
             import_archives: false,

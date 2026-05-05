@@ -62,7 +62,8 @@ impl IniImporter {
     /// Imports from paths into the lightweight map model.
     ///
     /// # Errors
-    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, or plugin headers are invalid.
+    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, content files
+    /// cannot be resolved, or plugin headers are invalid.
     pub fn import_paths(
         &self,
         ini_path: &Path,
@@ -74,7 +75,8 @@ impl IniImporter {
     /// Imports from an INI path and an optional cfg path.
     ///
     /// # Errors
-    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, or plugin headers are invalid.
+    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, content files
+    /// cannot be resolved, or plugin headers are invalid.
     pub fn import_optional_cfg_path(
         &self,
         ini_path: &Path,
@@ -117,7 +119,8 @@ impl IniImporter {
     /// Imports already parsed maps into the lightweight map model.
     ///
     /// # Errors
-    /// Returns [`ImportError`] when plugin headers cannot be read or decoded.
+    /// Returns [`ImportError`] when content files cannot be resolved or plugin headers cannot be
+    /// read or decoded.
     pub fn import_maps(
         &self,
         cfg: &mut MultiMap,
@@ -185,14 +188,14 @@ impl IniImporter {
 
         let mut content_files = Vec::new();
         let mut missing_content_files = Vec::new();
-        for file in game_file_values(ini) {
+        for file in game_file_values(ini).into_iter().map(|file| file.trim()) {
             if !ends_with_ignore_ascii_case(file, ".esm")
                 && !ends_with_ignore_ascii_case(file, ".esp")
             {
                 continue;
             }
             if !is_plugin_filename(file) {
-                return Err(ImportError::InvalidContentFileName(file.clone()));
+                return Err(ImportError::InvalidContentFileName(file.to_owned()));
             }
 
             let mut found = None;
@@ -221,7 +224,7 @@ impl IniImporter {
             if let Some(entry) = found {
                 content_files.push(entry);
             } else {
-                missing_content_files.push(file.clone());
+                missing_content_files.push(file.to_owned());
             }
         }
 
