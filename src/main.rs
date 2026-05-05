@@ -38,7 +38,7 @@ struct Cli {
 
     /// Output openmw.cfg file
     #[arg(
-        short,
+        short = 'O',
         long,
         value_name = "FILE",
         conflicts_with_all = ["json", "in_place"]
@@ -50,11 +50,11 @@ struct Cli {
     data_dirs: Vec<PathBuf>,
 
     /// Write import result JSON to stdout instead of a file
-    #[arg(long, conflicts_with_all = ["output", "in_place"])]
+    #[arg(short = 'J', long, conflicts_with_all = ["output", "in_place"])]
     json: bool,
 
     /// Write the imported result back to the --cfg file
-    #[arg(long, requires = "cfg", conflicts_with_all = ["output", "json"])]
+    #[arg(short = 'I', long, requires = "cfg", conflicts_with_all = ["output", "json"])]
     in_place: bool,
 
     /// Generate shell completion script to stdout
@@ -439,6 +439,26 @@ mod tests {
         assert_eq!(cli.cfg, Some(PathBuf::from("openmw.cfg")));
         assert_eq!(cli.output, None);
         assert!(!cli.json);
+    }
+
+    #[test]
+    fn parses_short_output_modes() {
+        let output = Cli::parse_from(["dream-ini", "--ini", "Morrowind.ini", "-O", "out.cfg"]);
+        let json = Cli::parse_from(["dream-ini", "--ini", "Morrowind.ini", "-J"]);
+        let in_place = Cli::parse_from([
+            "dream-ini",
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+            "-I",
+        ]);
+
+        assert_eq!(output.output, Some(PathBuf::from("out.cfg")));
+        assert!(json.json);
+        assert!(!json.in_place);
+        assert!(in_place.in_place);
+        assert!(!in_place.json);
     }
 
     #[test]

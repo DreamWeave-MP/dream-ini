@@ -28,7 +28,7 @@ fn default_data_files_search_imports_content_and_writes_data() {
     fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
     let output = Command::new(BIN)
-        .args(["--game-files", "--no-archives", "--output"])
+        .args(["--game-files", "--no-archives", "-O"])
         .arg(&output_cfg)
         .args(["--ini"])
         .arg(&ini)
@@ -158,7 +158,7 @@ fn in_place_writes_back_to_cfg() {
     fs::write(&cfg, "encoding=win1252\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["--in-place", "--no-archives", "--ini"])
+        .args(["-I", "--no-archives", "--ini"])
         .arg(&ini)
         .args(["--cfg"])
         .arg(&cfg)
@@ -184,7 +184,7 @@ fn json_mode_outputs_structured_result_to_stdout() {
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
     let output = Command::new(BIN)
-        .args(["--json", "--no-archives", "--ini"])
+        .args(["-J", "--no-archives", "--ini"])
         .arg(&ini)
         .output()
         .unwrap();

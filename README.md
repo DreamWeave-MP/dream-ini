@@ -36,10 +36,10 @@ dream-ini -M > dream-ini.1
 
 - `-i, --ini <FILE>`: Morrowind.ini input path.
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
-- `-o, --output <FILE>`: output cfg path.
+- `-O, --output <FILE>`: output cfg path.
 - `-d, --data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
-- `--in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output` and `--json`.
-- `--json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of cfg text. Diagnostics are written to stderr.
+- `-I, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output` and `--json`.
+- `-J, --json`: write `{ cfg, text, warnings, messages }` JSON to stdout instead of cfg text. Diagnostics are written to stderr.
 - `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
 - `-M, --generate-manpage`: write a roff manpage to stdout.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
