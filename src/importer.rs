@@ -441,7 +441,9 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, ImportError> {
 }
 
 fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
-    value.len() >= suffix.len() && value[value.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+    value
+        .get(value.len().saturating_sub(suffix.len())..)
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
 }
 
 fn system_time_key(time: SystemTime) -> u128 {
