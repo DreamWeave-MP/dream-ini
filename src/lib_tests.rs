@@ -667,7 +667,7 @@ fn import_paths_preserves_existing_cfg_and_writes_imports() {
         &["Morrowind.bsa".to_owned(), "Tribunal.bsa".to_owned()]
     );
 
-    importer.save_config_output(&output, &result.cfg).unwrap();
+    fs::write(&output, serialize_cfg(&result.cfg)).unwrap();
     let written = fs::read_to_string(&output).unwrap();
     assert!(written.contains("no-sound=1"));
     assert!(written.contains("fallback=Movies_New_Game,intro.bik"));
@@ -795,7 +795,7 @@ fn imports_fallback_values_with_legacy_shapes() {
 
     let importer = IniImporter::new(ImportOptions::default());
     let result = importer.import_paths(&ini, &cfg).unwrap();
-    importer.save_config_output(&output, &result.cfg).unwrap();
+    fs::write(&output, serialize_cfg(&result.cfg)).unwrap();
     let written = fs::read_to_string(&output).unwrap();
 
     assert!(written.contains("fallback=Movies_New_Game,movie,with,commas.bik"));

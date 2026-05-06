@@ -3,7 +3,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use dream_ini::{ImportOptions, ImportResult, IniImporter, TextEncoding, serialize_cfg};
+use dream_ini::{
+    ImportError, ImportOptions, ImportResult, IniImporter, MultiMap, TextEncoding, serialize_cfg,
+};
 
 use crate::cli::Cli;
 use crate::generated::handle_generated_output;
@@ -112,13 +114,7 @@ fn run_with_writers(
         writeln!(stderr, "Warning: {warning}")?;
     }
 
-    write_result_output(
-        &importer,
-        &result,
-        OutputMode { output_path },
-        stdout,
-        stderr,
-    )?;
+    write_result_output(&result, OutputMode { output_path }, stdout, stderr)?;
 
     Ok(())
 }
@@ -210,7 +206,6 @@ struct OutputMode {
 }
 
 fn write_result_output(
-    importer: &IniImporter,
     result: &ImportResult,
     mode: OutputMode,
     stdout: &mut dyn Write,
@@ -223,12 +218,19 @@ fn write_result_output(
             stderr,
             format_args!("write to: {}", output_path.display()),
         )?;
-        importer.save_config_output(&output_path, &result.cfg)?;
+        save_config_output(&output_path, &result.cfg)?;
     } else {
         write!(stdout, "{}", serialize_cfg(&result.cfg))?;
     }
 
     Ok(())
+}
+
+fn save_config_output(output_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
+    fs::write(output_path, serialize_cfg(cfg)).map_err(|source| ImportError::Io {
+        path: output_path.to_owned(),
+        source,
+    })
 }
 
 fn diagnostic(

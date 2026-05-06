@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
 use crate::parser::{
-    insert_multimap, parse_cfg_str, parse_ini_bytes_with_warnings, serialize_cfg, set_single_value,
+    insert_multimap, parse_cfg_str, parse_ini_bytes_with_warnings, set_single_value,
 };
 use crate::plugin::{apply_morrowind_expansion_order, dependency_sort, read_plugin_header};
 use crate::{Game, ImportError, MultiMap, TextEncoding};
@@ -104,21 +104,6 @@ impl IniImporter {
             cfg,
             warnings: report.warnings,
             messages: report.messages,
-        })
-    }
-
-    /// Saves an imported configuration to an arbitrary output path.
-    ///
-    /// # Errors
-    /// Returns [`ImportError`] when the file cannot be written.
-    pub fn save_config_output(
-        &self,
-        output_path: &Path,
-        cfg: &MultiMap,
-    ) -> Result<(), ImportError> {
-        fs::write(output_path, serialize_cfg(cfg)).map_err(|source| ImportError::Io {
-            path: output_path.to_owned(),
-            source,
         })
     }
 
