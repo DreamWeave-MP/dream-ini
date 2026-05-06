@@ -1,6 +1,7 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use dream_ini::{
@@ -227,10 +228,58 @@ fn write_result_output(
 }
 
 fn save_config_output(output_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
-    fs::write(output_path, serialize_cfg(cfg)).map_err(|source| ImportError::Io {
-        path: output_path.to_owned(),
+    write_atomic(output_path, serialize_cfg(cfg).as_bytes())
+}
+
+fn write_atomic(output_path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
+    let temp_path = temporary_output_path(output_path);
+    let result = write_atomic_inner(output_path, &temp_path, bytes);
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
+}
+
+fn write_atomic_inner(
+    output_path: &Path,
+    temp_path: &Path,
+    bytes: &[u8],
+) -> Result<(), ImportError> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temp_path)
+        .map_err(|source| io_error(temp_path, source))?;
+    file.write_all(bytes)
+        .map_err(|source| io_error(temp_path, source))?;
+    file.sync_all()
+        .map_err(|source| io_error(temp_path, source))?;
+    drop(file);
+
+    fs::rename(temp_path, output_path).map_err(|source| io_error(output_path, source))
+}
+
+fn temporary_output_path(output_path: &Path) -> PathBuf {
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("openmw.cfg");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp_name = format!(".{file_name}.dream-ini-{}-{unique}.tmp", std::process::id());
+    output_path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(temp_name)
+}
+
+fn io_error(path: &Path, source: io::Error) -> ImportError {
+    ImportError::Io {
+        path: path.to_owned(),
         source,
-    })
+    }
 }
 
 fn diagnostic(
