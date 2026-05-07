@@ -43,6 +43,7 @@ pub mod lua;
 mod parser;
 mod plugin;
 
+pub use events::ImportEvent;
 pub use importer::{ImportOptions, ImportReport, ImportResult, IniImporter};
 pub use parser::{
     ParsedIni, parse_cfg_str, parse_ini_bytes, parse_ini_bytes_with_warnings, parse_ini_str,

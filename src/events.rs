@@ -1,29 +1,28 @@
+use std::fmt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ImportEvent {
+pub enum ImportEvent {
     ContentFileResolved { path: PathBuf, modified: SystemTime },
     DataDirAddedForContent { path: PathBuf },
 }
 
-pub(crate) fn format_import_events(events: &[ImportEvent]) -> Vec<String> {
-    events.iter().map(format_import_event).collect()
-}
-
-fn format_import_event(event: &ImportEvent) -> String {
-    match event {
-        ImportEvent::ContentFileResolved { path, modified } => {
-            format!(
+impl fmt::Display for ImportEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ContentFileResolved { path, modified } => write!(
+                f,
                 "content file: {} timestamp = ({})",
                 path.display(),
                 system_time_seconds(*modified)
-            )
+            ),
+            Self::DataDirAddedForContent { path } => write!(
+                f,
+                "adding data directory used to resolve content files: {}",
+                path.display()
+            ),
         }
-        ImportEvent::DataDirAddedForContent { path } => format!(
-            "adding data directory used to resolve content files: {}",
-            path.display()
-        ),
     }
 }
 

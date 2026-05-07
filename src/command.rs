@@ -108,8 +108,8 @@ fn run_with_writers(
     )?;
 
     let result = importer.import_optional_cfg_path(&ini_path, cfg_path.as_deref())?;
-    for message in &result.messages {
-        diagnostic(stdout_mode, stdout, stderr, format_args!("{message}"))?;
+    for event in &result.events {
+        diagnostic(stdout_mode, stdout, stderr, format_args!("{event}"))?;
     }
     for warning in &result.warnings {
         writeln!(stderr, "Warning: {warning}")?;

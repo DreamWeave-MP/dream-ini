@@ -61,7 +61,8 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
             let report = IniImporter::new(options)
                 .import_maps(&mut cfg, &ini, &ini_path)
                 .map_err(LuaError::external)?;
-            import_result_to_table(lua, &cfg, &report.warnings, &report.messages)
+            let messages = events_to_messages(&report.events);
+            import_result_to_table(lua, &cfg, &report.warnings, &messages)
         })?,
     )?;
     module.set(
@@ -72,7 +73,8 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
             let result = IniImporter::new(options_from_table(Some(options))?)
                 .import_optional_cfg_path(Path::new(&ini_path), cfg_path.as_deref().map(Path::new))
                 .map_err(LuaError::external)?;
-            import_result_to_table(lua, &result.cfg, &result.warnings, &result.messages)
+            let messages = events_to_messages(&result.events);
+            import_result_to_table(lua, &result.cfg, &result.warnings, &messages)
         })?,
     )?;
     Ok(module)
@@ -163,6 +165,10 @@ fn import_result_to_table(
     result.set("warnings", strings_to_array(lua, warnings)?)?;
     result.set("messages", strings_to_array(lua, messages)?)?;
     Ok(result)
+}
+
+fn events_to_messages(events: &[crate::ImportEvent]) -> Vec<String> {
+    events.iter().map(ToString::to_string).collect()
 }
 
 fn multimap_to_table(lua: &Lua, map: &MultiMap) -> LuaResult<Table> {

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::content_files::import_content_files;
-use crate::events::format_import_events;
+use crate::events::ImportEvent;
 use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
 use crate::parser::{
     insert_multimap, parse_cfg_str, parse_ini_bytes_with_warnings, set_single_value,
@@ -45,13 +45,13 @@ impl Default for ImportOptions {
 pub struct ImportResult {
     pub cfg: MultiMap,
     pub warnings: Vec<String>,
-    pub messages: Vec<String>,
+    pub events: Vec<ImportEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub warnings: Vec<String>,
-    pub messages: Vec<String>,
+    pub events: Vec<ImportEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,7 +103,7 @@ impl IniImporter {
         Ok(ImportResult {
             cfg,
             warnings: report.warnings,
-            messages: report.messages,
+            events: report.events,
         })
     }
 
@@ -119,7 +119,7 @@ impl IniImporter {
         ini_path: &Path,
     ) -> Result<ImportReport, ImportError> {
         let warnings = Vec::new();
-        let mut messages = Vec::new();
+        let mut events = Vec::new();
         let mut imported_cfg = cfg.clone();
 
         merge(&mut imported_cfg, ini);
@@ -145,7 +145,7 @@ impl IniImporter {
                 );
             }
             imported_cfg.insert("content".to_owned(), imported_content.content);
-            messages.extend(format_import_events(&imported_content.events));
+            events.extend(imported_content.events);
         }
 
         if self.options.import_archives {
@@ -153,7 +153,7 @@ impl IniImporter {
         }
 
         *cfg = imported_cfg;
-        Ok(ImportReport { warnings, messages })
+        Ok(ImportReport { warnings, events })
     }
 
     fn effective_encoding(&self, cfg: &MultiMap) -> Result<TextEncoding, ImportError> {

@@ -87,7 +87,7 @@ fn imports_merge_fallback_and_archives() {
         &["Movies_New_Game,intro.bik".to_owned()]
     );
     assert!(result.warnings.is_empty());
-    assert!(result.messages.is_empty());
+    assert!(result.events.is_empty());
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn font_import_is_option_gated() {
         values(&cfg, "fallback"),
         &["Movies_New_Game,intro.bik".to_owned()]
     );
-    assert!(result.messages.is_empty());
+    assert!(result.events.is_empty());
 
     let mut cfg = MultiMap::new();
     let importer = IniImporter::new(ImportOptions {
@@ -119,7 +119,7 @@ fn font_import_is_option_gated() {
             "Movies_New_Game,intro.bik".to_owned()
         ]
     );
-    assert!(result.messages.is_empty());
+    assert!(result.events.is_empty());
 }
 
 #[test]
@@ -286,7 +286,7 @@ fn imports_game_files_using_tes3_dependencies() {
         values(&cfg, "content"),
         &["Base.esm".to_owned(), "Patch.esp".to_owned()]
     );
-    assert!(result.messages.is_empty());
+    assert!(result.events.is_empty());
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -310,10 +310,14 @@ fn verbose_game_file_import_reports_content_file_messages() {
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
         .unwrap();
 
-    assert_eq!(result.messages.len(), 1);
-    assert!(result.messages[0].contains("content file:"));
-    assert!(result.messages[0].contains("Base.esm"));
-    assert!(result.messages[0].contains("timestamp = ("));
+    assert_eq!(result.events.len(), 1);
+    let ImportEvent::ContentFileResolved { path, .. } = &result.events[0] else {
+        panic!("expected content file event");
+    };
+    assert_eq!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("Base.esm")
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -341,8 +345,13 @@ fn imports_game_files_from_default_data_files_path_and_writes_data() {
         values(&cfg, "data"),
         &[data_dir.to_string_lossy().into_owned()]
     );
-    assert_eq!(result.messages.len(), 1);
-    assert!(result.messages[0].contains("adding data directory"));
+    assert_eq!(result.events.len(), 1);
+    assert_eq!(
+        result.events[0],
+        ImportEvent::DataDirAddedForContent {
+            path: data_dir.clone()
+        }
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -586,7 +595,7 @@ fn explicit_data_dir_is_not_written_when_data_local_already_covers_it() {
         values(&cfg, "data-local"),
         &[format!("\"{}\"", data_dir.display())]
     );
-    assert!(result.messages.is_empty());
+    assert!(result.events.is_empty());
     fs::remove_dir_all(dir).unwrap();
 }
 
