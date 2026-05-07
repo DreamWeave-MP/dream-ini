@@ -38,7 +38,6 @@ struct GuiApp {
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(context, |ui| {
-            ui.heading(self.localizer.text(UiText::AppTitle));
             self.show_form(ui);
         });
     }
@@ -46,7 +45,6 @@ impl eframe::App for GuiApp {
 
 impl GuiApp {
     fn show_form(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
         ui.heading(self.localizer.text(UiText::SourceSection));
         path_file_row(
             ui,
@@ -348,14 +346,40 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
     if ui.button(localizer.text(UiText::Copy)).clicked() {
         ui.ctx().copy_text(cfg_text.clone());
     }
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.add(
-            egui::TextEdit::multiline(cfg_text)
-                .font(egui::TextStyle::Monospace)
-                .desired_rows(18)
-                .interactive(false),
-        );
-    });
+    let rows = cfg_text.lines().count().max(1);
+    let mut line_numbers = line_numbers(rows);
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut line_numbers)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(rows)
+                        .desired_width(48.0)
+                        .interactive(false),
+                );
+                ui.separator();
+                ui.add(
+                    egui::TextEdit::multiline(cfg_text)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(rows)
+                        .desired_width(ui.available_width())
+                        .interactive(false),
+                );
+            });
+        });
+}
+
+fn line_numbers(rows: usize) -> String {
+    let mut numbers = String::new();
+    for row in 1..=rows {
+        if row > 1 {
+            numbers.push('\n');
+        }
+        numbers.push_str(&row.to_string());
+    }
+    numbers
 }
 
 fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
