@@ -92,7 +92,7 @@ const fn english_text(key: UiText) -> &'static str {
         UiText::ExistingCfg => "Existing cfg",
         UiText::Browse => "Browse…",
         UiText::ImportOptions => "Import options",
-        UiText::ImportFallbacks => "Import fallback values",
+        UiText::ImportFallbacks => "Import font fallback values",
         UiText::ImportArchives => "Import archives",
         UiText::ImportContentFiles => "Import content files / load order",
         UiText::Overrides => "Overrides",
