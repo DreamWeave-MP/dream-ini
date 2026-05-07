@@ -347,17 +347,14 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
         ui.ctx().copy_text(cfg_text.clone());
     }
     let rows = cfg_text.lines().count().max(1);
-    let mut line_numbers = line_numbers(rows);
+    let line_numbers = line_numbers(rows);
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                ui.add(
-                    egui::TextEdit::multiline(&mut line_numbers)
-                        .font(egui::TextStyle::Monospace)
-                        .desired_rows(rows)
-                        .desired_width(48.0)
-                        .interactive(false),
+                ui.add_sized(
+                    [32.0, ui.available_height()],
+                    egui::Label::new(egui::RichText::new(&line_numbers).monospace()),
                 );
                 ui.separator();
                 ui.add(
