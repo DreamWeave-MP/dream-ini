@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use mlua::{Error as LuaError, Lua, Result as LuaResult, String as LuaString, Table, Value};
 
@@ -61,8 +62,7 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
             let report = IniImporter::new(options)
                 .import_maps(&mut cfg, &ini, &ini_path)
                 .map_err(LuaError::external)?;
-            let messages = events_to_messages(&report.events);
-            import_result_to_table(lua, &cfg, &report.warnings, &messages)
+            import_result_to_table(lua, &cfg, &report.warnings, &report.events)
         })?,
     )?;
     module.set(
@@ -73,8 +73,7 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
             let result = IniImporter::new(options_from_table(Some(options))?)
                 .import_optional_cfg_path(Path::new(&ini_path), cfg_path.as_deref().map(Path::new))
                 .map_err(LuaError::external)?;
-            let messages = events_to_messages(&result.events);
-            import_result_to_table(lua, &result.cfg, &result.warnings, &messages)
+            import_result_to_table(lua, &result.cfg, &result.warnings, &result.events)
         })?,
     )?;
     Ok(module)
@@ -157,18 +156,44 @@ fn import_result_to_table(
     lua: &Lua,
     cfg: &MultiMap,
     warnings: &[String],
-    messages: &[String],
+    events: &[crate::ImportEvent],
 ) -> LuaResult<Table> {
     let result = lua.create_table()?;
     result.set("cfg", multimap_to_table(lua, cfg)?)?;
     result.set("text", serialize_cfg(cfg))?;
     result.set("warnings", strings_to_array(lua, warnings)?)?;
-    result.set("messages", strings_to_array(lua, messages)?)?;
+    result.set("events", events_to_array(lua, events)?)?;
     Ok(result)
 }
 
-fn events_to_messages(events: &[crate::ImportEvent]) -> Vec<String> {
-    events.iter().map(ToString::to_string).collect()
+fn events_to_array(lua: &Lua, events: &[crate::ImportEvent]) -> LuaResult<Table> {
+    let table = lua.create_table()?;
+    for (index, event) in events.iter().enumerate() {
+        table.set(index + 1, event_to_table(lua, event)?)?;
+    }
+    Ok(table)
+}
+
+fn event_to_table(lua: &Lua, event: &crate::ImportEvent) -> LuaResult<Table> {
+    let table = lua.create_table()?;
+    match event {
+        crate::ImportEvent::ContentFileResolved { path, modified } => {
+            table.set("kind", "content_file_resolved")?;
+            table.set("path", path.to_string_lossy().as_ref())?;
+            table.set("modified", system_time_seconds(*modified))?;
+        }
+        crate::ImportEvent::DataDirAddedForContent { path } => {
+            table.set("kind", "data_dir_added_for_content")?;
+            table.set("path", path.to_string_lossy().as_ref())?;
+        }
+    }
+    Ok(table)
+}
+
+fn system_time_seconds(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn multimap_to_table(lua: &Lua, map: &MultiMap) -> LuaResult<Table> {
@@ -268,7 +293,7 @@ mod tests {
             assert(result.cfg["no-sound"][1] == "1")
             assert(result.text:find("no%-sound=1\n") ~= nil)
             assert(#result.warnings == 0)
-            assert(#result.messages == 0)
+            assert(#result.events == 0)
             "#,
         )
         .exec()
@@ -305,6 +330,16 @@ mod tests {
         let text: String = result.get("text").unwrap();
         assert!(text.contains("content=Base.esm\n"));
         assert!(text.contains(&format!("data={}\n", data_dir.display())));
+        let events: Table = result.get("events").unwrap();
+        let event: Table = events.get(1).unwrap();
+        assert_eq!(
+            event.get::<String>("kind").unwrap(),
+            "data_dir_added_for_content"
+        );
+        assert_eq!(
+            event.get::<String>("path").unwrap(),
+            data_dir.to_string_lossy()
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
