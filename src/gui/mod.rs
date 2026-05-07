@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use dream_ini::{
-    ImportError, ImportEvent, ImportOptions, ImportWarning, IniImporter, serialize_cfg,
+    ImportError, ImportEvent, ImportOptions, ImportWarning, IniImporter, TextEncoding,
+    serialize_cfg,
 };
 use eframe::egui;
 
@@ -10,8 +11,15 @@ use self::localization::{Localizer, UiLanguage, UiText};
 
 mod localization;
 
+const PATH_LABEL_WIDTH: f32 = 130.0;
+
 pub(crate) fn run() -> ExitCode {
-    let options = eframe::NativeOptions::default();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([760.0, 860.0])
+            .with_min_inner_size([640.0, 600.0]),
+        ..Default::default()
+    };
     let result = eframe::run_native(
         "dream-ini",
         options,
@@ -63,6 +71,7 @@ impl GuiApp {
 
         ui.separator();
         ui.heading(self.localizer.text(UiText::ImportOptions));
+        encoding_dropdown(ui, self.localizer, &mut self.state.encoding);
         ui.checkbox(
             &mut self.state.import_fonts,
             self.localizer.text(UiText::ImportFallbacks),
@@ -78,7 +87,12 @@ impl GuiApp {
 
         ui.separator();
         ui.heading(self.localizer.text(UiText::Overrides));
-        self.show_data_dirs(ui);
+        path_folder_row(
+            ui,
+            self.localizer.text(UiText::ExplicitSearchPath),
+            self.localizer.text(UiText::Browse),
+            &mut self.state.explicit_search_path,
+        );
         path_folder_row(
             ui,
             self.localizer.text(UiText::DataLocal),
@@ -174,34 +188,6 @@ impl GuiApp {
             ResultPanel::GeneratedCfg => show_generated_cfg_panel(ui, self.localizer, result),
         }
     }
-
-    fn show_data_dirs(&mut self, ui: &mut egui::Ui) {
-        ui.label(self.localizer.text(UiText::DataDirs));
-        let mut remove_index = None;
-        for (index, data_dir) in self.state.data_dirs.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(data_dir);
-                if ui.button(self.localizer.text(UiText::Browse)).clicked()
-                    && let Some(path) = pick_folder()
-                {
-                    *data_dir = path;
-                }
-                if ui
-                    .button("−")
-                    .on_hover_text(self.localizer.text(UiText::RemoveDataDir))
-                    .clicked()
-                {
-                    remove_index = Some(index);
-                }
-            });
-        }
-        if let Some(index) = remove_index {
-            self.state.data_dirs.remove(index);
-        }
-        if ui.button(self.localizer.text(UiText::AddDataDir)).clicked() {
-            self.state.data_dirs.push(String::new());
-        }
-    }
 }
 
 fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
@@ -214,10 +200,11 @@ fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
 struct ImportFormState {
     morrowind_ini: String,
     existing_cfg: String,
+    encoding: TextEncoding,
     import_fonts: bool,
     import_archives: bool,
     import_content_files: bool,
-    data_dirs: Vec<String>,
+    explicit_search_path: String,
     data_local: String,
     resources: String,
     userdata: String,
@@ -228,10 +215,11 @@ impl Default for ImportFormState {
         Self {
             morrowind_ini: String::new(),
             existing_cfg: String::new(),
+            encoding: TextEncoding::Win1252,
             import_fonts: false,
             import_archives: true,
             import_content_files: false,
-            data_dirs: Vec::new(),
+            explicit_search_path: String::new(),
             data_local: String::new(),
             resources: String::new(),
             userdata: String::new(),
@@ -266,14 +254,13 @@ impl ImportFormState {
             import_game_files: self.import_content_files,
             import_fonts: self.import_fonts,
             import_archives: self.import_archives,
-            data_dirs: self
-                .data_dirs
-                .iter()
-                .filter_map(|value| optional_path(value))
+            data_dirs: optional_path(&self.explicit_search_path)
+                .into_iter()
                 .collect(),
             data_local: optional_path(&self.data_local),
             resources: optional_path(&self.resources),
             userdata: optional_path(&self.userdata),
+            encoding: Some(self.encoding),
             verbose: true,
             ..ImportOptions::default()
         }
@@ -319,6 +306,39 @@ enum ResultPanel {
 fn result_tab(ui: &mut egui::Ui, selected: &mut ResultPanel, panel: ResultPanel, label: &str) {
     if ui.selectable_label(*selected == panel, label).clicked() {
         *selected = panel;
+    }
+}
+
+fn encoding_dropdown(ui: &mut egui::Ui, localizer: Localizer, encoding: &mut TextEncoding) {
+    ui.horizontal(|ui| {
+        ui.label(localizer.text(UiText::Encoding));
+        egui::ComboBox::from_id_salt("import-encoding")
+            .selected_text(encoding_label(*encoding))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    encoding,
+                    TextEncoding::Win1250,
+                    encoding_label(TextEncoding::Win1250),
+                );
+                ui.selectable_value(
+                    encoding,
+                    TextEncoding::Win1251,
+                    encoding_label(TextEncoding::Win1251),
+                );
+                ui.selectable_value(
+                    encoding,
+                    TextEncoding::Win1252,
+                    encoding_label(TextEncoding::Win1252),
+                );
+            });
+    });
+}
+
+const fn encoding_label(encoding: TextEncoding) -> &'static str {
+    match encoding {
+        TextEncoding::Win1250 => "win1250",
+        TextEncoding::Win1251 => "win1251",
+        TextEncoding::Win1252 => "win1252",
     }
 }
 
@@ -424,8 +444,11 @@ fn path_row(
     pick: impl FnOnce() -> Option<String>,
 ) {
     ui.horizontal(|ui| {
-        ui.label(label);
-        ui.text_edit_singleline(value);
+        ui.add_sized(
+            [PATH_LABEL_WIDTH, ui.spacing().interact_size.y],
+            egui::Label::new(label),
+        );
+        ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
         if ui.button(browse).clicked()
             && let Some(path) = pick()
         {

@@ -81,7 +81,7 @@ fn run_with_writers(
         import_game_files: cli.game_files,
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
-        data_dirs: cli.data_dirs,
+        data_dirs: cli.data_dir.into_iter().collect(),
         data_local: cli.data_local,
         resources: cli.resources,
         userdata: cli.userdata,

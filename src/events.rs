@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportEvent {
     ContentFileResolved { path: PathBuf, modified: SystemTime },
+    ArchiveResolved { path: PathBuf },
     DataDirAddedForContent { path: PathBuf },
+    DataDirAddedForArchive { path: PathBuf },
 }
 
 impl fmt::Display for ImportEvent {
@@ -20,6 +22,12 @@ impl fmt::Display for ImportEvent {
             Self::DataDirAddedForContent { path } => write!(
                 f,
                 "adding data directory used to resolve content files: {}",
+                path.display()
+            ),
+            Self::ArchiveResolved { path } => write!(f, "archive: {}", path.display()),
+            Self::DataDirAddedForArchive { path } => write!(
+                f,
+                "adding data directory used to resolve fallback archives: {}",
                 path.display()
             ),
         }

@@ -131,7 +131,12 @@ pub enum ImportError {
         files: Vec<String>,
         searched_paths: Vec<PathBuf>,
     },
+    MissingArchives {
+        files: Vec<String>,
+        searched_paths: Vec<PathBuf>,
+    },
     InvalidContentFileName(String),
+    InvalidArchiveName(String),
 }
 
 impl fmt::Display for ImportError {
@@ -160,9 +165,31 @@ impl fmt::Display for ImportError {
                 }
                 write!(f, "; pass --data or add data=... to the cfg")
             }
+            Self::MissingArchives {
+                files,
+                searched_paths,
+            } => {
+                write!(f, "fallback archives not found: {}", files.join(", "))?;
+                if !searched_paths.is_empty() {
+                    write!(
+                        f,
+                        "; searched: {}",
+                        searched_paths
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )?;
+                }
+                write!(f, "; pass --data or add data=... to the cfg")
+            }
             Self::InvalidContentFileName(file) => write!(
                 f,
                 "invalid content file name: {file}; content entries must be plugin filenames, not paths"
+            ),
+            Self::InvalidArchiveName(file) => write!(
+                f,
+                "invalid fallback archive name: {file}; archive entries must be BSA filenames, not paths"
             ),
         }
     }

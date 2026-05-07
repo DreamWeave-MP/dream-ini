@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -305,6 +305,7 @@ fn missing_output_mode_defaults_to_stdout() {
     let dir = unique_test_dir("missing-output-mode");
     fs::create_dir_all(&dir).unwrap();
     let ini = dir.join("Morrowind.ini");
+    create_archive(&dir, "Morrowind.bsa");
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
 
     let output = Command::new(BIN)
@@ -402,6 +403,12 @@ fn subrecord(output: &mut Vec<u8>, name: [u8; 4], data: &[u8]) {
     output.extend_from_slice(&name);
     output.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
     output.extend_from_slice(data);
+}
+
+fn create_archive(dir: &Path, archive: &str) {
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join(archive), []).unwrap();
 }
 
 fn unique_test_dir(name: &str) -> PathBuf {

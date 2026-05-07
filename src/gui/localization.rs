@@ -20,11 +20,12 @@ pub(super) enum UiText {
     ExistingCfg,
     Browse,
     ImportOptions,
+    Encoding,
     ImportFallbacks,
     ImportArchives,
     ImportContentFiles,
     Overrides,
-    DataDirs,
+    ExplicitSearchPath,
     DataLocal,
     Resources,
     Userdata,
@@ -37,8 +38,6 @@ pub(super) enum UiText {
     Events,
     GeneratedCfg,
     Copy,
-    AddDataDir,
-    RemoveDataDir,
     NoErrors,
     NoWarnings,
     NoEvents,
@@ -91,14 +90,15 @@ const fn english_text(key: UiText) -> &'static str {
         UiText::EnglishLanguage => "English",
         UiText::SourceSection => "Source",
         UiText::MorrowindIni => "Morrowind.ini",
-        UiText::ExistingCfg => "Existing cfg",
+        UiText::ExistingCfg => "Existing openmw.cfg",
         UiText::Browse => "Browse…",
         UiText::ImportOptions => "Import options",
+        UiText::Encoding => "Encoding",
         UiText::ImportFallbacks => "Import bitmap fonts",
         UiText::ImportArchives => "Import archives",
         UiText::ImportContentFiles => "Import content files / load order",
         UiText::Overrides => "Overrides",
-        UiText::DataDirs => "Data dirs",
+        UiText::ExplicitSearchPath => "Game install path",
         UiText::DataLocal => "data-local",
         UiText::Resources => "resources",
         UiText::Userdata => "userdata",
@@ -111,8 +111,6 @@ const fn english_text(key: UiText) -> &'static str {
         UiText::Events => "Events",
         UiText::GeneratedCfg => "Generated cfg",
         UiText::Copy => "Copy",
-        UiText::AddDataDir => "Add data dir",
-        UiText::RemoveDataDir => "Remove data dir",
         UiText::NoErrors => "No errors.",
         UiText::NoWarnings => "No warnings.",
         UiText::NoEvents => "No events.",
@@ -137,8 +135,15 @@ fn english_event_title(event: &ImportEvent) -> String {
         ImportEvent::ContentFileResolved { path, .. } => {
             format!("Resolved content file: {}", path.display())
         }
+        ImportEvent::ArchiveResolved { path } => format!("Resolved archive: {}", path.display()),
         ImportEvent::DataDirAddedForContent { path } => {
             format!("Added data directory for content files: {}", path.display())
+        }
+        ImportEvent::DataDirAddedForArchive { path } => {
+            format!(
+                "Added data directory for fallback archives: {}",
+                path.display()
+            )
         }
     }
 }
@@ -155,9 +160,13 @@ fn english_error_title(error: &ImportError) -> String {
         ImportError::MissingContentFiles { files, .. } => {
             format!("Content files not found: {}", files.join(", "))
         }
+        ImportError::MissingArchives { files, .. } => {
+            format!("Fallback archives not found: {}", files.join(", "))
+        }
         ImportError::InvalidContentFileName(file) => {
             format!("Invalid content file name: {file}")
         }
+        ImportError::InvalidArchiveName(file) => format!("Invalid fallback archive name: {file}"),
         _ => error.to_string(),
     }
 }
