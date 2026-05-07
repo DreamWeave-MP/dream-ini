@@ -278,21 +278,19 @@ impl GuiApp {
             GuiOutputMode::PreviewOnly,
             self.localizer.text(UiText::PreviewOnly),
         );
-        ui.horizontal(|ui| {
-            ui.radio_value(
-                &mut self.state.output_mode,
-                GuiOutputMode::SaveAs,
-                self.localizer.text(UiText::SaveAs),
+        ui.radio_value(
+            &mut self.state.output_mode,
+            GuiOutputMode::SaveAs,
+            self.localizer.text(UiText::SaveAs),
+        );
+        ui.add_enabled_ui(self.state.output_mode == GuiOutputMode::SaveAs, |ui| {
+            path_save_file_row(
+                ui,
+                path_label_width,
+                self.localizer.text(UiText::OutputPath),
+                self.localizer.text(UiText::Browse),
+                &mut self.state.output_path,
             );
-            ui.add_enabled_ui(self.state.output_mode == GuiOutputMode::SaveAs, |ui| {
-                path_save_file_row(
-                    ui,
-                    path_label_width,
-                    self.localizer.text(UiText::OutputPath),
-                    self.localizer.text(UiText::Browse),
-                    &mut self.state.output_path,
-                );
-            });
         });
         ui.add_enabled_ui(optional_path(&self.state.existing_cfg).is_some(), |ui| {
             ui.radio_value(
@@ -657,17 +655,30 @@ fn path_row(
     pick: impl FnOnce() -> Option<String>,
 ) {
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [label_width, ui.spacing().interact_size.y],
-            egui::Label::new(label),
-        );
-        ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
-        if ui.button(browse).clicked()
+        let row_height = ui.spacing().interact_size.y;
+        ui.add_sized([label_width, row_height], egui::Label::new(label));
+        let browse_button_width = button_width(ui, browse);
+        let text_width = (ui.available_width() - browse_button_width - ui.spacing().item_spacing.x)
+            .max(ui.spacing().interact_size.x);
+        ui.add_sized([text_width, row_height], egui::TextEdit::singleline(value));
+        if ui
+            .add_sized([browse_button_width, row_height], egui::Button::new(browse))
+            .clicked()
             && let Some(path) = pick()
         {
             *value = path;
         }
     });
+}
+
+fn button_width(ui: &egui::Ui, label: &str) -> f32 {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let text_width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font_id, ui.visuals().text_color())
+        .size()
+        .x;
+    text_width + ui.spacing().button_padding.x * 2.0
 }
 
 fn path_label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
