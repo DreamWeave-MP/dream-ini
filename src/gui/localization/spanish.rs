@@ -66,6 +66,20 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Seleccione un openmw.cfg existente antes de actualizarlo directamente."
         }
+        UiText::CancelPicker => "Cancelar",
+        UiText::ChoosePath => "Elegir",
+        UiText::CurrentDirectory => "Directorio actual:",
+        UiText::ParentDirectory => "Superior",
+        UiText::RefreshDirectory => "Actualizar",
+        UiText::SelectedPath => "Seleccionado:",
+        UiText::OutputFileName => "Nombre de archivo",
+        UiText::SelectMorrowindIni => "Seleccionar Morrowind.ini",
+        UiText::SelectExistingOpenmwCfg => "Seleccionar openmw.cfg existente",
+        UiText::SelectOutputCfg => "Seleccionar openmw.cfg de salida",
+        UiText::SelectGameDataDir => "Seleccionar ruta de instalación del juego",
+        UiText::SelectDataLocalDir => "Seleccionar directorio data-local",
+        UiText::SelectResourcesDir => "Seleccionar directorio resources",
+        UiText::SelectUserdataDir => "Seleccionar directorio userdata",
     }
 }
 

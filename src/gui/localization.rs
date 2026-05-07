@@ -60,6 +60,20 @@ pub(super) enum UiText {
     SelectMorrowindIniBeforeImporting,
     SelectOutputPathBeforeImporting,
     SelectExistingCfgBeforeUpdating,
+    CancelPicker,
+    ChoosePath,
+    CurrentDirectory,
+    ParentDirectory,
+    RefreshDirectory,
+    SelectedPath,
+    OutputFileName,
+    SelectMorrowindIni,
+    SelectExistingOpenmwCfg,
+    SelectOutputCfg,
+    SelectGameDataDir,
+    SelectDataLocalDir,
+    SelectResourcesDir,
+    SelectUserdataDir,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
