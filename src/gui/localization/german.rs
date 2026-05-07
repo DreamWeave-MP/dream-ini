@@ -68,9 +68,11 @@ pub(super) const fn text(key: UiText) -> &'static str {
         }
         UiText::CancelPicker => "Abbrechen",
         UiText::ChoosePath => "Auswählen",
+        UiText::SelectPath => "Wählen",
         UiText::CurrentDirectory => "Aktuelles Verzeichnis:",
         UiText::ParentDirectory => "Übergeordnet",
         UiText::RefreshDirectory => "Aktualisieren",
+        UiText::ShowHiddenFiles => "Versteckte Dateien anzeigen",
         UiText::SelectedPath => "Ausgewählt:",
         UiText::OutputFileName => "Dateiname",
         UiText::SelectMorrowindIni => "Morrowind.ini auswählen",

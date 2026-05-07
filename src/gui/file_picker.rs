@@ -33,6 +33,7 @@ pub(super) struct PathPickerState {
     error: Option<String>,
     output_file_name: String,
     current_dir_readable: bool,
+    show_hidden_files: bool,
 }
 
 impl PathPickerState {
@@ -64,6 +65,7 @@ impl PathPickerState {
             error: None,
             output_file_name,
             current_dir_readable: false,
+            show_hidden_files: false,
         };
         state.refresh();
         state
@@ -95,7 +97,25 @@ impl PathPickerState {
             {
                 self.refresh();
             }
+            if self.target.is_directory_target()
+                && ui.button(localizer.text(UiText::SelectPath)).clicked()
+            {
+                outcome = PickOutcome::Chosen {
+                    target: self.target,
+                    path: self.current_dir.clone(),
+                };
+            }
         });
+
+        if self.target.displays_file() {
+            let response = ui.checkbox(
+                &mut self.show_hidden_files,
+                localizer.text(UiText::ShowHiddenFiles),
+            );
+            if response.changed() {
+                self.refresh();
+            }
+        }
 
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::RED, error);
@@ -107,7 +127,7 @@ impl PathPickerState {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for entry in &self.entries {
-                    entry_action = self.entry_row(ui, entry);
+                    entry_action = self.entry_row(ui, entry, localizer);
                     if !matches!(entry_action, EntryAction::None) {
                         break;
                     }
@@ -175,7 +195,7 @@ impl PathPickerState {
     }
 
     fn refresh(&mut self) {
-        match read_entries(self.target, &self.current_dir) {
+        match read_entries(self.target, &self.current_dir, self.show_hidden_files) {
             Ok(ReadEntries {
                 entries,
                 skipped_entries,
@@ -213,7 +233,7 @@ impl PathPickerState {
         self.refresh();
     }
 
-    fn entry_row(&self, ui: &mut egui::Ui, entry: &PathEntry) -> EntryAction {
+    fn entry_row(&self, ui: &mut egui::Ui, entry: &PathEntry, localizer: Localizer) -> EntryAction {
         let label = match entry.kind {
             EntryKind::Parent => format!("↑ {}", entry.name),
             EntryKind::Directory => format!("📁 {}", entry.name),
@@ -223,6 +243,22 @@ impl PathPickerState {
             .selected
             .as_ref()
             .is_some_and(|path| path == &entry.path);
+        if self.target.is_directory_target() && entry.kind == EntryKind::Directory {
+            let mut action = EntryAction::None;
+            ui.horizontal(|ui| {
+                let response = ui.selectable_label(selected, &label);
+                if response.double_clicked() {
+                    action = EntryAction::Navigate(entry.path.clone());
+                } else if response.clicked() {
+                    action = EntryAction::SelectDirectory(entry.path.clone());
+                }
+                if ui.button(localizer.text(UiText::SelectPath)).clicked() {
+                    action = EntryAction::Choose(entry.path.clone());
+                }
+            });
+            return action;
+        }
+
         let response = ui.selectable_label(selected, label);
         if response.double_clicked() {
             return match entry.kind {
@@ -366,7 +402,11 @@ struct ReadEntries {
     skipped_entries: Vec<String>,
 }
 
-fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<ReadEntries> {
+fn read_entries(
+    target: PathTarget,
+    directory: &Path,
+    show_hidden_files: bool,
+) -> std::io::Result<ReadEntries> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
     let mut skipped_entries = Vec::new();
@@ -396,7 +436,10 @@ fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<ReadEnt
                 path,
                 kind: EntryKind::Directory,
             });
-        } else if metadata.is_file() && target.displays_file() {
+        } else if metadata.is_file()
+            && target.displays_file()
+            && (show_hidden_files || !is_hidden_name(&name))
+        {
             files.push(PathEntry {
                 name,
                 path,
@@ -442,6 +485,10 @@ fn valid_output_file_name(file_name: &str) -> bool {
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
+fn is_hidden_name(file_name: &str) -> bool {
+    file_name.starts_with('.') && file_name != "." && file_name != ".."
+}
+
 impl PathTarget {
     fn displays_file(self) -> bool {
         match self.pick_kind() {
@@ -472,7 +519,7 @@ mod tests {
         File::create(root.join("openmw.cfg")).unwrap();
         File::create(root.join("notes.txt")).unwrap();
 
-        let entries = read_entries(PathTarget::MorrowindIni, &root)
+        let entries = read_entries(PathTarget::MorrowindIni, &root, false)
             .unwrap()
             .entries;
         let names: Vec<_> = entries.into_iter().map(|entry| entry.name).collect();
@@ -492,13 +539,40 @@ mod tests {
         fs::create_dir(root.join("userdata")).unwrap();
         File::create(root.join("openmw.cfg")).unwrap();
 
-        let entries = read_entries(PathTarget::UserdataDir, &root)
+        let entries = read_entries(PathTarget::UserdataDir, &root, false)
             .unwrap()
             .entries;
         let names: Vec<_> = entries.into_iter().map(|entry| entry.name).collect();
 
         assert!(names.contains(&"userdata".to_owned()));
         assert!(!names.contains(&"openmw.cfg".to_owned()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_targets_hide_dotfiles_until_enabled() {
+        let root = unique_temp_dir();
+        fs::create_dir(root.join(".hidden-dir")).unwrap();
+        File::create(root.join(".hidden.cfg")).unwrap();
+        File::create(root.join("visible.cfg")).unwrap();
+
+        let hidden_disabled = read_entries(PathTarget::ExistingOpenmwCfg, &root, false)
+            .unwrap()
+            .entries;
+        let hidden_enabled = read_entries(PathTarget::ExistingOpenmwCfg, &root, true)
+            .unwrap()
+            .entries;
+        let disabled_names: Vec<_> = hidden_disabled
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        let enabled_names: Vec<_> = hidden_enabled.into_iter().map(|entry| entry.name).collect();
+
+        assert!(disabled_names.contains(&".hidden-dir".to_owned()));
+        assert!(disabled_names.contains(&"visible.cfg".to_owned()));
+        assert!(!disabled_names.contains(&".hidden.cfg".to_owned()));
+        assert!(enabled_names.contains(&".hidden.cfg".to_owned()));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -536,10 +610,10 @@ mod tests {
         std::os::unix::fs::symlink(root.join("RealDir"), root.join("LinkedDir")).unwrap();
         std::os::unix::fs::symlink(root.join("Morrowind.ini"), root.join("Linked.ini")).unwrap();
 
-        let directory_entries = read_entries(PathTarget::UserdataDir, &root)
+        let directory_entries = read_entries(PathTarget::UserdataDir, &root, false)
             .unwrap()
             .entries;
-        let file_entries = read_entries(PathTarget::MorrowindIni, &root)
+        let file_entries = read_entries(PathTarget::MorrowindIni, &root, false)
             .unwrap()
             .entries;
 
