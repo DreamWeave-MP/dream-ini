@@ -46,8 +46,12 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::DataLocalTooltip => {
             "Sobrescribe la ruta data-local de OpenMW. Esta ruta de búsqueda tiene prioridad."
         }
-        UiText::ResourcesTooltip => "Sobrescribe la ruta resources escrita en openmw.cfg.",
-        UiText::UserdataTooltip => "Sobrescribe la ruta userdata escrita en openmw.cfg.",
+        UiText::ResourcesTooltip => {
+            "Sobrescribe la ruta de recursos del motor. Debe apuntar a recursos proporcionados por OpenMW; elíjala con cuidado."
+        }
+        UiText::UserdataTooltip => {
+            "Sobrescribe dónde OpenMW guarda datos de usuario como partidas, capturas de pantalla y caché de navmesh."
+        }
         UiText::NoErrors => "Sin errores.",
         UiText::NoWarnings => "Sin advertencias.",
         UiText::NoEvents => "Sin eventos.",

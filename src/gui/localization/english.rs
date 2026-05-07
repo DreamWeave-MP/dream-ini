@@ -46,8 +46,12 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::DataLocalTooltip => {
             "Override OpenMW's data-local path. This search path takes precedence over data paths."
         }
-        UiText::ResourcesTooltip => "Override OpenMW's resources path written to openmw.cfg.",
-        UiText::UserdataTooltip => "Override OpenMW's userdata path written to openmw.cfg.",
+        UiText::ResourcesTooltip => {
+            "Override the engine resources path. This should point at OpenMW-provided resources; choose with care."
+        }
+        UiText::UserdataTooltip => {
+            "Override where OpenMW stores user data such as saves, screenshots, and the navmesh cache."
+        }
         UiText::NoErrors => "No errors.",
         UiText::NoWarnings => "No warnings.",
         UiText::NoEvents => "No events.",

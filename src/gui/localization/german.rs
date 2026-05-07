@@ -47,10 +47,10 @@ pub(super) const fn text(key: UiText) -> &'static str {
             "Überschreibt OpenMWs data-local-Pfad. Dieser Suchpfad hat Vorrang vor data-Pfaden."
         }
         UiText::ResourcesTooltip => {
-            "Überschreibt den resources-Pfad, der in openmw.cfg geschrieben wird."
+            "Überschreibt den Pfad für Engine-Ressourcen. Er sollte auf von OpenMW bereitgestellte Ressourcen zeigen; sorgfältig auswählen."
         }
         UiText::UserdataTooltip => {
-            "Überschreibt den userdata-Pfad, der in openmw.cfg geschrieben wird."
+            "Überschreibt den Speicherort für OpenMW-Benutzerdaten wie Spielstände, Screenshots und Navmesh-Cache."
         }
         UiText::NoErrors => "Keine Fehler.",
         UiText::NoWarnings => "Keine Warnungen.",

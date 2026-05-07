@@ -46,8 +46,12 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::DataLocalTooltip => {
             "Remplace le chemin data-local d’OpenMW. Ce chemin de recherche est prioritaire."
         }
-        UiText::ResourcesTooltip => "Remplace le chemin resources écrit dans openmw.cfg.",
-        UiText::UserdataTooltip => "Remplace le chemin userdata écrit dans openmw.cfg.",
+        UiText::ResourcesTooltip => {
+            "Remplace le chemin des ressources moteur. Il doit pointer vers les ressources fournies par OpenMW ; à choisir avec soin."
+        }
+        UiText::UserdataTooltip => {
+            "Remplace l’emplacement où OpenMW stocke les données utilisateur : sauvegardes, captures d’écran et cache navmesh."
+        }
         UiText::NoErrors => "Aucune erreur.",
         UiText::NoWarnings => "Aucun avertissement.",
         UiText::NoEvents => "Aucun événement.",
