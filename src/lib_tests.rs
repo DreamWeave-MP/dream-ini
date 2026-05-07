@@ -536,6 +536,90 @@ fn partially_resolved_game_files_fail_without_writing_partial_content() {
 }
 
 #[test]
+fn invalid_plugin_header_leaves_cfg_unchanged() {
+    let dir = unique_test_dir("game-files-invalid-header-atomic");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Bad.esp"), b"TES4").unwrap();
+
+    let mut cfg = parse_cfg_str("fallback=Old_Setting,old\nno-sound=0\n");
+    let original_cfg = cfg.clone();
+    let ini = parse_ini_str("[General]\nDisable Audio=1\n[Game Files]\nGameFile0=Bad.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    let error = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap_err();
+
+    assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
+    assert_eq!(cfg, original_cfg);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn explicit_data_dir_is_not_written_when_data_local_already_covers_it() {
+    let dir = unique_test_dir("game-files-explicit-covered-by-data-local");
+    let data_dir = dir.join("External Data");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let mut cfg = parse_cfg_str(&format!("data-local=\"{}\"\n", data_dir.display()));
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        data_dirs: vec![data_dir.clone()],
+        ..ImportOptions::default()
+    });
+
+    let result = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+    assert_eq!(values(&cfg, "data"), &[] as &[String]);
+    assert_eq!(
+        values(&cfg, "data-local"),
+        &[format!("\"{}\"", data_dir.display())]
+    );
+    assert!(result.messages.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn duplicate_content_file_uses_first_search_path() {
+    let dir = unique_test_dir("game-files-duplicate-search-precedence");
+    let explicit_data_dir = dir.join("Explicit Data");
+    let configured_data_dir = dir.join("Configured Data");
+    fs::create_dir_all(&explicit_data_dir).unwrap();
+    fs::create_dir_all(&configured_data_dir).unwrap();
+    fs::write(explicit_data_dir.join("Patch.esp"), b"TES4").unwrap();
+    fs::write(configured_data_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", configured_data_dir.display()));
+    let original_cfg = cfg.clone();
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Patch.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        data_dirs: vec![explicit_data_dir],
+        ..ImportOptions::default()
+    });
+
+    let error = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap_err();
+
+    assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
+    assert_eq!(cfg, original_cfg);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn sparse_game_file_indices_are_imported() {
     let dir = unique_test_dir("game-files-sparse");
     let data_dir = dir.join("Data Files");
