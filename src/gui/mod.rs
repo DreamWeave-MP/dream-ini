@@ -14,6 +14,11 @@ use self::localization::{Localizer, UiLanguage, UiText};
 mod localization;
 
 const PATH_LABEL_WIDTH: f32 = 130.0;
+const CFG_KEY_DATA_LOCAL: &str = "data-local";
+const CFG_KEY_RESOURCES: &str = "resources";
+const CFG_KEY_USERDATA: &str = "userdata";
+const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
+const OPENMW_CFG_LABEL: &str = "openmw.cfg";
 
 pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
@@ -60,13 +65,17 @@ impl GuiApp {
         ui.heading(self.localizer.text(UiText::SourceSection));
         path_file_row(
             ui,
-            self.localizer.text(UiText::MorrowindIni),
+            MORROWIND_INI_LABEL,
             self.localizer.text(UiText::Browse),
             &mut self.state.morrowind_ini,
         );
+        let existing_cfg_label = format!(
+            "{} {OPENMW_CFG_LABEL}",
+            self.localizer.text(UiText::Existing)
+        );
         path_file_row(
             ui,
-            self.localizer.text(UiText::ExistingCfg),
+            &existing_cfg_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.existing_cfg,
         );
@@ -97,19 +106,19 @@ impl GuiApp {
         );
         path_folder_row(
             ui,
-            self.localizer.text(UiText::DataLocal),
+            CFG_KEY_DATA_LOCAL,
             self.localizer.text(UiText::Browse),
             &mut self.state.data_local,
         );
         path_folder_row(
             ui,
-            self.localizer.text(UiText::Resources),
+            CFG_KEY_RESOURCES,
             self.localizer.text(UiText::Browse),
             &mut self.state.resources,
         );
         path_folder_row(
             ui,
-            self.localizer.text(UiText::Userdata),
+            CFG_KEY_USERDATA,
             self.localizer.text(UiText::Browse),
             &mut self.state.userdata,
         );
@@ -118,10 +127,19 @@ impl GuiApp {
         ui.heading(self.localizer.text(UiText::Output));
         self.show_output_options(ui);
 
-        if ui
-            .button(self.localizer.text(UiText::ImportPreview))
-            .clicked()
-        {
+        let disabled_reason = self.state.disabled_import_reason();
+        let import_button = ui.add_enabled(
+            disabled_reason.is_none(),
+            egui::Button::new(self.localizer.text(UiText::ImportPreview)),
+        );
+        if let Some(reason) = disabled_reason {
+            ui.label(format!(
+                "{} {}",
+                self.localizer.text(UiText::CannotImport),
+                self.localizer.text(reason)
+            ));
+        }
+        if import_button.clicked() {
             let result = self.state.run_import();
             self.selected_result_panel = result.default_panel();
             self.result = Some(result);
@@ -145,6 +163,21 @@ impl GuiApp {
                         UiLanguage::English,
                         self.localizer.text(UiText::EnglishLanguage),
                     );
+                    ui.selectable_value(
+                        &mut language,
+                        UiLanguage::French,
+                        self.localizer.text(UiText::FrenchLanguage),
+                    );
+                    ui.selectable_value(
+                        &mut language,
+                        UiLanguage::German,
+                        self.localizer.text(UiText::GermanLanguage),
+                    );
+                    ui.selectable_value(
+                        &mut language,
+                        UiLanguage::Spanish,
+                        self.localizer.text(UiText::SpanishLanguage),
+                    );
                 });
             self.localizer.set_language(language);
         });
@@ -152,6 +185,20 @@ impl GuiApp {
 
     fn show_results(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.localizer.text(UiText::Results));
+        if let Some(GuiImportResult::Success {
+            output_path: Some(path),
+            ..
+        }) = &self.result
+        {
+            ui.colored_label(
+                egui::Color32::GREEN,
+                format!(
+                    "{} {}",
+                    self.localizer.text(UiText::WroteCfgTo),
+                    path.display()
+                ),
+            );
+        }
         ui.horizontal(|ui| {
             result_tab(
                 ui,
@@ -230,6 +277,9 @@ impl GuiApp {
 fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
     match language {
         UiLanguage::English => localizer.text(UiText::EnglishLanguage),
+        UiLanguage::French => localizer.text(UiText::FrenchLanguage),
+        UiLanguage::German => localizer.text(UiText::GermanLanguage),
+        UiLanguage::Spanish => localizer.text(UiText::SpanishLanguage),
     }
 }
 
@@ -269,6 +319,21 @@ impl Default for ImportFormState {
 }
 
 impl ImportFormState {
+    fn disabled_import_reason(&self) -> Option<UiText> {
+        if optional_path(&self.morrowind_ini).is_none() {
+            return Some(UiText::SelectMorrowindIniBeforeImporting);
+        }
+        if self.output_mode == GuiOutputMode::SaveAs && optional_path(&self.output_path).is_none() {
+            return Some(UiText::SelectOutputPathBeforeImporting);
+        }
+        if self.output_mode == GuiOutputMode::UpdateExistingCfg
+            && optional_path(&self.existing_cfg).is_none()
+        {
+            return Some(UiText::SelectExistingCfgBeforeUpdating);
+        }
+        None
+    }
+
     fn run_import(&self) -> GuiImportResult {
         let Some(ini_path) = optional_path(&self.morrowind_ini) else {
             return GuiImportResult::Error {
@@ -465,22 +530,10 @@ fn show_event_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportR
 }
 
 fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mut GuiImportResult) {
-    let GuiImportResult::Success {
-        cfg_text,
-        output_path,
-        ..
-    } = result
-    else {
+    let GuiImportResult::Success { cfg_text, .. } = result else {
         ui.label(localizer.text(UiText::NoGeneratedCfg));
         return;
     };
-    if let Some(path) = output_path {
-        ui.label(format!(
-            "{} {}",
-            localizer.text(UiText::WroteCfgTo),
-            path.display()
-        ));
-    }
     if ui.button(localizer.text(UiText::Copy)).clicked() {
         ui.ctx().copy_text(cfg_text.clone());
     }
