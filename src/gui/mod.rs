@@ -346,37 +346,27 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
     if ui.button(localizer.text(UiText::Copy)).clicked() {
         ui.ctx().copy_text(cfg_text.clone());
     }
-    let rows = cfg_text.split('\n').count().max(1);
-    let line_numbers = line_numbers(rows);
     egui::ScrollArea::both()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.add_sized(
-                    [32.0, ui.available_height()],
-                    egui::Label::new(egui::RichText::new(&line_numbers).monospace()),
-                );
-                ui.separator();
-                ui.add(
-                    egui::TextEdit::multiline(cfg_text)
-                        .code_editor()
-                        .desired_rows(rows)
-                        .desired_width(ui.available_width())
-                        .interactive(false),
-                );
-            });
+            show_numbered_cfg(ui, cfg_text);
         });
 }
 
-fn line_numbers(rows: usize) -> String {
-    let mut numbers = String::new();
-    for row in 1..=rows {
-        if row > 1 {
-            numbers.push('\n');
-        }
-        numbers.push_str(&row.to_string());
-    }
-    numbers
+fn show_numbered_cfg(ui: &mut egui::Ui, cfg_text: &str) {
+    let line_count = cfg_text.split('\n').count().max(1);
+    let number_width = line_count.to_string().len();
+    egui::Grid::new("generated-cfg-preview")
+        .num_columns(2)
+        .spacing([8.0, 0.0])
+        .striped(false)
+        .show(ui, |ui| {
+            for (index, line) in cfg_text.split('\n').enumerate() {
+                ui.monospace(format!("{:>number_width$}", index + 1));
+                ui.monospace(line);
+                ui.end_row();
+            }
+        });
 }
 
 fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
