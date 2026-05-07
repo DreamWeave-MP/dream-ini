@@ -44,6 +44,7 @@ mod importer;
 pub mod lua;
 mod parser;
 mod plugin;
+mod warnings;
 
 pub use events::ImportEvent;
 pub use importer::{ImportOptions, ImportReport, ImportResult, IniImporter};
@@ -52,6 +53,7 @@ pub use parser::{
     parse_ini_str_with_warnings, serialize_cfg,
 };
 pub use plugin::{PluginHeader, read_plugin_header};
+pub use warnings::ImportWarning;
 
 pub type MultiMap = BTreeMap<String, Vec<String>>;
 

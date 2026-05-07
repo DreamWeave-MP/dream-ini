@@ -7,7 +7,7 @@ use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
 use crate::parser::{
     insert_multimap, parse_cfg_str, parse_ini_bytes_with_warnings, set_single_value,
 };
-use crate::{Game, ImportError, MultiMap, TextEncoding};
+use crate::{Game, ImportError, ImportWarning, MultiMap, TextEncoding};
 
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
@@ -46,13 +46,13 @@ impl Default for ImportOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportResult {
     pub cfg: MultiMap,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ImportWarning>,
     pub events: Vec<ImportEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ImportWarning>,
     pub events: Vec<ImportEvent>,
 }
 

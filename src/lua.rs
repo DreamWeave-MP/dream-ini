@@ -15,11 +15,11 @@ use crate::{
 ///
 /// The table contains these functions:
 ///
-/// - `parse_ini(text, opts) -> { entries = multimap, warnings = string[] }`
+/// - `parse_ini(text, opts) -> { entries = multimap, warnings = warning[] }`
 /// - `parse_cfg(text) -> multimap`
 /// - `serialize_cfg(multimap) -> string`
-/// - `import_maps(cfg, ini, opts) -> { cfg = multimap, text = string, warnings = string[], events = event[] }`
-/// - `import_paths(opts) -> { cfg = multimap, text = string, warnings = string[], events = event[] }`
+/// - `import_maps(cfg, ini, opts) -> { cfg = multimap, text = string, warnings = warning[], events = event[] }`
+/// - `import_paths(opts) -> { cfg = multimap, text = string, warnings = warning[], events = event[] }`
 ///
 /// Multimaps are represented as Lua tables where each key maps to an array of strings, for example
 /// `{ encoding = { "win1252" }, content = { "Morrowind.esm" } }`.
@@ -38,7 +38,7 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
             );
             let result = lua.create_table()?;
             result.set("entries", multimap_to_table(lua, &parsed.entries)?)?;
-            result.set("warnings", strings_to_array(lua, &parsed.warnings)?)?;
+            result.set("warnings", warnings_to_array(lua, &parsed.warnings)?)?;
             Ok(result)
         })?,
     )?;
@@ -158,15 +158,40 @@ fn required_string(table: &Table, key: &str) -> LuaResult<String> {
 fn import_result_to_table(
     lua: &Lua,
     cfg: &MultiMap,
-    warnings: &[String],
+    warnings: &[crate::ImportWarning],
     events: &[crate::ImportEvent],
 ) -> LuaResult<Table> {
     let result = lua.create_table()?;
     result.set("cfg", multimap_to_table(lua, cfg)?)?;
     result.set("text", serialize_cfg(cfg))?;
-    result.set("warnings", strings_to_array(lua, warnings)?)?;
+    result.set("warnings", warnings_to_array(lua, warnings)?)?;
     result.set("events", events_to_array(lua, events)?)?;
     Ok(result)
+}
+
+fn warnings_to_array(lua: &Lua, warnings: &[crate::ImportWarning]) -> LuaResult<Table> {
+    let table = lua.create_table()?;
+    for (index, warning) in warnings.iter().enumerate() {
+        table.set(index + 1, warning_to_table(lua, warning)?)?;
+    }
+    Ok(table)
+}
+
+fn warning_to_table(lua: &Lua, warning: &crate::ImportWarning) -> LuaResult<Table> {
+    let table = lua.create_table()?;
+    match warning {
+        crate::ImportWarning::IgnoredEmptyValue { key } => {
+            table.set("kind", "ignored_empty_value")?;
+            table.set("key", key.as_str())?;
+            table.set("message", warning.to_string())?;
+        }
+        crate::ImportWarning::MalformedIniLine { line } => {
+            table.set("kind", "malformed_ini_line")?;
+            table.set("line", line.as_str())?;
+            table.set("message", warning.to_string())?;
+        }
+    }
+    Ok(table)
 }
 
 fn events_to_array(lua: &Lua, events: &[crate::ImportEvent]) -> LuaResult<Table> {
@@ -276,7 +301,9 @@ mod tests {
         lua.load(
             r#"
             local result = dream_ini.parse_ini("[General]\nEmpty=\n", { encoding = "win1252" })
-            assert(result.warnings[1] == "ignored empty value for key 'General:Empty'.")
+            assert(result.warnings[1].kind == "ignored_empty_value")
+            assert(result.warnings[1].key == "General:Empty")
+            assert(result.warnings[1].message == "ignored empty value for key 'General:Empty'.")
             "#,
         )
         .exec()

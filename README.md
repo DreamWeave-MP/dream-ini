@@ -104,7 +104,7 @@ local result = dream_ini.import_paths({
 
 print(result.text)
 for _, warning in ipairs(result.warnings) do
-  print(warning)
+  print(warning.message)
 end
 for _, event in ipairs(result.events) do
   if event.kind == "content_file_resolved" then
@@ -128,6 +128,11 @@ Import events are structured tables. Current event kinds are:
 - `{ kind = "content_file_resolved", path = string, modified = unix_seconds }`
 - `{ kind = "data_dir_added_for_content", path = string }`
 
+Import warnings are structured tables with a formatted `message`. Current warning kinds are:
+
+- `{ kind = "ignored_empty_value", key = string, message = string }`
+- `{ kind = "malformed_ini_line", line = string, message = string }`
+
 Multimaps are represented as `key -> array of strings` to preserve duplicate keys:
 
 ```lua
@@ -145,7 +150,7 @@ Generate crate documentation with:
 cargo doc --open
 ```
 
-The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `ImportEvent`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`. Path values serialized into cfg text, Lua tables, or import events are UTF-8 strings.
+The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `ImportEvent`, `ImportWarning`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`. Path values serialized into cfg text, Lua tables, or import events are UTF-8 strings.
 
 ## Development
 

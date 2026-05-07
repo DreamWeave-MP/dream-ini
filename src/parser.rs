@@ -1,9 +1,9 @@
-use crate::{MultiMap, TextEncoding};
+use crate::{ImportWarning, MultiMap, TextEncoding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedIni {
     pub entries: MultiMap,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<ImportWarning>,
 }
 
 #[must_use]
@@ -40,15 +40,15 @@ pub fn parse_ini_str_with_warnings(text: &str) -> ParsedIni {
 
         if line.starts_with('[') {
             let Some(end) = line.find(']') else {
-                warnings.push(format!(
-                    "ini file wrongly formatted ({line}). Line ignored."
-                ));
+                warnings.push(ImportWarning::MalformedIniLine {
+                    line: line.to_owned(),
+                });
                 continue;
             };
             if end < 2 {
-                warnings.push(format!(
-                    "ini file wrongly formatted ({line}). Line ignored."
-                ));
+                warnings.push(ImportWarning::MalformedIniLine {
+                    line: line.to_owned(),
+                });
                 continue;
             }
             line[1..end].clone_into(&mut section);
@@ -69,7 +69,7 @@ pub fn parse_ini_str_with_warnings(text: &str) -> ParsedIni {
         let key = format!("{}:{}", section, &line[..equals]);
         let value = &line[equals + 1..];
         if value.is_empty() {
-            warnings.push(format!("ignored empty value for key '{key}'."));
+            warnings.push(ImportWarning::IgnoredEmptyValue { key });
             continue;
         }
         insert_multimap(&mut map, key, value.to_owned());

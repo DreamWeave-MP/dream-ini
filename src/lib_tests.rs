@@ -30,9 +30,15 @@ fn surfaces_ini_parse_warnings() {
     assert_eq!(
         parsed.warnings,
         vec![
-            "ignored empty value for key 'General:Empty'.".to_owned(),
-            "ini file wrongly formatted ([bad). Line ignored.".to_owned(),
-            "ini file wrongly formatted ([]=ignored). Line ignored.".to_owned(),
+            ImportWarning::IgnoredEmptyValue {
+                key: "General:Empty".to_owned()
+            },
+            ImportWarning::MalformedIniLine {
+                line: "[bad".to_owned()
+            },
+            ImportWarning::MalformedIniLine {
+                line: "[]=ignored".to_owned()
+            },
         ]
     );
 }
