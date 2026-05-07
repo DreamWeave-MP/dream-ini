@@ -346,7 +346,7 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
     if ui.button(localizer.text(UiText::Copy)).clicked() {
         ui.ctx().copy_text(cfg_text.clone());
     }
-    let rows = cfg_text.lines().count().max(1);
+    let rows = cfg_text.split('\n').count().max(1);
     let line_numbers = line_numbers(rows);
     egui::ScrollArea::both()
         .auto_shrink([false, false])
@@ -359,7 +359,7 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
                 ui.separator();
                 ui.add(
                     egui::TextEdit::multiline(cfg_text)
-                        .font(egui::TextStyle::Monospace)
+                        .code_editor()
                         .desired_rows(rows)
                         .desired_width(ui.available_width())
                         .interactive(false),
