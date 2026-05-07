@@ -1,12 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::content_files::import_content_files;
 use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
 use crate::parser::{
     insert_multimap, parse_cfg_str, parse_ini_bytes_with_warnings, set_single_value,
 };
-use crate::plugin::{apply_morrowind_expansion_order, dependency_sort, read_plugin_header};
 use crate::{Game, ImportError, MultiMap, TextEncoding};
 
 #[derive(Debug, Clone)]
@@ -127,7 +126,18 @@ impl IniImporter {
         self.apply_singleton_path_overrides(&mut imported_cfg);
 
         if self.options.import_game_files {
-            self.import_game_files(&mut imported_cfg, ini, ini_path, &mut messages)?;
+            let encoding = self.effective_encoding(&imported_cfg)?;
+            let imported_content =
+                import_content_files(ini, &imported_cfg, ini_path, &self.options, encoding)?;
+            for data_dir in imported_content.data_dirs {
+                insert_multimap(
+                    &mut imported_cfg,
+                    "data".to_owned(),
+                    data_dir.to_string_lossy().into_owned(),
+                );
+            }
+            imported_cfg.insert("content".to_owned(), imported_content.content);
+            messages.extend(imported_content.messages);
         }
 
         if self.options.import_archives {
@@ -154,121 +164,6 @@ impl IniImporter {
         set_path_override(cfg, "data-local", self.options.data_local.as_deref());
         set_path_override(cfg, "resources", self.options.resources.as_deref());
         set_path_override(cfg, "userdata", self.options.userdata.as_deref());
-    }
-
-    fn import_game_files(
-        &self,
-        cfg: &mut MultiMap,
-        ini: &MultiMap,
-        ini_path: &Path,
-        messages: &mut Vec<String>,
-    ) -> Result<(), ImportError> {
-        let mut data_paths = Vec::new();
-        data_paths.extend(self.options.data_dirs.iter().map(|path| DataPath {
-            path: fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
-            origin: DataPathOrigin::Explicit,
-        }));
-        if let Some(paths) = cfg.get("data") {
-            add_paths(&mut data_paths, paths, DataPathOrigin::Config);
-        }
-        if let Some(paths) = cfg.get("data-local") {
-            add_paths(&mut data_paths, paths, DataPathOrigin::Config);
-        }
-        let default_data_path = ini_path
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join("Data Files");
-        let default_data_path = fs::canonicalize(&default_data_path).unwrap_or(default_data_path);
-        data_paths.push(DataPath {
-            path: default_data_path.clone(),
-            origin: DataPathOrigin::Default,
-        });
-
-        let mut content_files = Vec::new();
-        let mut missing_content_files = Vec::new();
-        for file in game_file_values(ini).into_iter().map(|file| file.trim()) {
-            if !ends_with_ignore_ascii_case(file, ".esm")
-                && !ends_with_ignore_ascii_case(file, ".esp")
-            {
-                continue;
-            }
-            if !is_plugin_filename(file) {
-                return Err(ImportError::InvalidContentFileName(file.to_owned()));
-            }
-
-            let mut found = None;
-            for data_path in &data_paths {
-                let candidate = data_path.path.join(file);
-                if let Ok(metadata) = fs::metadata(&candidate) {
-                    let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
-                    let path = fs::canonicalize(&candidate).unwrap_or(candidate);
-                    if self.options.verbose {
-                        messages.push(format!(
-                            "content file: {} timestamp = ({})",
-                            path.display(),
-                            system_time_seconds(modified)
-                        ));
-                    }
-                    found = Some(ResolvedContentFile {
-                        sort_key: system_time_key(modified),
-                        path,
-                        data_path: data_path.path.clone(),
-                        data_path_origin: data_path.origin,
-                    });
-                    break;
-                }
-            }
-
-            if let Some(entry) = found {
-                content_files.push(entry);
-            } else {
-                missing_content_files.push(file.to_owned());
-            }
-        }
-
-        if !missing_content_files.is_empty() {
-            return Err(ImportError::MissingContentFiles {
-                files: missing_content_files,
-                searched_paths: data_paths
-                    .iter()
-                    .map(|data_path| data_path.path.clone())
-                    .collect(),
-            });
-        }
-
-        for data_path in used_non_config_data_paths(&content_files) {
-            if !has_equivalent_data_path(cfg, &data_path) {
-                messages.push(format!(
-                    "adding data directory used to resolve content files: {}",
-                    data_path.display()
-                ));
-                insert_multimap(
-                    cfg,
-                    "data".to_owned(),
-                    data_path.to_string_lossy().into_owned(),
-                );
-            }
-        }
-
-        content_files.sort_by(|left, right| {
-            left.sort_key
-                .cmp(&right.sort_key)
-                .then_with(|| left.path.cmp(&right.path))
-        });
-
-        let format = self.options.game.plugin_format();
-        let encoding = self.effective_encoding(cfg)?;
-        let mut dependencies = Vec::new();
-        for content_file in content_files {
-            let header = read_plugin_header(&content_file.path, format, encoding)?;
-            dependencies.push((header.name, header.masters));
-        }
-
-        let mut sorted = dependency_sort(dependencies);
-        apply_morrowind_expansion_order(&mut sorted);
-        cfg.insert("content".to_owned(), sorted);
-
-        Ok(())
     }
 }
 
@@ -312,103 +207,10 @@ fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<I
         .flat_map(|values| values.iter())
 }
 
-fn game_file_values(ini: &MultiMap) -> Vec<&String> {
-    let mut values = Vec::new();
-    for (key, entries) in ini {
-        if let Some(index) = key
-            .strip_prefix("Game Files:GameFile")
-            .and_then(|suffix| suffix.parse::<usize>().ok())
-        {
-            for (entry_index, entry) in entries.iter().enumerate() {
-                values.push((index, entry_index, entry));
-            }
-        }
-    }
-    values.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    values.into_iter().map(|(_, _, value)| value).collect()
-}
-
-fn is_plugin_filename(file: &str) -> bool {
-    !file.is_empty()
-        && !file.contains('/')
-        && !file.contains('\\')
-        && Path::new(file)
-            .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DataPathOrigin {
-    Explicit,
-    Config,
-    Default,
-}
-
-#[derive(Debug, Clone)]
-struct DataPath {
-    path: PathBuf,
-    origin: DataPathOrigin,
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedContentFile {
-    sort_key: u128,
-    path: PathBuf,
-    data_path: PathBuf,
-    data_path_origin: DataPathOrigin,
-}
-
-fn used_non_config_data_paths(content_files: &[ResolvedContentFile]) -> Vec<PathBuf> {
-    let mut used_paths: Vec<PathBuf> = Vec::new();
-    for content_file in content_files {
-        if content_file.data_path_origin == DataPathOrigin::Config {
-            continue;
-        }
-        if !used_paths
-            .iter()
-            .any(|path| equivalent_paths(path.as_path(), &content_file.data_path))
-        {
-            used_paths.push(content_file.data_path.clone());
-        }
-    }
-    used_paths
-}
-
-fn add_paths(output: &mut Vec<DataPath>, input: &[String], origin: DataPathOrigin) {
-    for path in input {
-        output.push(DataPath {
-            path: PathBuf::from(unquote_path(path)),
-            origin,
-        });
-    }
-}
-
 fn set_path_override(cfg: &mut MultiMap, key: &str, path: Option<&Path>) {
     if let Some(path) = path {
         set_single_value(cfg, key, path.to_string_lossy().into_owned());
     }
-}
-
-fn unquote_path(path: &str) -> &str {
-    path.strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(path)
-}
-
-fn has_equivalent_data_path(cfg: &MultiMap, path: &Path) -> bool {
-    ["data", "data-local"].iter().any(|key| {
-        cfg.get(*key).is_some_and(|values| {
-            values
-                .iter()
-                .any(|value| equivalent_paths(Path::new(unquote_path(value)), path))
-        })
-    })
-}
-
-fn equivalent_paths(left: &Path, right: &Path) -> bool {
-    let left = fs::canonicalize(left).unwrap_or_else(|_| left.to_owned());
-    let right = fs::canonicalize(right).unwrap_or_else(|_| right.to_owned());
-    left == right
 }
 
 fn read_to_string(path: &Path) -> Result<String, ImportError> {
@@ -423,22 +225,4 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, ImportError> {
         path: path.to_owned(),
         source,
     })
-}
-
-fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
-    value
-        .get(value.len().saturating_sub(suffix.len())..)
-        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
-}
-
-fn system_time_key(time: SystemTime) -> u128 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-}
-
-fn system_time_seconds(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }

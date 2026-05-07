@@ -34,6 +34,7 @@ use std::path::PathBuf;
 
 use encoding_rs::{Encoding, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252};
 
+mod content_files;
 mod fallback_keys;
 mod importer;
 #[cfg(feature = "lua")]
