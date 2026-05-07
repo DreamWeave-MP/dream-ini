@@ -503,7 +503,12 @@ fn show_numbered_cfg(ui: &mut egui::Ui, cfg_text: &str) {
         .striped(false)
         .show(ui, |ui| {
             for (index, line) in cfg_text.split('\n').enumerate() {
-                ui.monospace(format!("{:>number_width$}", index + 1));
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{:>number_width$}", index + 1)).monospace(),
+                    )
+                    .selectable(false),
+                );
                 ui.monospace(line);
                 ui.end_row();
             }
