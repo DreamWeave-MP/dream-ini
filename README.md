@@ -62,6 +62,7 @@ dream-ini -M > dream-ini.1
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`, or by explicit singleton path options such as `--data-local`, `--resources`, and `--userdata`.
 - `--game-files` searches existing `data-local` cfg paths first, then explicit `--data` paths, then existing `data` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. `data-local` always wins because it is OpenMW's highest-precedence data directory. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
 - Relative `data` and `data-local` paths read from `openmw.cfg` are resolved relative to that cfg file's parent directory for content-file lookup. `resources` and `userdata` are not interpreted as cfg-relative import search paths.
+- Config, Lua, and event path values are UTF-8 text. Non-UTF-8 operating-system paths are outside the supported API contract and may be represented lossy when converted for cfg/Lua output.
 
 ## Deliberate Differences From OpenMW's C++ Importer
 
@@ -144,7 +145,7 @@ Generate crate documentation with:
 cargo doc --open
 ```
 
-The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `ImportEvent`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`.
+The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `ImportEvent`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`. Path values serialized into cfg text, Lua tables, or import events are UTF-8 strings.
 
 ## Development
 

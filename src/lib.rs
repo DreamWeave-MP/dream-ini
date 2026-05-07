@@ -3,6 +3,8 @@
 //! The crate exposes the same core importer used by the `dream-ini` CLI. Configuration data is
 //! represented as a multimap (`key -> Vec<value>`) so duplicate cfg keys such as `data`, `content`,
 //! and `fallback` are preserved without special cases.
+//! Path values exposed through cfg text, Lua tables, and import events are UTF-8 strings;
+//! non-UTF-8 operating-system paths are outside the supported API contract.
 //!
 //! # Example
 //!
