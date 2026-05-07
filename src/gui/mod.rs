@@ -13,7 +13,6 @@ use self::localization::{Localizer, UiLanguage, UiText};
 
 mod localization;
 
-const PATH_LABEL_WIDTH: f32 = 130.0;
 const CFG_KEY_DATA_LOCAL: &str = "data-local";
 const CFG_KEY_RESOURCES: &str = "resources";
 const CFG_KEY_USERDATA: &str = "userdata";
@@ -62,23 +61,10 @@ impl GuiApp {
     fn show_form(&mut self, ui: &mut egui::Ui) {
         self.show_language_selector(ui);
         ui.separator();
-        ui.heading(self.localizer.text(UiText::SourceSection));
-        path_file_row(
-            ui,
-            MORROWIND_INI_LABEL,
-            self.localizer.text(UiText::Browse),
-            &mut self.state.morrowind_ini,
-        );
-        let existing_cfg_label = format!(
-            "{} {OPENMW_CFG_LABEL}",
-            self.localizer.text(UiText::Existing)
-        );
-        path_file_row(
-            ui,
-            &existing_cfg_label,
-            self.localizer.text(UiText::Browse),
-            &mut self.state.existing_cfg,
-        );
+        let existing_cfg_label = self.existing_cfg_label();
+        let path_label_width = self.path_label_width(ui, &existing_cfg_label);
+
+        self.show_source_paths(ui, path_label_width, &existing_cfg_label);
 
         ui.separator();
         ui.heading(self.localizer.text(UiText::ImportOptions));
@@ -97,35 +83,11 @@ impl GuiApp {
         );
 
         ui.separator();
-        ui.heading(self.localizer.text(UiText::Overrides));
-        path_folder_row(
-            ui,
-            self.localizer.text(UiText::ExplicitSearchPath),
-            self.localizer.text(UiText::Browse),
-            &mut self.state.explicit_search_path,
-        );
-        path_folder_row(
-            ui,
-            CFG_KEY_DATA_LOCAL,
-            self.localizer.text(UiText::Browse),
-            &mut self.state.data_local,
-        );
-        path_folder_row(
-            ui,
-            CFG_KEY_RESOURCES,
-            self.localizer.text(UiText::Browse),
-            &mut self.state.resources,
-        );
-        path_folder_row(
-            ui,
-            CFG_KEY_USERDATA,
-            self.localizer.text(UiText::Browse),
-            &mut self.state.userdata,
-        );
+        self.show_override_paths(ui, path_label_width);
 
         ui.separator();
         ui.heading(self.localizer.text(UiText::Output));
-        self.show_output_options(ui);
+        self.show_output_options(ui, path_label_width);
 
         let disabled_reason = self.state.disabled_import_reason();
         let import_button = ui.add_enabled(
@@ -149,6 +111,78 @@ impl GuiApp {
             ui.separator();
             self.show_results(ui);
         }
+    }
+
+    fn existing_cfg_label(&self) -> String {
+        format!(
+            "{} {OPENMW_CFG_LABEL}",
+            self.localizer.text(UiText::Existing)
+        )
+    }
+
+    fn path_label_width(&self, ui: &egui::Ui, existing_cfg_label: &str) -> f32 {
+        path_label_width(
+            ui,
+            &[
+                MORROWIND_INI_LABEL,
+                existing_cfg_label,
+                self.localizer.text(UiText::ExplicitSearchPath),
+                CFG_KEY_DATA_LOCAL,
+                CFG_KEY_RESOURCES,
+                CFG_KEY_USERDATA,
+                self.localizer.text(UiText::OutputPath),
+            ],
+        )
+    }
+
+    fn show_source_paths(&mut self, ui: &mut egui::Ui, label_width: f32, existing_cfg_label: &str) {
+        ui.heading(self.localizer.text(UiText::SourceSection));
+        path_file_row(
+            ui,
+            label_width,
+            MORROWIND_INI_LABEL,
+            self.localizer.text(UiText::Browse),
+            &mut self.state.morrowind_ini,
+        );
+        path_file_row(
+            ui,
+            label_width,
+            existing_cfg_label,
+            self.localizer.text(UiText::Browse),
+            &mut self.state.existing_cfg,
+        );
+    }
+
+    fn show_override_paths(&mut self, ui: &mut egui::Ui, label_width: f32) {
+        ui.heading(self.localizer.text(UiText::Overrides));
+        path_folder_row(
+            ui,
+            label_width,
+            self.localizer.text(UiText::ExplicitSearchPath),
+            self.localizer.text(UiText::Browse),
+            &mut self.state.explicit_search_path,
+        );
+        path_folder_row(
+            ui,
+            label_width,
+            CFG_KEY_DATA_LOCAL,
+            self.localizer.text(UiText::Browse),
+            &mut self.state.data_local,
+        );
+        path_folder_row(
+            ui,
+            label_width,
+            CFG_KEY_RESOURCES,
+            self.localizer.text(UiText::Browse),
+            &mut self.state.resources,
+        );
+        path_folder_row(
+            ui,
+            label_width,
+            CFG_KEY_USERDATA,
+            self.localizer.text(UiText::Browse),
+            &mut self.state.userdata,
+        );
     }
 
     fn show_language_selector(&mut self, ui: &mut egui::Ui) {
@@ -238,7 +272,7 @@ impl GuiApp {
         }
     }
 
-    fn show_output_options(&mut self, ui: &mut egui::Ui) {
+    fn show_output_options(&mut self, ui: &mut egui::Ui, path_label_width: f32) {
         ui.radio_value(
             &mut self.state.output_mode,
             GuiOutputMode::PreviewOnly,
@@ -253,6 +287,7 @@ impl GuiApp {
             ui.add_enabled_ui(self.state.output_mode == GuiOutputMode::SaveAs, |ui| {
                 path_save_file_row(
                     ui,
+                    path_label_width,
                     self.localizer.text(UiText::OutputPath),
                     self.localizer.text(UiText::Browse),
                     &mut self.state.output_path,
@@ -583,20 +618,39 @@ fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
     }
 }
 
-fn path_file_row(ui: &mut egui::Ui, label: &str, browse: &str, value: &mut String) {
-    path_row(ui, label, browse, value, pick_file);
+fn path_file_row(
+    ui: &mut egui::Ui,
+    label_width: f32,
+    label: &str,
+    browse: &str,
+    value: &mut String,
+) {
+    path_row(ui, label_width, label, browse, value, pick_file);
 }
 
-fn path_folder_row(ui: &mut egui::Ui, label: &str, browse: &str, value: &mut String) {
-    path_row(ui, label, browse, value, pick_folder);
+fn path_folder_row(
+    ui: &mut egui::Ui,
+    label_width: f32,
+    label: &str,
+    browse: &str,
+    value: &mut String,
+) {
+    path_row(ui, label_width, label, browse, value, pick_folder);
 }
 
-fn path_save_file_row(ui: &mut egui::Ui, label: &str, browse: &str, value: &mut String) {
-    path_row(ui, label, browse, value, pick_save_file);
+fn path_save_file_row(
+    ui: &mut egui::Ui,
+    label_width: f32,
+    label: &str,
+    browse: &str,
+    value: &mut String,
+) {
+    path_row(ui, label_width, label, browse, value, pick_save_file);
 }
 
 fn path_row(
     ui: &mut egui::Ui,
+    label_width: f32,
     label: &str,
     browse: &str,
     value: &mut String,
@@ -604,7 +658,7 @@ fn path_row(
 ) {
     ui.horizontal(|ui| {
         ui.add_sized(
-            [PATH_LABEL_WIDTH, ui.spacing().interact_size.y],
+            [label_width, ui.spacing().interact_size.y],
             egui::Label::new(label),
         );
         ui.add(egui::TextEdit::singleline(value).desired_width(360.0));
@@ -614,6 +668,23 @@ fn path_row(
             *value = path;
         }
     });
+}
+
+fn path_label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    labels
+        .iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    (*label).to_owned(),
+                    font_id.clone(),
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max)
 }
 
 fn pick_file() -> Option<String> {
