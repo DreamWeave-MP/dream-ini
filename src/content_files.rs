@@ -13,20 +13,32 @@ pub(crate) struct ImportedContentFiles {
     pub(crate) events: Vec<ImportEvent>,
 }
 
-pub(crate) fn import_content_files(
-    ini: &MultiMap,
-    cfg: &MultiMap,
-    ini_path: &Path,
-    game: Game,
-    explicit_data_dirs: &[PathBuf],
-    encoding: TextEncoding,
-    verbose: bool,
-) -> Result<ImportedContentFiles, ImportError> {
-    let search_paths = build_search_paths(cfg, ini_path, explicit_data_dirs);
-    let mut events = Vec::new();
-    let mut content_files = resolve_content_files(ini, &search_paths, verbose, &mut events)?;
+#[derive(Clone, Copy)]
+pub(crate) struct ContentFileImportRequest<'a> {
+    pub(crate) ini: &'a MultiMap,
+    pub(crate) cfg: &'a MultiMap,
+    pub(crate) ini_path: &'a Path,
+    pub(crate) cfg_dir: Option<&'a Path>,
+    pub(crate) game: Game,
+    pub(crate) explicit_data_dirs: &'a [PathBuf],
+    pub(crate) encoding: TextEncoding,
+    pub(crate) verbose: bool,
+}
 
-    let data_dirs = used_data_dirs_to_write(cfg, &content_files);
+pub(crate) fn import_content_files(
+    request: ContentFileImportRequest<'_>,
+) -> Result<ImportedContentFiles, ImportError> {
+    let search_paths = build_search_paths(
+        request.cfg,
+        request.ini_path,
+        request.cfg_dir,
+        request.explicit_data_dirs,
+    );
+    let mut events = Vec::new();
+    let mut content_files =
+        resolve_content_files(request.ini, &search_paths, request.verbose, &mut events)?;
+
+    let data_dirs = used_data_dirs_to_write(request.cfg, request.cfg_dir, &content_files);
     for data_dir in &data_dirs {
         events.push(ImportEvent::DataDirAddedForContent {
             path: data_dir.clone(),
@@ -39,10 +51,10 @@ pub(crate) fn import_content_files(
             .then_with(|| left.path.cmp(&right.path))
     });
 
-    let format = game.plugin_format();
+    let format = request.game.plugin_format();
     let mut dependencies = Vec::new();
     for content_file in content_files {
-        let header = read_plugin_header(&content_file.path, format, encoding)?;
+        let header = read_plugin_header(&content_file.path, format, request.encoding)?;
         dependencies.push((header.name, header.masters));
     }
 
@@ -59,6 +71,7 @@ pub(crate) fn import_content_files(
 fn build_search_paths(
     cfg: &MultiMap,
     ini_path: &Path,
+    cfg_dir: Option<&Path>,
     explicit_data_dirs: &[PathBuf],
 ) -> Vec<ContentSearchPath> {
     let mut search_paths = Vec::new();
@@ -66,11 +79,11 @@ fn build_search_paths(
         path: fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
         origin: SearchPathOrigin::Explicit,
     }));
-    if let Some(paths) = cfg.get("data") {
-        add_search_paths(&mut search_paths, paths, SearchPathOrigin::Config);
-    }
     if let Some(paths) = cfg.get("data-local") {
-        add_search_paths(&mut search_paths, paths, SearchPathOrigin::Config);
+        add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
+    }
+    if let Some(paths) = cfg.get("data") {
+        add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
     }
     let default_data_path = ini_path
         .parent()
@@ -196,13 +209,17 @@ struct ResolvedContentFile {
     search_path_origin: SearchPathOrigin,
 }
 
-fn used_data_dirs_to_write(cfg: &MultiMap, content_files: &[ResolvedContentFile]) -> Vec<PathBuf> {
+fn used_data_dirs_to_write(
+    cfg: &MultiMap,
+    cfg_dir: Option<&Path>,
+    content_files: &[ResolvedContentFile],
+) -> Vec<PathBuf> {
     let mut used_paths: Vec<PathBuf> = Vec::new();
     for content_file in content_files {
         if content_file.search_path_origin == SearchPathOrigin::Config {
             continue;
         }
-        if !has_equivalent_data_path(cfg, &content_file.data_path)
+        if !has_equivalent_data_path(cfg, cfg_dir, &content_file.data_path)
             && !used_paths
                 .iter()
                 .any(|path| equivalent_paths(path.as_path(), &content_file.data_path))
@@ -216,13 +233,25 @@ fn used_data_dirs_to_write(cfg: &MultiMap, content_files: &[ResolvedContentFile]
 fn add_search_paths(
     output: &mut Vec<ContentSearchPath>,
     input: &[String],
+    cfg_dir: Option<&Path>,
     origin: SearchPathOrigin,
 ) {
     for path in input {
         output.push(ContentSearchPath {
-            path: PathBuf::from(unquote_path(path)),
+            path: resolve_cfg_path(unquote_path(path), cfg_dir),
             origin,
         });
+    }
+}
+
+fn resolve_cfg_path(path: &str, cfg_dir: Option<&Path>) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_owned()
+    } else if let Some(cfg_dir) = cfg_dir {
+        cfg_dir.join(path)
+    } else {
+        path.to_owned()
     }
 }
 
@@ -232,12 +261,12 @@ fn unquote_path(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-fn has_equivalent_data_path(cfg: &MultiMap, path: &Path) -> bool {
+fn has_equivalent_data_path(cfg: &MultiMap, cfg_dir: Option<&Path>, path: &Path) -> bool {
     ["data", "data-local"].iter().any(|key| {
         cfg.get(*key).is_some_and(|values| {
-            values
-                .iter()
-                .any(|value| equivalent_paths(Path::new(unquote_path(value)), path))
+            values.iter().any(|value| {
+                equivalent_paths(&resolve_cfg_path(unquote_path(value), cfg_dir), path)
+            })
         })
     })
 }

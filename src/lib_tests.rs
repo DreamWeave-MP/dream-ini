@@ -471,6 +471,88 @@ fn default_data_files_path_is_not_added_when_config_data_resolves_content() {
 }
 
 #[test]
+fn cfg_data_paths_are_relative_to_cfg_parent() {
+    let dir = unique_test_dir("game-files-cfg-relative-data");
+    let cfg_dir = dir.join("config");
+    let data_dir = cfg_dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    let cfg = cfg_dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&cfg, "data=Data Files\n").unwrap();
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let result = importer.import_paths(&ini, &cfg).unwrap();
+
+    assert_eq!(values(&result.cfg, "content"), &["Base.esm".to_owned()]);
+    assert_eq!(values(&result.cfg, "data"), &["Data Files".to_owned()]);
+    assert!(result.events.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn import_maps_uses_explicit_cfg_dir_for_relative_data_paths() {
+    let dir = unique_test_dir("game-files-import-maps-cfg-dir");
+    let cfg_dir = dir.join("config");
+    let data_dir = cfg_dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let mut cfg = parse_cfg_str("data=Data Files\n");
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        cfg_dir: Some(cfg_dir),
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+    assert_eq!(values(&cfg, "data"), &["Data Files".to_owned()]);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cfg_data_local_takes_precedence_over_cfg_data() {
+    let dir = unique_test_dir("game-files-data-local-precedence");
+    let cfg_dir = dir.join("config");
+    let data_dir = cfg_dir.join("Data Files");
+    let local_dir = cfg_dir.join("Local Data");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::create_dir_all(&local_dir).unwrap();
+    fs::write(data_dir.join("Patch.esp"), b"TES4").unwrap();
+    fs::write(local_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
+    let cfg = cfg_dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&cfg, "data=Data Files\ndata-local=Local Data\n").unwrap();
+    fs::write(&ini, "[Game Files]\nGameFile0=Patch.esp\n").unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let result = importer.import_paths(&ini, &cfg).unwrap();
+
+    assert_eq!(values(&result.cfg, "content"), &["Patch.esp".to_owned()]);
+    assert_eq!(values(&result.cfg, "data"), &["Data Files".to_owned()]);
+    assert_eq!(
+        values(&result.cfg, "data-local"),
+        &["Local Data".to_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn missing_default_data_files_path_fails_import() {
     let dir = unique_test_dir("game-files-default-data-missing");
     fs::create_dir_all(&dir).unwrap();

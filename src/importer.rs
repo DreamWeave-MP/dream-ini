@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::content_files::import_content_files;
+use crate::content_files::{ContentFileImportRequest, import_content_files};
 use crate::events::ImportEvent;
 use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
 use crate::parser::{
@@ -20,6 +20,7 @@ pub struct ImportOptions {
     pub data_local: Option<PathBuf>,
     pub resources: Option<PathBuf>,
     pub userdata: Option<PathBuf>,
+    pub cfg_dir: Option<PathBuf>,
     pub encoding: Option<TextEncoding>,
     pub verbose: bool,
 }
@@ -35,6 +36,7 @@ impl Default for ImportOptions {
             data_local: None,
             resources: None,
             userdata: None,
+            cfg_dir: None,
             encoding: None,
             verbose: false,
         }
@@ -92,13 +94,19 @@ impl IniImporter {
             Some(path) if path.exists() => parse_cfg_str(&read_to_string(path)?),
             _ => MultiMap::new(),
         };
+        let cfg_dir = cfg_path.and_then(Path::parent).map(Path::to_owned);
 
         let encoding = self.effective_encoding(&cfg)?;
         set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
 
         let ini_bytes = read_bytes(ini_path)?;
         let parsed_ini = parse_ini_bytes_with_warnings(&ini_bytes, encoding);
-        let mut report = self.import_maps(&mut cfg, &parsed_ini.entries, ini_path)?;
+        let mut report = self.import_maps_with_cfg_dir(
+            &mut cfg,
+            &parsed_ini.entries,
+            ini_path,
+            cfg_dir.as_deref(),
+        )?;
         report.warnings.splice(0..0, parsed_ini.warnings);
         Ok(ImportResult {
             cfg,
@@ -118,6 +126,16 @@ impl IniImporter {
         ini: &MultiMap,
         ini_path: &Path,
     ) -> Result<ImportReport, ImportError> {
+        self.import_maps_with_cfg_dir(cfg, ini, ini_path, self.options.cfg_dir.as_deref())
+    }
+
+    fn import_maps_with_cfg_dir(
+        &self,
+        cfg: &mut MultiMap,
+        ini: &MultiMap,
+        ini_path: &Path,
+        cfg_dir: Option<&Path>,
+    ) -> Result<ImportReport, ImportError> {
         let warnings = Vec::new();
         let mut events = Vec::new();
         let mut imported_cfg = cfg.clone();
@@ -128,15 +146,16 @@ impl IniImporter {
 
         if self.options.import_game_files {
             let encoding = self.effective_encoding(&imported_cfg)?;
-            let imported_content = import_content_files(
+            let imported_content = import_content_files(ContentFileImportRequest {
                 ini,
-                &imported_cfg,
+                cfg: &imported_cfg,
                 ini_path,
-                self.options.game,
-                &self.options.data_dirs,
+                cfg_dir,
+                game: self.options.game,
+                explicit_data_dirs: &self.options.data_dirs,
                 encoding,
-                self.options.verbose,
-            )?;
+                verbose: self.options.verbose,
+            })?;
             for data_dir in imported_content.data_dirs {
                 insert_multimap(
                     &mut imported_cfg,
