@@ -51,6 +51,7 @@ struct GuiApp {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_shortcuts(context);
         egui::CentralPanel::default().show(context, |ui| {
             self.show_form(ui);
         });
@@ -58,6 +59,17 @@ impl eframe::App for GuiApp {
 }
 
 impl GuiApp {
+    fn handle_shortcuts(&mut self, context: &egui::Context) {
+        if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+            context.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if context.input(|input| input.key_pressed(egui::Key::Enter))
+            && self.state.disabled_import_reason().is_none()
+        {
+            self.run_import();
+        }
+    }
+
     fn show_form(&mut self, ui: &mut egui::Ui) {
         self.show_language_selector(ui);
         ui.separator();
@@ -76,11 +88,13 @@ impl GuiApp {
         ui.checkbox(
             &mut self.state.import_archives,
             self.localizer.text(UiText::ImportArchives),
-        );
+        )
+        .on_hover_text(self.localizer.text(UiText::ImportArchivesTooltip));
         ui.checkbox(
             &mut self.state.import_content_files,
             self.localizer.text(UiText::ImportContentFiles),
-        );
+        )
+        .on_hover_text(self.localizer.text(UiText::ImportContentFilesTooltip));
 
         ui.separator();
         self.show_override_paths(ui, path_label_width);
@@ -102,15 +116,19 @@ impl GuiApp {
             ));
         }
         if import_button.clicked() {
-            let result = self.state.run_import();
-            self.selected_result_panel = result.default_panel();
-            self.result = Some(result);
+            self.run_import();
         }
 
         if self.result.is_some() {
             ui.separator();
             self.show_results(ui);
         }
+    }
+
+    fn run_import(&mut self) {
+        let result = self.state.run_import();
+        self.selected_result_panel = result.default_panel();
+        self.result = Some(result);
     }
 
     fn existing_cfg_label(&self) -> String {
@@ -161,6 +179,7 @@ impl GuiApp {
             self.localizer.text(UiText::ExplicitSearchPath),
             self.localizer.text(UiText::Browse),
             &mut self.state.explicit_search_path,
+            Some(self.localizer.text(UiText::ExplicitSearchPathTooltip)),
         );
         path_folder_row(
             ui,
@@ -168,6 +187,7 @@ impl GuiApp {
             CFG_KEY_DATA_LOCAL,
             self.localizer.text(UiText::Browse),
             &mut self.state.data_local,
+            Some(self.localizer.text(UiText::DataLocalTooltip)),
         );
         path_folder_row(
             ui,
@@ -175,6 +195,7 @@ impl GuiApp {
             CFG_KEY_RESOURCES,
             self.localizer.text(UiText::Browse),
             &mut self.state.resources,
+            Some(self.localizer.text(UiText::ResourcesTooltip)),
         );
         path_folder_row(
             ui,
@@ -182,6 +203,7 @@ impl GuiApp {
             CFG_KEY_USERDATA,
             self.localizer.text(UiText::Browse),
             &mut self.state.userdata,
+            Some(self.localizer.text(UiText::UserdataTooltip)),
         );
     }
 
@@ -233,6 +255,11 @@ impl GuiApp {
                 ),
             );
         }
+        let copy_text = match &self.result {
+            Some(GuiImportResult::Success { cfg_text, .. }) => Some(cfg_text.clone()),
+            Some(GuiImportResult::Error { .. }) | None => None,
+        };
+        let mut clear_results = false;
         ui.horizontal(|ui| {
             result_tab(
                 ui,
@@ -258,7 +285,26 @@ impl GuiApp {
                 ResultPanel::GeneratedCfg,
                 self.localizer.text(UiText::GeneratedCfg),
             );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        copy_text.is_some(),
+                        egui::Button::new(self.localizer.text(UiText::Copy)),
+                    )
+                    .clicked()
+                    && let Some(text) = &copy_text
+                {
+                    ui.ctx().copy_text(text.clone());
+                }
+                if ui.button(self.localizer.text(UiText::Clear)).clicked() {
+                    clear_results = true;
+                }
+            });
         });
+        if clear_results {
+            self.result = None;
+            return;
+        }
         ui.separator();
 
         let Some(result) = &mut self.result else {
@@ -488,7 +534,8 @@ fn result_tab(ui: &mut egui::Ui, selected: &mut ResultPanel, panel: ResultPanel,
 
 fn encoding_dropdown(ui: &mut egui::Ui, localizer: Localizer, encoding: &mut TextEncoding) {
     ui.horizontal(|ui| {
-        ui.label(localizer.text(UiText::Encoding));
+        ui.label(localizer.text(UiText::Encoding))
+            .on_hover_text(localizer.text(UiText::EncodingTooltip));
         egui::ComboBox::from_id_salt("import-encoding")
             .selected_text(encoding_label(*encoding))
             .show_ui(ui, |ui| {
@@ -567,9 +614,6 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
         ui.label(localizer.text(UiText::NoGeneratedCfg));
         return;
     };
-    if ui.button(localizer.text(UiText::Copy)).clicked() {
-        ui.ctx().copy_text(cfg_text.clone());
-    }
     ui.scope(|ui| {
         ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::both()
@@ -623,7 +667,7 @@ fn path_file_row(
     browse: &str,
     value: &mut String,
 ) {
-    path_row(ui, label_width, label, browse, value, pick_file);
+    path_row_plain(ui, label_width, label, browse, value, pick_file);
 }
 
 fn path_folder_row(
@@ -632,8 +676,9 @@ fn path_folder_row(
     label: &str,
     browse: &str,
     value: &mut String,
+    tooltip: Option<&str>,
 ) {
-    path_row(ui, label_width, label, browse, value, pick_folder);
+    path_row(ui, label_width, label, browse, value, tooltip, pick_folder);
 }
 
 fn path_save_file_row(
@@ -643,7 +688,18 @@ fn path_save_file_row(
     browse: &str,
     value: &mut String,
 ) {
-    path_row(ui, label_width, label, browse, value, pick_save_file);
+    path_row_plain(ui, label_width, label, browse, value, pick_save_file);
+}
+
+fn path_row_plain(
+    ui: &mut egui::Ui,
+    label_width: f32,
+    label: &str,
+    browse: &str,
+    value: &mut String,
+    pick: impl FnOnce() -> Option<String>,
+) {
+    path_row(ui, label_width, label, browse, value, None, pick);
 }
 
 fn path_row(
@@ -652,11 +708,15 @@ fn path_row(
     label: &str,
     browse: &str,
     value: &mut String,
+    tooltip: Option<&str>,
     pick: impl FnOnce() -> Option<String>,
 ) {
     ui.horizontal(|ui| {
         let row_height = ui.spacing().interact_size.y;
-        ui.add_sized([label_width, row_height], egui::Label::new(label));
+        let label_response = ui.add_sized([label_width, row_height], egui::Label::new(label));
+        if let Some(tooltip) = tooltip {
+            label_response.on_hover_text(tooltip);
+        }
         let browse_button_width = button_width(ui, browse);
         let text_width = (ui.available_width() - browse_button_width - ui.spacing().item_spacing.x)
             .max(ui.spacing().interact_size.x);

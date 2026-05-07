@@ -32,6 +32,22 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Events => "Événements",
         UiText::GeneratedCfg => "Cfg généré",
         UiText::Copy => "Copier",
+        UiText::Clear => "Effacer",
+        UiText::EncodingTooltip => "Encodage des caractères utilisé pour lire Morrowind.ini.",
+        UiText::ImportArchivesTooltip => {
+            "Importe les entrées fallback-archive et résout les fichiers .bsa référencés."
+        }
+        UiText::ImportContentFilesTooltip => {
+            "Importe les entrées GameFile comme ordre de chargement et résout les plugins référencés."
+        }
+        UiText::ExplicitSearchPathTooltip => {
+            "Racine optionnelle d’installation/Data Files utilisée pour trouver contenu et archives."
+        }
+        UiText::DataLocalTooltip => {
+            "Remplace le chemin data-local d’OpenMW. Ce chemin de recherche est prioritaire."
+        }
+        UiText::ResourcesTooltip => "Remplace le chemin resources écrit dans openmw.cfg.",
+        UiText::UserdataTooltip => "Remplace le chemin userdata écrit dans openmw.cfg.",
         UiText::NoErrors => "Aucune erreur.",
         UiText::NoWarnings => "Aucun avertissement.",
         UiText::NoEvents => "Aucun événement.",
