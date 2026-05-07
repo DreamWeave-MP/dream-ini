@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use dream_ini::{ImportEvent, ImportOptions, ImportWarning, IniImporter, serialize_cfg};
+use dream_ini::{
+    ImportError, ImportEvent, ImportOptions, ImportWarning, IniImporter, serialize_cfg,
+};
 use eframe::egui;
 
 use self::localization::{Localizer, UiText};
@@ -30,6 +32,7 @@ struct GuiApp {
     localizer: Localizer,
     state: ImportFormState,
     result: Option<GuiImportResult>,
+    selected_result_panel: ResultPanel,
 }
 
 impl eframe::App for GuiApp {
@@ -103,28 +106,55 @@ impl GuiApp {
             .button(self.localizer.text(UiText::ImportPreview))
             .clicked()
         {
-            self.result = Some(self.state.import_preview());
+            let result = self.state.import_preview();
+            self.selected_result_panel = result.default_panel();
+            self.result = Some(result);
         }
 
-        if let Some(result) = &self.result {
+        if self.result.is_some() {
             ui.separator();
-            match result {
-                GuiImportResult::Success {
-                    cfg_text,
-                    warnings,
-                    events,
-                } => {
-                    ui.label(format!(
-                        "Preview generated {} bytes of cfg text, with {} warning(s) and {} event(s).",
-                        cfg_text.len(),
-                        warnings.len(),
-                        events.len()
-                    ));
-                }
-                GuiImportResult::Error { message } => {
-                    ui.colored_label(egui::Color32::RED, message);
-                }
-            }
+            self.show_results(ui);
+        }
+    }
+
+    fn show_results(&mut self, ui: &mut egui::Ui) {
+        ui.heading(self.localizer.text(UiText::Results));
+        ui.horizontal(|ui| {
+            result_tab(
+                ui,
+                &mut self.selected_result_panel,
+                ResultPanel::Errors,
+                self.localizer.text(UiText::Errors),
+            );
+            result_tab(
+                ui,
+                &mut self.selected_result_panel,
+                ResultPanel::Warnings,
+                self.localizer.text(UiText::Warnings),
+            );
+            result_tab(
+                ui,
+                &mut self.selected_result_panel,
+                ResultPanel::Events,
+                self.localizer.text(UiText::Events),
+            );
+            result_tab(
+                ui,
+                &mut self.selected_result_panel,
+                ResultPanel::GeneratedCfg,
+                self.localizer.text(UiText::GeneratedCfg),
+            );
+        });
+        ui.separator();
+
+        let Some(result) = &mut self.result else {
+            return;
+        };
+        match self.selected_result_panel {
+            ResultPanel::Errors => show_error_panel(ui, self.localizer, result),
+            ResultPanel::Warnings => show_warning_panel(ui, self.localizer, result),
+            ResultPanel::Events => show_event_panel(ui, self.localizer, result),
+            ResultPanel::GeneratedCfg => show_generated_cfg_panel(ui, self.localizer, result),
         }
     }
 
@@ -186,7 +216,9 @@ impl ImportFormState {
     fn import_preview(&self) -> GuiImportResult {
         let Some(ini_path) = optional_path(&self.morrowind_ini) else {
             return GuiImportResult::Error {
-                message: "Select a Morrowind.ini file before importing.".to_owned(),
+                error: GuiImportError::Validation(
+                    "Select a Morrowind.ini file before importing.".to_owned(),
+                ),
             };
         };
         let cfg_path = optional_path(&self.existing_cfg);
@@ -199,7 +231,7 @@ impl ImportFormState {
                 events: result.events,
             },
             Err(error) => GuiImportResult::Error {
-                message: error.to_string(),
+                error: GuiImportError::Import(error),
             },
         }
     }
@@ -223,7 +255,7 @@ impl ImportFormState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum GuiImportResult {
     Success {
         cfg_text: String,
@@ -231,8 +263,106 @@ enum GuiImportResult {
         events: Vec<ImportEvent>,
     },
     Error {
-        message: String,
+        error: GuiImportError,
     },
+}
+
+impl GuiImportResult {
+    const fn default_panel(&self) -> ResultPanel {
+        match self {
+            Self::Success { .. } => ResultPanel::GeneratedCfg,
+            Self::Error { .. } => ResultPanel::Errors,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum GuiImportError {
+    Validation(String),
+    Import(ImportError),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ResultPanel {
+    Errors,
+    Warnings,
+    Events,
+    #[default]
+    GeneratedCfg,
+}
+
+fn result_tab(ui: &mut egui::Ui, selected: &mut ResultPanel, panel: ResultPanel, label: &str) {
+    if ui.selectable_label(*selected == panel, label).clicked() {
+        *selected = panel;
+    }
+}
+
+fn show_error_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
+    match result {
+        GuiImportResult::Success { .. } => {
+            ui.label("No errors.");
+        }
+        GuiImportResult::Error { error } => {
+            ui.colored_label(egui::Color32::RED, error_title(localizer, error));
+        }
+    }
+}
+
+fn show_warning_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
+    let GuiImportResult::Success { warnings, .. } = result else {
+        ui.label("No warnings.");
+        return;
+    };
+    if warnings.is_empty() {
+        ui.label("No warnings.");
+        return;
+    }
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for warning in warnings {
+            ui.label(localizer.warning_title(warning));
+        }
+    });
+}
+
+fn show_event_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
+    let GuiImportResult::Success { events, .. } = result else {
+        ui.label("No events.");
+        return;
+    };
+    if events.is_empty() {
+        ui.label("No events.");
+        return;
+    }
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for event in events {
+            ui.label(localizer.event_title(event));
+        }
+    });
+}
+
+fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mut GuiImportResult) {
+    let GuiImportResult::Success { cfg_text, .. } = result else {
+        ui.label("No generated cfg.");
+        return;
+    };
+    if ui.button(localizer.text(UiText::Copy)).clicked() {
+        ui.ctx().copy_text(cfg_text.clone());
+    }
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.add(
+            egui::TextEdit::multiline(cfg_text)
+                .font(egui::TextStyle::Monospace)
+                .desired_rows(18)
+                .interactive(false),
+        );
+    });
+}
+
+fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
+    match error {
+        GuiImportError::Validation(message) => message.clone(),
+        GuiImportError::Import(error) => localizer.error_title(error),
+    }
 }
 
 fn path_file_row(ui: &mut egui::Ui, label: &str, browse: &str, value: &mut String) {
