@@ -33,7 +33,7 @@ pub(super) struct PathPickerState {
     error: Option<String>,
     output_file_name: String,
     current_dir_readable: bool,
-    show_hidden_files: bool,
+    show_hidden_directories: bool,
 }
 
 impl PathPickerState {
@@ -65,7 +65,7 @@ impl PathPickerState {
             error: None,
             output_file_name,
             current_dir_readable: false,
-            show_hidden_files: false,
+            show_hidden_directories: false,
         };
         state.refresh();
         state
@@ -107,16 +107,15 @@ impl PathPickerState {
             }
         });
 
-        if self.target.displays_file() {
-            let response = ui.checkbox(
-                &mut self.show_hidden_files,
-                localizer.text(UiText::ShowHiddenFiles),
-            );
-            if response.changed() {
-                self.refresh();
-            }
+        if ui
+            .checkbox(
+                &mut self.show_hidden_directories,
+                localizer.text(UiText::ShowHiddenDirectories),
+            )
+            .changed()
+        {
+            self.refresh();
         }
-
         if let Some(error) = &self.error {
             ui.colored_label(egui::Color32::RED, error);
         }
@@ -195,7 +194,7 @@ impl PathPickerState {
     }
 
     fn refresh(&mut self) {
-        match read_entries(self.target, &self.current_dir, self.show_hidden_files) {
+        match read_entries(self.target, &self.current_dir, self.show_hidden_directories) {
             Ok(ReadEntries {
                 entries,
                 skipped_entries,
@@ -405,7 +404,7 @@ struct ReadEntries {
 fn read_entries(
     target: PathTarget,
     directory: &Path,
-    show_hidden_files: bool,
+    show_hidden_directories: bool,
 ) -> std::io::Result<ReadEntries> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
@@ -430,16 +429,13 @@ fn read_entries(
             continue;
         };
         let name = entry.file_name().to_string_lossy().into_owned();
-        if metadata.is_dir() {
+        if metadata.is_dir() && (show_hidden_directories || !is_hidden_name(&name)) {
             directories.push(PathEntry {
                 name,
                 path,
                 kind: EntryKind::Directory,
             });
-        } else if metadata.is_file()
-            && target.displays_file()
-            && (show_hidden_files || !is_hidden_name(&name))
-        {
+        } else if metadata.is_file() && target.displays_file_name(&entry.file_name()) {
             files.push(PathEntry {
                 name,
                 path,
@@ -490,10 +486,16 @@ fn is_hidden_name(file_name: &str) -> bool {
 }
 
 impl PathTarget {
-    fn displays_file(self) -> bool {
-        match self.pick_kind() {
-            PickKind::Directory => false,
-            PickKind::ExistingFile | PickKind::OutputCfg => true,
+    fn displays_file_name(self, file_name: &OsStr) -> bool {
+        self.expected_file_name()
+            .is_some_and(|expected_file_name| file_name == OsStr::new(expected_file_name))
+    }
+
+    const fn expected_file_name(self) -> Option<&'static str> {
+        match self {
+            Self::MorrowindIni => Some("Morrowind.ini"),
+            Self::ExistingOpenmwCfg | Self::OutputCfg => Some("openmw.cfg"),
+            Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserdataDir => None,
         }
     }
 }
@@ -511,7 +513,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lists_directories_and_files_for_file_targets() {
+    fn lists_directories_and_expected_file_for_file_targets() {
         let root = unique_temp_dir();
         fs::create_dir(root.join("Data Files")).unwrap();
         fs::create_dir(root.join("Saves")).unwrap();
@@ -527,8 +529,8 @@ mod tests {
         assert!(names.contains(&"Data Files".to_owned()));
         assert!(names.contains(&"Saves".to_owned()));
         assert!(names.contains(&"Morrowind.ini".to_owned()));
-        assert!(names.contains(&"openmw.cfg".to_owned()));
-        assert!(names.contains(&"notes.txt".to_owned()));
+        assert!(!names.contains(&"openmw.cfg".to_owned()));
+        assert!(!names.contains(&"notes.txt".to_owned()));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -551,11 +553,12 @@ mod tests {
     }
 
     #[test]
-    fn file_targets_hide_dotfiles_until_enabled() {
+    fn hidden_directories_are_optionally_shown() {
         let root = unique_temp_dir();
         fs::create_dir(root.join(".hidden-dir")).unwrap();
+        fs::create_dir(root.join("visible-dir")).unwrap();
         File::create(root.join(".hidden.cfg")).unwrap();
-        File::create(root.join("visible.cfg")).unwrap();
+        File::create(root.join("openmw.cfg")).unwrap();
 
         let hidden_disabled = read_entries(PathTarget::ExistingOpenmwCfg, &root, false)
             .unwrap()
@@ -569,10 +572,12 @@ mod tests {
             .collect();
         let enabled_names: Vec<_> = hidden_enabled.into_iter().map(|entry| entry.name).collect();
 
-        assert!(disabled_names.contains(&".hidden-dir".to_owned()));
-        assert!(disabled_names.contains(&"visible.cfg".to_owned()));
+        assert!(disabled_names.contains(&"visible-dir".to_owned()));
+        assert!(disabled_names.contains(&"openmw.cfg".to_owned()));
+        assert!(!disabled_names.contains(&".hidden-dir".to_owned()));
         assert!(!disabled_names.contains(&".hidden.cfg".to_owned()));
-        assert!(enabled_names.contains(&".hidden.cfg".to_owned()));
+        assert!(enabled_names.contains(&".hidden-dir".to_owned()));
+        assert!(!enabled_names.contains(&".hidden.cfg".to_owned()));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -606,9 +611,9 @@ mod tests {
     fn follows_symlinks_for_picker_entries() {
         let root = unique_temp_dir();
         fs::create_dir(root.join("RealDir")).unwrap();
-        File::create(root.join("Morrowind.ini")).unwrap();
+        File::create(root.join("Real.ini")).unwrap();
         std::os::unix::fs::symlink(root.join("RealDir"), root.join("LinkedDir")).unwrap();
-        std::os::unix::fs::symlink(root.join("Morrowind.ini"), root.join("Linked.ini")).unwrap();
+        std::os::unix::fs::symlink(root.join("Real.ini"), root.join("Morrowind.ini")).unwrap();
 
         let directory_entries = read_entries(PathTarget::UserdataDir, &root, false)
             .unwrap()
@@ -625,7 +630,7 @@ mod tests {
         assert!(
             file_entries
                 .iter()
-                .any(|entry| entry.name == "Linked.ini" && entry.kind == EntryKind::File)
+                .any(|entry| entry.name == "Morrowind.ini" && entry.kind == EntryKind::File)
         );
 
         fs::remove_dir_all(root).unwrap();

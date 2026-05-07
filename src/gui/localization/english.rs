@@ -70,7 +70,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::CurrentDirectory => "Current directory:",
         UiText::ParentDirectory => "Parent",
         UiText::RefreshDirectory => "Refresh",
-        UiText::ShowHiddenFiles => "Show hidden files",
+        UiText::ShowHiddenDirectories => "Show hidden directories",
         UiText::SelectedPath => "Selected:",
         UiText::OutputFileName => "File name",
         UiText::SelectMorrowindIni => "Select Morrowind.ini",

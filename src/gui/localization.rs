@@ -66,7 +66,7 @@ pub(super) enum UiText {
     CurrentDirectory,
     ParentDirectory,
     RefreshDirectory,
-    ShowHiddenFiles,
+    ShowHiddenDirectories,
     SelectedPath,
     OutputFileName,
     SelectMorrowindIni,

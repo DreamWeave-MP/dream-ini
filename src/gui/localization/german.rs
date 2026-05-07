@@ -72,7 +72,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::CurrentDirectory => "Aktuelles Verzeichnis:",
         UiText::ParentDirectory => "Übergeordnet",
         UiText::RefreshDirectory => "Aktualisieren",
-        UiText::ShowHiddenFiles => "Versteckte Dateien anzeigen",
+        UiText::ShowHiddenDirectories => "Versteckte Verzeichnisse anzeigen",
         UiText::SelectedPath => "Ausgewählt:",
         UiText::OutputFileName => "Dateiname",
         UiText::SelectMorrowindIni => "Morrowind.ini auswählen",
