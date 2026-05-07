@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::events::ImportEvent;
 use crate::plugin::{apply_morrowind_expansion_order, dependency_sort, read_plugin_header};
 use crate::{Game, ImportError, MultiMap, TextEncoding};
 
@@ -9,7 +10,7 @@ use crate::{Game, ImportError, MultiMap, TextEncoding};
 pub(crate) struct ImportedContentFiles {
     pub(crate) content: Vec<String>,
     pub(crate) data_dirs: Vec<PathBuf>,
-    pub(crate) messages: Vec<String>,
+    pub(crate) events: Vec<ImportEvent>,
 }
 
 pub(crate) fn import_content_files(
@@ -22,15 +23,14 @@ pub(crate) fn import_content_files(
     verbose: bool,
 ) -> Result<ImportedContentFiles, ImportError> {
     let search_paths = build_search_paths(cfg, ini_path, explicit_data_dirs);
-    let mut messages = Vec::new();
-    let mut content_files = resolve_content_files(ini, &search_paths, verbose, &mut messages)?;
+    let mut events = Vec::new();
+    let mut content_files = resolve_content_files(ini, &search_paths, verbose, &mut events)?;
 
     let data_dirs = used_data_dirs_to_write(cfg, &content_files);
     for data_dir in &data_dirs {
-        messages.push(format!(
-            "adding data directory used to resolve content files: {}",
-            data_dir.display()
-        ));
+        events.push(ImportEvent::DataDirAddedForContent {
+            path: data_dir.clone(),
+        });
     }
 
     content_files.sort_by(|left, right| {
@@ -52,7 +52,7 @@ pub(crate) fn import_content_files(
     Ok(ImportedContentFiles {
         content,
         data_dirs,
-        messages,
+        events,
     })
 }
 
@@ -88,7 +88,7 @@ fn resolve_content_files(
     ini: &MultiMap,
     search_paths: &[ContentSearchPath],
     verbose: bool,
-    messages: &mut Vec<String>,
+    events: &mut Vec<ImportEvent>,
 ) -> Result<Vec<ResolvedContentFile>, ImportError> {
     let mut content_files = Vec::new();
     let mut missing_content_files = Vec::new();
@@ -101,7 +101,7 @@ fn resolve_content_files(
             return Err(ImportError::InvalidContentFileName(file.to_owned()));
         }
 
-        if let Some(entry) = resolve_content_file(file, search_paths, verbose, messages) {
+        if let Some(entry) = resolve_content_file(file, search_paths, verbose, events) {
             content_files.push(entry);
         } else {
             missing_content_files.push(file.to_owned());
@@ -125,7 +125,7 @@ fn resolve_content_file(
     file: &str,
     search_paths: &[ContentSearchPath],
     verbose: bool,
-    messages: &mut Vec<String>,
+    events: &mut Vec<ImportEvent>,
 ) -> Option<ResolvedContentFile> {
     for search_path in search_paths {
         let candidate = search_path.path.join(file);
@@ -133,11 +133,10 @@ fn resolve_content_file(
             let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
             let path = fs::canonicalize(&candidate).unwrap_or(candidate);
             if verbose {
-                messages.push(format!(
-                    "content file: {} timestamp = ({})",
-                    path.display(),
-                    system_time_seconds(modified)
-                ));
+                events.push(ImportEvent::ContentFileResolved {
+                    path: path.clone(),
+                    modified,
+                });
             }
             return Some(ResolvedContentFile {
                 sort_key: system_time_key(modified),
@@ -259,10 +258,4 @@ fn system_time_key(time: SystemTime) -> u128 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
-}
-
-fn system_time_seconds(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }

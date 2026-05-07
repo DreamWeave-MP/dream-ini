@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::content_files::import_content_files;
+use crate::events::format_import_events;
 use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
 use crate::parser::{
     insert_multimap, parse_cfg_str, parse_ini_bytes_with_warnings, set_single_value,
@@ -144,7 +145,7 @@ impl IniImporter {
                 );
             }
             imported_cfg.insert("content".to_owned(), imported_content.content);
-            messages.extend(imported_content.messages);
+            messages.extend(format_import_events(&imported_content.events));
         }
 
         if self.options.import_archives {
