@@ -75,13 +75,13 @@ fn build_search_paths(
     explicit_data_dirs: &[PathBuf],
 ) -> Vec<ContentSearchPath> {
     let mut search_paths = Vec::new();
+    if let Some(paths) = cfg.get("data-local") {
+        add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
+    }
     search_paths.extend(explicit_data_dirs.iter().map(|path| ContentSearchPath {
         path: fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
         origin: SearchPathOrigin::Explicit,
     }));
-    if let Some(paths) = cfg.get("data-local") {
-        add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
-    }
     if let Some(paths) = cfg.get("data") {
         add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
     }
