@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use dream_ini::{
@@ -9,8 +9,10 @@ use eframe::egui;
 
 use crate::command::save_config_text;
 
+use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
 
+mod file_picker;
 mod localization;
 
 const CFG_KEY_DATA_LOCAL: &str = "data-local";
@@ -41,25 +43,45 @@ pub(crate) fn run() -> ExitCode {
     }
 }
 
-#[derive(Default)]
 struct GuiApp {
     localizer: Localizer,
     state: ImportFormState,
     result: Option<GuiImportResult>,
     selected_result_panel: ResultPanel,
+    mode: GuiMode,
+}
+
+impl Default for GuiApp {
+    fn default() -> Self {
+        Self {
+            localizer: Localizer::default(),
+            state: ImportFormState::default(),
+            result: None,
+            selected_result_panel: ResultPanel::default(),
+            mode: GuiMode::ImportForm,
+        }
+    }
+}
+
+enum GuiMode {
+    ImportForm,
+    PathPicker(PathPickerState),
 }
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_shortcuts(context);
         egui::CentralPanel::default().show(context, |ui| {
-            self.show_form(ui);
+            self.show_current_mode(ui);
         });
     }
 }
 
 impl GuiApp {
     fn handle_shortcuts(&mut self, context: &egui::Context) {
+        if !matches!(self.mode, GuiMode::ImportForm) {
+            return;
+        }
         if context.input(|input| input.key_pressed(egui::Key::Escape)) {
             context.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -67,6 +89,20 @@ impl GuiApp {
             && self.state.disabled_import_reason().is_none()
         {
             self.run_import();
+        }
+    }
+
+    fn show_current_mode(&mut self, ui: &mut egui::Ui) {
+        match &mut self.mode {
+            GuiMode::ImportForm => self.show_form(ui),
+            GuiMode::PathPicker(picker) => match picker.ui(ui, self.localizer) {
+                PickOutcome::None => {}
+                PickOutcome::Cancelled => self.mode = GuiMode::ImportForm,
+                PickOutcome::Chosen { target, path } => {
+                    self.apply_picked_path(target, &path);
+                    self.mode = GuiMode::ImportForm;
+                }
+            },
         }
     }
 
@@ -155,56 +191,74 @@ impl GuiApp {
 
     fn show_source_paths(&mut self, ui: &mut egui::Ui, label_width: f32, existing_cfg_label: &str) {
         ui.heading(self.localizer.text(UiText::SourceSection));
-        path_file_row(
+        if path_file_row(
             ui,
             label_width,
             MORROWIND_INI_LABEL,
             self.localizer.text(UiText::Browse),
             &mut self.state.morrowind_ini,
-        );
-        path_file_row(
+        ) {
+            let current_value = self.state.morrowind_ini.clone();
+            self.open_path_picker(PathTarget::MorrowindIni, &current_value);
+        }
+        if path_file_row(
             ui,
             label_width,
             existing_cfg_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.existing_cfg,
-        );
+        ) {
+            let current_value = self.state.existing_cfg.clone();
+            self.open_path_picker(PathTarget::ExistingOpenmwCfg, &current_value);
+        }
     }
 
     fn show_override_paths(&mut self, ui: &mut egui::Ui, label_width: f32) {
         ui.heading(self.localizer.text(UiText::Overrides));
-        path_folder_row(
+        if path_folder_row(
             ui,
             label_width,
             self.localizer.text(UiText::ExplicitSearchPath),
             self.localizer.text(UiText::Browse),
             &mut self.state.explicit_search_path,
             Some(self.localizer.text(UiText::ExplicitSearchPathTooltip)),
-        );
-        path_folder_row(
+        ) {
+            let current_value = self.state.explicit_search_path.clone();
+            self.open_path_picker(PathTarget::GameDataDir, &current_value);
+        }
+        if path_folder_row(
             ui,
             label_width,
             CFG_KEY_DATA_LOCAL,
             self.localizer.text(UiText::Browse),
             &mut self.state.data_local,
             Some(self.localizer.text(UiText::DataLocalTooltip)),
-        );
-        path_folder_row(
+        ) {
+            let current_value = self.state.data_local.clone();
+            self.open_path_picker(PathTarget::DataLocalDir, &current_value);
+        }
+        if path_folder_row(
             ui,
             label_width,
             CFG_KEY_RESOURCES,
             self.localizer.text(UiText::Browse),
             &mut self.state.resources,
             Some(self.localizer.text(UiText::ResourcesTooltip)),
-        );
-        path_folder_row(
+        ) {
+            let current_value = self.state.resources.clone();
+            self.open_path_picker(PathTarget::ResourcesDir, &current_value);
+        }
+        if path_folder_row(
             ui,
             label_width,
             CFG_KEY_USERDATA,
             self.localizer.text(UiText::Browse),
             &mut self.state.userdata,
             Some(self.localizer.text(UiText::UserdataTooltip)),
-        );
+        ) {
+            let current_value = self.state.userdata.clone();
+            self.open_path_picker(PathTarget::UserdataDir, &current_value);
+        }
     }
 
     fn show_language_selector(&mut self, ui: &mut egui::Ui) {
@@ -330,13 +384,16 @@ impl GuiApp {
             self.localizer.text(UiText::SaveAs),
         );
         ui.add_enabled_ui(self.state.output_mode == GuiOutputMode::SaveAs, |ui| {
-            path_save_file_row(
+            if path_save_file_row(
                 ui,
                 path_label_width,
                 self.localizer.text(UiText::OutputPath),
                 self.localizer.text(UiText::Browse),
                 &mut self.state.output_path,
-            );
+            ) {
+                let current_value = self.state.output_path.clone();
+                self.open_path_picker(PathTarget::OutputCfg, &current_value);
+            }
         });
         ui.add_enabled_ui(optional_path(&self.state.existing_cfg).is_some(), |ui| {
             ui.radio_value(
@@ -349,6 +406,24 @@ impl GuiApp {
             && optional_path(&self.state.existing_cfg).is_none()
         {
             self.state.output_mode = GuiOutputMode::PreviewOnly;
+        }
+    }
+
+    fn open_path_picker(&mut self, target: PathTarget, current_value: &str) {
+        let current_path = optional_path(current_value);
+        self.mode = GuiMode::PathPicker(PathPickerState::new(target, current_path.as_deref()));
+    }
+
+    fn apply_picked_path(&mut self, target: PathTarget, path: &Path) {
+        let value = path.to_string_lossy().into_owned();
+        match target {
+            PathTarget::MorrowindIni => self.state.morrowind_ini = value,
+            PathTarget::ExistingOpenmwCfg => self.state.existing_cfg = value,
+            PathTarget::OutputCfg => self.state.output_path = value,
+            PathTarget::GameDataDir => self.state.explicit_search_path = value,
+            PathTarget::DataLocalDir => self.state.data_local = value,
+            PathTarget::ResourcesDir => self.state.resources = value,
+            PathTarget::UserdataDir => self.state.userdata = value,
         }
     }
 }
@@ -666,8 +741,8 @@ fn path_file_row(
     label: &str,
     browse: &str,
     value: &mut String,
-) {
-    path_row_plain(ui, label_width, label, browse, value, pick_file);
+) -> bool {
+    path_row_plain(ui, label_width, label, browse, value)
 }
 
 fn path_folder_row(
@@ -677,8 +752,8 @@ fn path_folder_row(
     browse: &str,
     value: &mut String,
     tooltip: Option<&str>,
-) {
-    path_row(ui, label_width, label, browse, value, tooltip, pick_folder);
+) -> bool {
+    path_row(ui, label_width, label, browse, value, tooltip)
 }
 
 fn path_save_file_row(
@@ -687,8 +762,8 @@ fn path_save_file_row(
     label: &str,
     browse: &str,
     value: &mut String,
-) {
-    path_row_plain(ui, label_width, label, browse, value, pick_save_file);
+) -> bool {
+    path_row_plain(ui, label_width, label, browse, value)
 }
 
 fn path_row_plain(
@@ -697,9 +772,8 @@ fn path_row_plain(
     label: &str,
     browse: &str,
     value: &mut String,
-    pick: impl FnOnce() -> Option<String>,
-) {
-    path_row(ui, label_width, label, browse, value, None, pick);
+) -> bool {
+    path_row(ui, label_width, label, browse, value, None)
 }
 
 fn path_row(
@@ -709,8 +783,8 @@ fn path_row(
     browse: &str,
     value: &mut String,
     tooltip: Option<&str>,
-    pick: impl FnOnce() -> Option<String>,
-) {
+) -> bool {
+    let mut browse_clicked = false;
     ui.horizontal(|ui| {
         let row_height = ui.spacing().interact_size.y;
         let label_response = ui.add_sized([label_width, row_height], egui::Label::new(label));
@@ -721,14 +795,11 @@ fn path_row(
         let text_width = (ui.available_width() - browse_button_width - ui.spacing().item_spacing.x)
             .max(ui.spacing().interact_size.x);
         ui.add_sized([text_width, row_height], egui::TextEdit::singleline(value));
-        if ui
+        browse_clicked = ui
             .add_sized([browse_button_width, row_height], egui::Button::new(browse))
-            .clicked()
-            && let Some(path) = pick()
-        {
-            *value = path;
-        }
+            .clicked();
     });
+    browse_clicked
 }
 
 fn button_width(ui: &egui::Ui, label: &str) -> f32 {
@@ -756,25 +827,6 @@ fn path_label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
                 .x
         })
         .fold(0.0, f32::max)
-}
-
-fn pick_file() -> Option<String> {
-    rfd::FileDialog::new()
-        .pick_file()
-        .map(|path| path.to_string_lossy().into_owned())
-}
-
-fn pick_folder() -> Option<String> {
-    rfd::FileDialog::new()
-        .pick_folder()
-        .map(|path| path.to_string_lossy().into_owned())
-}
-
-fn pick_save_file() -> Option<String> {
-    rfd::FileDialog::new()
-        .set_file_name("openmw.cfg")
-        .save_file()
-        .map(|path| path.to_string_lossy().into_owned())
 }
 
 fn optional_path(value: &str) -> Option<PathBuf> {
