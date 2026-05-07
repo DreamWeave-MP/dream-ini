@@ -40,11 +40,11 @@ impl PathPickerState {
             .and_then(initial_directory)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        let selected = if target.is_directory_target() {
+        let selected = if target.is_directory_target() || target == PathTarget::OutputCfg {
             Some(current_dir.clone())
         } else {
             initial_path
-                .filter(|path| path.exists())
+                .filter(|path| path.is_file())
                 .map(Path::to_path_buf)
         };
         let output_file_name = initial_path
@@ -114,7 +114,8 @@ impl PathPickerState {
         match entry_action {
             EntryAction::None => {}
             EntryAction::Navigate(path) => self.enter_directory(path),
-            EntryAction::Select(path) => self.selected = Some(path),
+            EntryAction::SelectDirectory(path) => self.selected = Some(path),
+            EntryAction::SelectFile(path) => self.select_file(path),
             EntryAction::Choose(path) => {
                 outcome = PickOutcome::Chosen {
                     target: self.target,
@@ -139,9 +140,7 @@ impl PathPickerState {
                 .map_or_else(String::new, |path| path.display().to_string()),
         );
 
-        let choose_enabled = chosen_path
-            .as_ref()
-            .is_some_and(|path| self.is_valid_choice(path));
+        let choose_enabled = chosen_path.is_some();
         let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
         if (ui
             .add_enabled(
@@ -175,9 +174,13 @@ impl PathPickerState {
 
     fn refresh(&mut self) {
         match read_entries(self.target, &self.current_dir) {
-            Ok(entries) => {
+            Ok(ReadEntries {
+                entries,
+                skipped_entries,
+            }) => {
                 self.entries = entries;
-                self.error = None;
+                self.error = (skipped_entries > 0)
+                    .then(|| format!("Skipped {skipped_entries} unreadable directory entries."));
             }
             Err(error) => {
                 self.entries.clear();
@@ -227,15 +230,26 @@ impl PathPickerState {
         if response.clicked() {
             return match entry.kind {
                 EntryKind::Directory if self.target.is_directory_target() => {
-                    EntryAction::Select(entry.path.clone())
+                    EntryAction::SelectDirectory(entry.path.clone())
                 }
                 EntryKind::Parent | EntryKind::Directory => {
                     EntryAction::Navigate(entry.path.clone())
                 }
-                EntryKind::File => EntryAction::Select(entry.path.clone()),
+                EntryKind::File => EntryAction::SelectFile(entry.path.clone()),
             };
         }
         EntryAction::None
+    }
+
+    fn select_file(&mut self, path: PathBuf) {
+        if self.target == PathTarget::OutputCfg {
+            if let Some(file_name) = path.file_name().and_then(OsStr::to_str) {
+                file_name.clone_into(&mut self.output_file_name);
+            }
+            self.selected = path.parent().map(Path::to_path_buf);
+        } else {
+            self.selected = Some(path);
+        }
     }
 
     fn chosen_path(&self) -> Option<PathBuf> {
@@ -244,30 +258,10 @@ impl PathPickerState {
             if file_name.is_empty() || Path::new(file_name).components().count() != 1 {
                 return None;
             }
-            let directory = self
-                .selected
-                .as_deref()
-                .filter(|path| path.is_dir())
-                .unwrap_or(&self.current_dir);
+            let directory = self.selected.as_deref().unwrap_or(&self.current_dir);
             return Some(directory.join(file_name));
         }
         self.selected.clone()
-    }
-
-    fn is_valid_choice(&self, path: &Path) -> bool {
-        match self.target.pick_kind() {
-            PickKind::Directory => path.is_dir(),
-            PickKind::ExistingFile { expected_name } => {
-                path.is_file() && path.file_name() == Some(OsStr::new(expected_name))
-            }
-            PickKind::OutputCfg => {
-                path.parent().is_some_and(Path::is_dir)
-                    && path
-                        .file_name()
-                        .and_then(OsStr::to_str)
-                        .is_some_and(|file_name| !file_name.trim().is_empty())
-            }
-        }
     }
 }
 
@@ -281,12 +275,7 @@ impl PathTarget {
 
     const fn pick_kind(self) -> PickKind {
         match self {
-            Self::MorrowindIni => PickKind::ExistingFile {
-                expected_name: "Morrowind.ini",
-            },
-            Self::ExistingOpenmwCfg => PickKind::ExistingFile {
-                expected_name: "openmw.cfg",
-            },
+            Self::MorrowindIni | Self::ExistingOpenmwCfg => PickKind::ExistingFile,
             Self::OutputCfg => PickKind::OutputCfg,
             Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserdataDir => {
                 PickKind::Directory
@@ -312,14 +301,15 @@ enum EntryKind {
 enum EntryAction {
     None,
     Navigate(PathBuf),
-    Select(PathBuf),
+    SelectDirectory(PathBuf),
+    SelectFile(PathBuf),
     Choose(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy)]
 enum PickKind {
     Directory,
-    ExistingFile { expected_name: &'static str },
+    ExistingFile,
     OutputCfg,
 }
 
@@ -332,9 +322,15 @@ fn initial_directory(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<Vec<PathEntry>> {
+struct ReadEntries {
+    entries: Vec<PathEntry>,
+    skipped_entries: usize,
+}
+
+fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<ReadEntries> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
+    let mut skipped_entries = 0;
 
     if let Some(parent) = directory.parent() {
         directories.push(PathEntry {
@@ -345,19 +341,26 @@ fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<Vec<Pat
     }
 
     for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
+        let Ok(entry) = entry else {
+            skipped_entries += 1;
+            continue;
+        };
+        let path = entry.path();
+        let Ok(metadata) = fs::metadata(&path) else {
+            skipped_entries += 1;
+            continue;
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
-        if file_type.is_dir() {
+        if metadata.is_dir() {
             directories.push(PathEntry {
                 name,
-                path: entry.path(),
+                path,
                 kind: EntryKind::Directory,
             });
-        } else if file_type.is_file() && target.displays_file(entry.file_name().as_ref()) {
+        } else if metadata.is_file() && target.displays_file() {
             files.push(PathEntry {
                 name,
-                path: entry.path(),
+                path,
                 kind: EntryKind::File,
             });
         }
@@ -367,15 +370,17 @@ fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<Vec<Pat
     directories[sort_start..].sort_by(|left, right| compare_names(&left.name, &right.name));
     files.sort_by(|left, right| compare_names(&left.name, &right.name));
     directories.extend(files);
-    Ok(directories)
+    Ok(ReadEntries {
+        entries: directories,
+        skipped_entries,
+    })
 }
 
 impl PathTarget {
-    fn displays_file(self, file_name: &OsStr) -> bool {
+    fn displays_file(self) -> bool {
         match self.pick_kind() {
             PickKind::Directory => false,
-            PickKind::ExistingFile { expected_name } => file_name == OsStr::new(expected_name),
-            PickKind::OutputCfg => file_name == OsStr::new("openmw.cfg"),
+            PickKind::ExistingFile | PickKind::OutputCfg => true,
         }
     }
 }
@@ -393,7 +398,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lists_directories_and_expected_file_only() {
+    fn lists_directories_and_files_for_file_targets() {
         let root = unique_temp_dir();
         fs::create_dir(root.join("Data Files")).unwrap();
         fs::create_dir(root.join("Saves")).unwrap();
@@ -401,14 +406,16 @@ mod tests {
         File::create(root.join("openmw.cfg")).unwrap();
         File::create(root.join("notes.txt")).unwrap();
 
-        let entries = read_entries(PathTarget::MorrowindIni, &root).unwrap();
+        let entries = read_entries(PathTarget::MorrowindIni, &root)
+            .unwrap()
+            .entries;
         let names: Vec<_> = entries.into_iter().map(|entry| entry.name).collect();
 
         assert!(names.contains(&"Data Files".to_owned()));
         assert!(names.contains(&"Saves".to_owned()));
         assert!(names.contains(&"Morrowind.ini".to_owned()));
-        assert!(!names.contains(&"openmw.cfg".to_owned()));
-        assert!(!names.contains(&"notes.txt".to_owned()));
+        assert!(names.contains(&"openmw.cfg".to_owned()));
+        assert!(names.contains(&"notes.txt".to_owned()));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -419,11 +426,43 @@ mod tests {
         fs::create_dir(root.join("userdata")).unwrap();
         File::create(root.join("openmw.cfg")).unwrap();
 
-        let entries = read_entries(PathTarget::UserdataDir, &root).unwrap();
+        let entries = read_entries(PathTarget::UserdataDir, &root)
+            .unwrap()
+            .entries;
         let names: Vec<_> = entries.into_iter().map(|entry| entry.name).collect();
 
         assert!(names.contains(&"userdata".to_owned()));
         assert!(!names.contains(&"openmw.cfg".to_owned()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_symlinks_for_picker_entries() {
+        let root = unique_temp_dir();
+        fs::create_dir(root.join("RealDir")).unwrap();
+        File::create(root.join("Morrowind.ini")).unwrap();
+        std::os::unix::fs::symlink(root.join("RealDir"), root.join("LinkedDir")).unwrap();
+        std::os::unix::fs::symlink(root.join("Morrowind.ini"), root.join("Linked.ini")).unwrap();
+
+        let directory_entries = read_entries(PathTarget::UserdataDir, &root)
+            .unwrap()
+            .entries;
+        let file_entries = read_entries(PathTarget::MorrowindIni, &root)
+            .unwrap()
+            .entries;
+
+        assert!(
+            directory_entries
+                .iter()
+                .any(|entry| entry.name == "LinkedDir" && entry.kind == EntryKind::Directory)
+        );
+        assert!(
+            file_entries
+                .iter()
+                .any(|entry| entry.name == "Linked.ini" && entry.kind == EntryKind::File)
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
