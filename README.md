@@ -103,6 +103,13 @@ print(result.text)
 for _, warning in ipairs(result.warnings) do
   print(warning)
 end
+for _, event in ipairs(result.events) do
+  if event.kind == "content_file_resolved" then
+    print(event.path, event.modified)
+  elseif event.kind == "data_dir_added_for_content" then
+    print(event.path)
+  end
+end
 ```
 
 Available functions:
@@ -110,8 +117,13 @@ Available functions:
 - `parse_ini(text, opts)`: parses a Morrowind INI byte string and returns `{ entries = multimap, warnings = { ... } }`.
 - `parse_cfg(text)`: parses OpenMW cfg text and returns a multimap.
 - `serialize_cfg(multimap)`: serializes a multimap to normalized cfg text.
-- `import_maps(cfg, ini, opts)`: imports parsed multimap data and returns `{ cfg = multimap, text = string, warnings = { ... }, messages = { ... } }`.
+- `import_maps(cfg, ini, opts)`: imports parsed multimap data and returns `{ cfg = multimap, text = string, warnings = { ... }, events = { ... } }`.
 - `import_paths(opts)`: imports from `opts.ini` and optional `opts.cfg`, returning the same result shape as `import_maps`.
+
+Import events are structured tables. Current event kinds are:
+
+- `{ kind = "content_file_resolved", path = string, modified = unix_seconds }`
+- `{ kind = "data_dir_added_for_content", path = string }`
 
 Multimaps are represented as `key -> array of strings` to preserve duplicate keys:
 
@@ -130,7 +142,7 @@ Generate crate documentation with:
 cargo doc --open
 ```
 
-The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`.
+The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `ImportEvent`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`.
 
 ## Development
 

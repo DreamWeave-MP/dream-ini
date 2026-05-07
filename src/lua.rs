@@ -18,8 +18,8 @@ use crate::{
 /// - `parse_ini(text, opts) -> { entries = multimap, warnings = string[] }`
 /// - `parse_cfg(text) -> multimap`
 /// - `serialize_cfg(multimap) -> string`
-/// - `import_maps(cfg, ini, opts) -> { cfg = multimap, text = string, warnings = string[], messages = string[] }`
-/// - `import_paths(opts) -> { cfg = multimap, text = string, warnings = string[], messages = string[] }`
+/// - `import_maps(cfg, ini, opts) -> { cfg = multimap, text = string, warnings = string[], events = event[] }`
+/// - `import_paths(opts) -> { cfg = multimap, text = string, warnings = string[], events = event[] }`
 ///
 /// Multimaps are represented as Lua tables where each key maps to an array of strings, for example
 /// `{ encoding = { "win1252" }, content = { "Morrowind.esm" } }`.

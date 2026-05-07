@@ -291,7 +291,7 @@ fn imports_game_files_using_tes3_dependencies() {
 }
 
 #[test]
-fn verbose_game_file_import_reports_content_file_messages() {
+fn verbose_game_file_import_reports_content_file_events() {
     let dir = unique_test_dir("game-files-verbose");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
