@@ -2,9 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::importer::ImportOptions;
 use crate::plugin::{apply_morrowind_expansion_order, dependency_sort, read_plugin_header};
-use crate::{ImportError, MultiMap, TextEncoding};
+use crate::{Game, ImportError, MultiMap, TextEncoding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportedContentFiles {
@@ -17,15 +16,16 @@ pub(crate) fn import_content_files(
     ini: &MultiMap,
     cfg: &MultiMap,
     ini_path: &Path,
-    options: &ImportOptions,
+    game: Game,
+    explicit_data_dirs: &[PathBuf],
     encoding: TextEncoding,
+    verbose: bool,
 ) -> Result<ImportedContentFiles, ImportError> {
-    let data_paths = data_paths(cfg, ini_path, &options.data_dirs);
+    let search_paths = build_search_paths(cfg, ini_path, explicit_data_dirs);
     let mut messages = Vec::new();
-    let mut content_files =
-        resolve_content_files(ini, &data_paths, options.verbose, &mut messages)?;
+    let mut content_files = resolve_content_files(ini, &search_paths, verbose, &mut messages)?;
 
-    let data_dirs = data_dirs_to_add(cfg, &content_files);
+    let data_dirs = used_data_dirs_to_write(cfg, &content_files);
     for data_dir in &data_dirs {
         messages.push(format!(
             "adding data directory used to resolve content files: {}",
@@ -39,7 +39,7 @@ pub(crate) fn import_content_files(
             .then_with(|| left.path.cmp(&right.path))
     });
 
-    let format = options.game.plugin_format();
+    let format = game.plugin_format();
     let mut dependencies = Vec::new();
     for content_file in content_files {
         let header = read_plugin_header(&content_file.path, format, encoding)?;
@@ -56,33 +56,37 @@ pub(crate) fn import_content_files(
     })
 }
 
-fn data_paths(cfg: &MultiMap, ini_path: &Path, explicit_data_dirs: &[PathBuf]) -> Vec<DataPath> {
-    let mut data_paths = Vec::new();
-    data_paths.extend(explicit_data_dirs.iter().map(|path| DataPath {
+fn build_search_paths(
+    cfg: &MultiMap,
+    ini_path: &Path,
+    explicit_data_dirs: &[PathBuf],
+) -> Vec<ContentSearchPath> {
+    let mut search_paths = Vec::new();
+    search_paths.extend(explicit_data_dirs.iter().map(|path| ContentSearchPath {
         path: fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
-        origin: DataPathOrigin::Explicit,
+        origin: SearchPathOrigin::Explicit,
     }));
     if let Some(paths) = cfg.get("data") {
-        add_paths(&mut data_paths, paths, DataPathOrigin::Config);
+        add_search_paths(&mut search_paths, paths, SearchPathOrigin::Config);
     }
     if let Some(paths) = cfg.get("data-local") {
-        add_paths(&mut data_paths, paths, DataPathOrigin::Config);
+        add_search_paths(&mut search_paths, paths, SearchPathOrigin::Config);
     }
     let default_data_path = ini_path
         .parent()
         .unwrap_or_else(|| Path::new(""))
         .join("Data Files");
     let default_data_path = fs::canonicalize(&default_data_path).unwrap_or(default_data_path);
-    data_paths.push(DataPath {
+    search_paths.push(ContentSearchPath {
         path: default_data_path,
-        origin: DataPathOrigin::Default,
+        origin: SearchPathOrigin::Default,
     });
-    data_paths
+    search_paths
 }
 
 fn resolve_content_files(
     ini: &MultiMap,
-    data_paths: &[DataPath],
+    search_paths: &[ContentSearchPath],
     verbose: bool,
     messages: &mut Vec<String>,
 ) -> Result<Vec<ResolvedContentFile>, ImportError> {
@@ -97,7 +101,7 @@ fn resolve_content_files(
             return Err(ImportError::InvalidContentFileName(file.to_owned()));
         }
 
-        if let Some(entry) = resolve_content_file(file, data_paths, verbose, messages) {
+        if let Some(entry) = resolve_content_file(file, search_paths, verbose, messages) {
             content_files.push(entry);
         } else {
             missing_content_files.push(file.to_owned());
@@ -109,9 +113,9 @@ fn resolve_content_files(
     } else {
         Err(ImportError::MissingContentFiles {
             files: missing_content_files,
-            searched_paths: data_paths
+            searched_paths: search_paths
                 .iter()
-                .map(|data_path| data_path.path.clone())
+                .map(|search_path| search_path.path.clone())
                 .collect(),
         })
     }
@@ -119,12 +123,12 @@ fn resolve_content_files(
 
 fn resolve_content_file(
     file: &str,
-    data_paths: &[DataPath],
+    search_paths: &[ContentSearchPath],
     verbose: bool,
     messages: &mut Vec<String>,
 ) -> Option<ResolvedContentFile> {
-    for data_path in data_paths {
-        let candidate = data_path.path.join(file);
+    for search_path in search_paths {
+        let candidate = search_path.path.join(file);
         if let Ok(metadata) = fs::metadata(&candidate) {
             let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
             let path = fs::canonicalize(&candidate).unwrap_or(candidate);
@@ -138,8 +142,8 @@ fn resolve_content_file(
             return Some(ResolvedContentFile {
                 sort_key: system_time_key(modified),
                 path,
-                data_path: data_path.path.clone(),
-                data_path_origin: data_path.origin,
+                data_path: search_path.path.clone(),
+                search_path_origin: search_path.origin,
             });
         }
     }
@@ -173,16 +177,16 @@ fn is_plugin_filename(file: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DataPathOrigin {
+enum SearchPathOrigin {
     Explicit,
     Config,
     Default,
 }
 
 #[derive(Debug, Clone)]
-struct DataPath {
+struct ContentSearchPath {
     path: PathBuf,
-    origin: DataPathOrigin,
+    origin: SearchPathOrigin,
 }
 
 #[derive(Debug, Clone)]
@@ -190,13 +194,13 @@ struct ResolvedContentFile {
     sort_key: u128,
     path: PathBuf,
     data_path: PathBuf,
-    data_path_origin: DataPathOrigin,
+    search_path_origin: SearchPathOrigin,
 }
 
-fn data_dirs_to_add(cfg: &MultiMap, content_files: &[ResolvedContentFile]) -> Vec<PathBuf> {
+fn used_data_dirs_to_write(cfg: &MultiMap, content_files: &[ResolvedContentFile]) -> Vec<PathBuf> {
     let mut used_paths: Vec<PathBuf> = Vec::new();
     for content_file in content_files {
-        if content_file.data_path_origin == DataPathOrigin::Config {
+        if content_file.search_path_origin == SearchPathOrigin::Config {
             continue;
         }
         if !has_equivalent_data_path(cfg, &content_file.data_path)
@@ -210,9 +214,13 @@ fn data_dirs_to_add(cfg: &MultiMap, content_files: &[ResolvedContentFile]) -> Ve
     used_paths
 }
 
-fn add_paths(output: &mut Vec<DataPath>, input: &[String], origin: DataPathOrigin) {
+fn add_search_paths(
+    output: &mut Vec<ContentSearchPath>,
+    input: &[String],
+    origin: SearchPathOrigin,
+) {
     for path in input {
-        output.push(DataPath {
+        output.push(ContentSearchPath {
             path: PathBuf::from(unquote_path(path)),
             origin,
         });

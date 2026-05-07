@@ -127,8 +127,15 @@ impl IniImporter {
 
         if self.options.import_game_files {
             let encoding = self.effective_encoding(&imported_cfg)?;
-            let imported_content =
-                import_content_files(ini, &imported_cfg, ini_path, &self.options, encoding)?;
+            let imported_content = import_content_files(
+                ini,
+                &imported_cfg,
+                ini_path,
+                self.options.game,
+                &self.options.data_dirs,
+                encoding,
+                self.options.verbose,
+            )?;
             for data_dir in imported_content.data_dirs {
                 insert_multimap(
                     &mut imported_cfg,
