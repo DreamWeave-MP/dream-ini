@@ -81,7 +81,7 @@ fn run_with_writers(
         import_game_files: cli.game_files,
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
-        data_dirs: cli.data_dirs,
+        data_dirs: cli.data_dir.into_iter().collect(),
         data_local: cli.data_local,
         resources: cli.resources,
         userdata: cli.userdata,
@@ -228,7 +228,11 @@ fn write_result_output(
 }
 
 fn save_config_output(output_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
-    write_atomic(output_path, serialize_cfg(cfg).as_bytes())
+    save_config_text(output_path, &serialize_cfg(cfg))
+}
+
+pub(crate) fn save_config_text(output_path: &Path, cfg_text: &str) -> Result<(), ImportError> {
+    write_atomic(output_path, cfg_text.as_bytes())
 }
 
 fn write_atomic(output_path: &Path, bytes: &[u8]) -> Result<(), ImportError> {

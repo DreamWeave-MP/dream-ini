@@ -13,6 +13,13 @@ pub(crate) struct ImportedContentFiles {
     pub(crate) events: Vec<ImportEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ImportedArchives {
+    pub(crate) archives: Vec<String>,
+    pub(crate) data_dirs: Vec<PathBuf>,
+    pub(crate) events: Vec<ImportEvent>,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ContentFileImportRequest<'a> {
     pub(crate) ini: &'a MultiMap,
@@ -23,6 +30,41 @@ pub(crate) struct ContentFileImportRequest<'a> {
     pub(crate) explicit_data_dirs: &'a [PathBuf],
     pub(crate) encoding: TextEncoding,
     pub(crate) verbose: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ArchiveImportRequest<'a> {
+    pub(crate) ini: &'a MultiMap,
+    pub(crate) cfg: &'a MultiMap,
+    pub(crate) ini_path: &'a Path,
+    pub(crate) cfg_dir: Option<&'a Path>,
+    pub(crate) explicit_data_dirs: &'a [PathBuf],
+    pub(crate) verbose: bool,
+}
+
+pub(crate) fn import_archives(
+    request: ArchiveImportRequest<'_>,
+) -> Result<ImportedArchives, ImportError> {
+    let search_paths = build_search_paths(
+        request.cfg,
+        request.ini_path,
+        request.cfg_dir,
+        request.explicit_data_dirs,
+    );
+    let mut events = Vec::new();
+    let archives = resolve_archives(request.ini, &search_paths, request.verbose, &mut events)?;
+    let data_dirs = used_archive_data_dirs_to_write(request.cfg, request.cfg_dir, &archives);
+    for data_dir in &data_dirs {
+        events.push(ImportEvent::DataDirAddedForArchive {
+            path: data_dir.clone(),
+        });
+    }
+
+    Ok(ImportedArchives {
+        archives: archives.into_iter().map(|archive| archive.name).collect(),
+        data_dirs,
+        events,
+    })
 }
 
 pub(crate) fn import_content_files(
@@ -66,6 +108,73 @@ pub(crate) fn import_content_files(
         data_dirs,
         events,
     })
+}
+
+fn resolve_archives(
+    ini: &MultiMap,
+    search_paths: &[ContentSearchPath],
+    verbose: bool,
+    events: &mut Vec<ImportEvent>,
+) -> Result<Vec<ResolvedArchive>, ImportError> {
+    let mut archives = Vec::new();
+    let mut missing_archives = Vec::new();
+    for file in archive_values(ini) {
+        let file = file.trim();
+        if !ends_with_ignore_ascii_case(file, ".bsa") {
+            continue;
+        }
+        if !is_plugin_filename(file) {
+            return Err(ImportError::InvalidArchiveName(file.to_owned()));
+        }
+
+        if let Some(entry) = resolve_archive(file, search_paths, verbose, events) {
+            archives.push(entry);
+        } else {
+            missing_archives.push(file.to_owned());
+        }
+    }
+
+    if missing_archives.is_empty() {
+        Ok(archives)
+    } else {
+        Err(ImportError::MissingArchives {
+            files: missing_archives,
+            searched_paths: search_paths
+                .iter()
+                .map(|search_path| search_path.path.clone())
+                .collect(),
+        })
+    }
+}
+
+fn archive_values(ini: &MultiMap) -> Vec<String> {
+    let mut archives = vec!["Morrowind.bsa".to_owned()];
+    archives.extend(sequential_ini_values(ini, "Archives:Archive ").cloned());
+    archives
+}
+
+fn resolve_archive(
+    file: &str,
+    search_paths: &[ContentSearchPath],
+    verbose: bool,
+    events: &mut Vec<ImportEvent>,
+) -> Option<ResolvedArchive> {
+    for search_path in search_paths {
+        let candidate = search_path.path.join(file);
+        if fs::metadata(&candidate).is_ok() {
+            let path = fs::canonicalize(&candidate).unwrap_or(candidate);
+            if verbose {
+                events.push(ImportEvent::ArchiveResolved { path });
+            }
+            return Some(ResolvedArchive {
+                name: file.to_owned(),
+                data_path: search_path.path.clone(),
+                search_path_origin: search_path.origin,
+            });
+        }
+    }
+
+    None
 }
 
 fn build_search_paths(
@@ -209,6 +318,13 @@ struct ResolvedContentFile {
     search_path_origin: SearchPathOrigin,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedArchive {
+    name: String,
+    data_path: PathBuf,
+    search_path_origin: SearchPathOrigin,
+}
+
 fn used_data_dirs_to_write(
     cfg: &MultiMap,
     cfg_dir: Option<&Path>,
@@ -228,6 +344,34 @@ fn used_data_dirs_to_write(
         }
     }
     used_paths
+}
+
+fn used_archive_data_dirs_to_write(
+    cfg: &MultiMap,
+    cfg_dir: Option<&Path>,
+    archives: &[ResolvedArchive],
+) -> Vec<PathBuf> {
+    let mut used_paths: Vec<PathBuf> = Vec::new();
+    for archive in archives {
+        if archive.search_path_origin == SearchPathOrigin::Config {
+            continue;
+        }
+        if !has_equivalent_data_path(cfg, cfg_dir, &archive.data_path)
+            && !used_paths
+                .iter()
+                .any(|path| equivalent_paths(path.as_path(), &archive.data_path))
+        {
+            used_paths.push(archive.data_path.clone());
+        }
+    }
+    used_paths
+}
+
+fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<Item = &'a String> {
+    (0..)
+        .map(move |index| format!("{prefix}{index}"))
+        .map_while(move |key| ini.get(&key))
+        .flat_map(|values| values.iter())
 }
 
 fn add_search_paths(

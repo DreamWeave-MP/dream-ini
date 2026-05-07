@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::content_files::{ContentFileImportRequest, import_content_files};
+use crate::content_files::{
+    ArchiveImportRequest, ContentFileImportRequest, import_archives, import_content_files,
+};
 use crate::events::ImportEvent;
 use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
 use crate::parser::{
@@ -168,7 +170,23 @@ impl IniImporter {
         }
 
         if self.options.import_archives {
-            import_archives(&mut imported_cfg, ini);
+            let imported_archives = import_archives(ArchiveImportRequest {
+                ini,
+                cfg: &imported_cfg,
+                ini_path,
+                cfg_dir,
+                explicit_data_dirs: &self.options.data_dirs,
+                verbose: self.options.verbose,
+            })?;
+            for data_dir in imported_archives.data_dirs {
+                insert_multimap(
+                    &mut imported_cfg,
+                    "data".to_owned(),
+                    data_dir.to_string_lossy().into_owned(),
+                );
+            }
+            imported_cfg.insert("fallback-archive".to_owned(), imported_archives.archives);
+            events.extend(imported_archives.events);
         }
 
         *cfg = imported_cfg;
@@ -219,19 +237,6 @@ fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap, import_fonts: bool) {
             }
         }
     }
-}
-
-pub(crate) fn import_archives(cfg: &mut MultiMap, ini: &MultiMap) {
-    let mut archives = vec!["Morrowind.bsa".to_owned()];
-    archives.extend(sequential_ini_values(ini, "Archives:Archive ").cloned());
-    cfg.insert("fallback-archive".to_owned(), archives);
-}
-
-fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<Item = &'a String> {
-    (0..)
-        .map(move |index| format!("{prefix}{index}"))
-        .map_while(move |key| ini.get(&key))
-        .flat_map(|values| values.iter())
 }
 
 fn set_path_override(cfg: &mut MultiMap, key: &str, path: Option<&Path>) {

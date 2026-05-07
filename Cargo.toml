@@ -13,9 +13,13 @@ clap_complete = "4"
 clap_mangen = "0.2"
 clap = { version = "4", features = ["derive"] }
 encoding_rs = "0.8"
+eframe = { version = "0.31", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 mlua = { version = "0.10", optional = true, features = ["luajit52", "vendored"] }
+rfd = { version = "0.15", optional = true, default-features = false, features = ["async-std", "xdg-portal"] }
 
 [features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:rfd"]
 lua = ["dep:mlua"]
 
 [dev-dependencies]

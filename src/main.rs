@@ -5,8 +5,15 @@ use command::{CliError, MISSING_INI_EXIT_CODE};
 mod cli;
 mod command;
 mod generated;
+#[cfg(feature = "gui")]
+mod gui;
 
 fn main() -> ExitCode {
+    #[cfg(feature = "gui")]
+    if std::env::args_os().len() == 1 {
+        return gui::run();
+    }
+
     match command::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(CliError::MissingIni) => {

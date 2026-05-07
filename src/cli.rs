@@ -51,9 +51,9 @@ pub(crate) struct Cli {
     )]
     pub(crate) output: Option<PathBuf>,
 
-    /// Data Files directory to search before cfg/default data paths
+    /// Explicit Data Files directory to search and write to the imported cfg
     #[arg(short = 'd', long = "data", value_name = "DIR", display_order = 2)]
-    pub(crate) data_dirs: Vec<PathBuf>,
+    pub(crate) data_dir: Option<PathBuf>,
 
     /// Set data-local in the imported cfg, replacing any existing value
     #[arg(
@@ -93,7 +93,7 @@ pub(crate) struct Cli {
             "ini",
             "cfg",
             "output",
-            "data_dirs",
+            "data_dir",
             "data_local",
             "resources",
             "userdata",
@@ -117,7 +117,7 @@ pub(crate) struct Cli {
             "ini",
             "cfg",
             "output",
-            "data_dirs",
+            "data_dir",
             "data_local",
             "resources",
             "userdata",
@@ -187,10 +187,8 @@ mod tests {
             "-n",
             "--encoding",
             "win1251",
-            "--data",
-            "Data Files",
             "-d",
-            "Alt Data",
+            "Data Files",
             "-l",
             "local-data",
             "-r",
@@ -209,10 +207,7 @@ mod tests {
         assert!(cli.fonts);
         assert!(cli.no_archives);
         assert!(!cli.in_place);
-        assert_eq!(
-            cli.data_dirs,
-            vec![PathBuf::from("Data Files"), PathBuf::from("Alt Data")]
-        );
+        assert_eq!(cli.data_dir, Some(PathBuf::from("Data Files")));
         assert_eq!(cli.data_local, Some(PathBuf::from("local-data")));
         assert_eq!(cli.resources, Some(PathBuf::from("resources")));
         assert_eq!(cli.userdata, Some(PathBuf::from("user-data")));
@@ -280,6 +275,22 @@ mod tests {
             output_error.kind(),
             clap::error::ErrorKind::ArgumentConflict
         );
+    }
+
+    #[test]
+    fn rejects_repeated_data_path() {
+        let error = Cli::try_parse_from([
+            "dream-ini",
+            "--ini",
+            "Morrowind.ini",
+            "--data",
+            "Data Files",
+            "--data",
+            "Other Data",
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

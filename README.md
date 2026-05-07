@@ -35,7 +35,7 @@ dream-ini -M > dream-ini.1
 ## Options
 
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
-- `-d, --data <DIR>`: explicit Data Files directory for `--game-files`. Can be repeated and is searched before cfg/default data paths.
+- `-d, --data <DIR>`: explicit Data Files directory searched before cfg/default data paths.
 - `-l, --data-local <DIR>`: set the singleton `data-local` cfg key, replacing any existing value. Relative paths are preserved for OpenMW to resolve relative to openmw.cfg.
 - `-e, --encoding <ENCODING>`: character encoding for imported content-file names; `win1250`, `win1251`, or `win1252`.
 - `-f, --fonts`: import bitmap font fallback settings.
@@ -60,7 +60,7 @@ dream-ini -M > dream-ini.1
 - Omitting cfg starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`, or by explicit singleton path options such as `--data-local`, `--resources`, and `--userdata`.
-- `--game-files` searches existing `data-local` cfg paths first, then explicit `--data` paths, then existing `data` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. `data-local` always wins because it is OpenMW's highest-precedence data directory. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
+- Content-file and fallback-archive import searches existing `data-local` cfg paths first, then the explicit `--data` path, then existing `data` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. `data-local` always wins because it is OpenMW's highest-precedence data directory. Every `.esm`/`.esp` and `.bsa` entry imported from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
 - Relative `data` and `data-local` paths read from `openmw.cfg` are resolved relative to that cfg file's parent directory for content-file lookup. `resources` and `userdata` are not interpreted as cfg-relative import search paths.
 - Config, Lua, and event path values are UTF-8 text. Non-UTF-8 operating-system paths are outside the supported API contract and may be represented lossy when converted for cfg/Lua output.
 

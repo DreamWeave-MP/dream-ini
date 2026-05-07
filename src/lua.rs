@@ -214,6 +214,14 @@ fn event_to_table(lua: &Lua, event: &crate::ImportEvent) -> LuaResult<Table> {
             table.set("kind", "data_dir_added_for_content")?;
             table.set("path", path.to_string_lossy().as_ref())?;
         }
+        crate::ImportEvent::ArchiveResolved { path } => {
+            table.set("kind", "archive_resolved")?;
+            table.set("path", path.to_string_lossy().as_ref())?;
+        }
+        crate::ImportEvent::DataDirAddedForArchive { path } => {
+            table.set("kind", "data_dir_added_for_archive")?;
+            table.set("path", path.to_string_lossy().as_ref())?;
+        }
     }
     Ok(table)
 }

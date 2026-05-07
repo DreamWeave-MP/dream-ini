@@ -15,7 +15,7 @@ fn run_with_generation_options_do_not_require_ini() {
             ini: None,
             cfg: None,
             output: None,
-            data_dirs: Vec::new(),
+            data_dir: None,
             data_local: None,
             resources: None,
             userdata: None,
@@ -44,7 +44,7 @@ fn run_with_generation_options_do_not_require_ini() {
             ini: None,
             cfg: None,
             output: None,
-            data_dirs: Vec::new(),
+            data_dir: None,
             data_local: None,
             resources: None,
             userdata: None,
@@ -73,6 +73,7 @@ fn run_with_writes_output_from_flag_paths() {
     let ini = dir.join("Morrowind.ini");
     let cfg = dir.join("openmw.cfg");
     let output = dir.join("out.cfg");
+    create_archive(&dir, "Morrowind.bsa");
     fs::write(
         &ini,
         "[General]\nDisable Audio=1\n[Movies]\nNew Game=intro.bik\n",
@@ -87,7 +88,7 @@ fn run_with_writes_output_from_flag_paths() {
         ini: Some(ini),
         cfg: Some(cfg),
         output: Some(output.clone()),
-        data_dirs: Vec::new(),
+        data_dir: None,
         data_local: None,
         resources: None,
         userdata: None,
@@ -163,6 +164,7 @@ fn run_without_output_writes_config_to_stdout_and_diagnostics_to_stderr() {
     let dir = unique_test_dir("default-stdout-run");
     fs::create_dir_all(&dir).unwrap();
     let ini = dir.join("Morrowind.ini");
+    create_archive(&dir, "Morrowind.bsa");
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -216,7 +218,7 @@ fn run_rejects_multiple_output_modes() {
         ini: Some(PathBuf::from("Morrowind.ini")),
         cfg: Some(PathBuf::from("openmw.cfg")),
         output: Some(PathBuf::from("openmw.cfg")),
-        data_dirs: Vec::new(),
+        data_dir: None,
         data_local: None,
         resources: None,
         userdata: None,
@@ -341,6 +343,7 @@ fn run_without_cfg_or_output_is_allowed() {
     let dir = unique_test_dir("no-cfg-no-output-run");
     fs::create_dir_all(&dir).unwrap();
     let ini = dir.join("Morrowind.ini");
+    create_archive(&dir, "Morrowind.bsa");
     fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -368,7 +371,7 @@ fn run_with_missing_ini_returns_parity_error() {
         ini: Some(dir.join("missing.ini")),
         cfg: Some(dir.join("openmw.cfg")),
         output: None,
-        data_dirs: Vec::new(),
+        data_dir: None,
         data_local: None,
         resources: None,
         userdata: None,
@@ -478,7 +481,7 @@ fn run_with_explicit_data_dir_writes_data_path() {
 
     let mut cli = import_cli(ini);
     cli.output = Some(output.clone());
-    cli.data_dirs = vec![data_dir.clone()];
+    cli.data_dir = Some(data_dir.clone());
     cli.game_files = true;
     cli.no_archives = true;
     run_with(cli).unwrap();
@@ -498,7 +501,7 @@ fn import_cli(ini: PathBuf) -> Cli {
         ini: Some(ini),
         cfg: None,
         output: None,
-        data_dirs: Vec::new(),
+        data_dir: None,
         data_local: None,
         resources: None,
         userdata: None,
@@ -535,6 +538,12 @@ fn subrecord(output: &mut Vec<u8>, name: [u8; 4], data: &[u8]) {
     output.extend_from_slice(&name);
     output.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
     output.extend_from_slice(data);
+}
+
+fn create_archive(dir: &Path, archive: &str) {
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join(archive), []).unwrap();
 }
 
 fn unique_test_dir(name: &str) -> PathBuf {
