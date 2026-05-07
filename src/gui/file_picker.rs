@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use eframe::egui;
 
@@ -32,6 +32,7 @@ pub(super) struct PathPickerState {
     entries: Vec<PathEntry>,
     error: Option<String>,
     output_file_name: String,
+    current_dir_readable: bool,
 }
 
 impl PathPickerState {
@@ -62,6 +63,7 @@ impl PathPickerState {
             entries: Vec::new(),
             error: None,
             output_file_name,
+            current_dir_readable: false,
         };
         state.refresh();
         state
@@ -179,11 +181,14 @@ impl PathPickerState {
                 skipped_entries,
             }) => {
                 self.entries = entries;
-                self.error = (skipped_entries > 0)
-                    .then(|| format!("Skipped {skipped_entries} unreadable directory entries."));
+                self.current_dir_readable = true;
+                self.revalidate_selection();
+                self.error = skipped_entries_message(&skipped_entries);
             }
             Err(error) => {
                 self.entries.clear();
+                self.selected = None;
+                self.current_dir_readable = false;
                 self.error = Some(format!(
                     "Could not read directory {}: {error}",
                     self.current_dir.display()
@@ -255,13 +260,47 @@ impl PathPickerState {
     fn chosen_path(&self) -> Option<PathBuf> {
         if self.target == PathTarget::OutputCfg {
             let file_name = self.output_file_name.trim();
-            if file_name.is_empty() || Path::new(file_name).components().count() != 1 {
+            if !self.current_dir_readable || !valid_output_file_name(file_name) {
                 return None;
             }
             let directory = self.selected.as_deref().unwrap_or(&self.current_dir);
             return Some(directory.join(file_name));
         }
         self.selected.clone()
+    }
+
+    fn revalidate_selection(&mut self) {
+        match self.target.pick_kind() {
+            PickKind::Directory => {
+                if self.selected.as_ref().is_none_or(|path| {
+                    path != &self.current_dir && !self.entry_exists(path, EntryKind::Directory)
+                }) {
+                    self.selected = Some(self.current_dir.clone());
+                }
+            }
+            PickKind::ExistingFile => {
+                if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|path| !self.entry_exists(path, EntryKind::File))
+                {
+                    self.selected = None;
+                }
+            }
+            PickKind::OutputCfg => {
+                if self.selected.as_ref().is_none_or(|path| {
+                    path != &self.current_dir && !self.entry_exists(path, EntryKind::Directory)
+                }) {
+                    self.selected = Some(self.current_dir.clone());
+                }
+            }
+        }
+    }
+
+    fn entry_exists(&self, path: &Path, kind: EntryKind) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.kind == kind && entry.path == path)
     }
 }
 
@@ -324,13 +363,13 @@ fn initial_directory(path: &Path) -> Option<PathBuf> {
 
 struct ReadEntries {
     entries: Vec<PathEntry>,
-    skipped_entries: usize,
+    skipped_entries: Vec<String>,
 }
 
 fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<ReadEntries> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
-    let mut skipped_entries = 0;
+    let mut skipped_entries = Vec::new();
 
     if let Some(parent) = directory.parent() {
         directories.push(PathEntry {
@@ -342,12 +381,12 @@ fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<ReadEnt
 
     for entry in fs::read_dir(directory)? {
         let Ok(entry) = entry else {
-            skipped_entries += 1;
+            skipped_entries.push("<unreadable entry>".to_owned());
             continue;
         };
         let path = entry.path();
         let Ok(metadata) = fs::metadata(&path) else {
-            skipped_entries += 1;
+            skipped_entries.push(entry.file_name().to_string_lossy().into_owned());
             continue;
         };
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -374,6 +413,33 @@ fn read_entries(target: PathTarget, directory: &Path) -> std::io::Result<ReadEnt
         entries: directories,
         skipped_entries,
     })
+}
+
+fn skipped_entries_message(skipped_entries: &[String]) -> Option<String> {
+    if skipped_entries.is_empty() {
+        return None;
+    }
+    let visible_names = skipped_entries
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remaining_count = skipped_entries.len().saturating_sub(3);
+    let suffix = if remaining_count == 0 {
+        String::new()
+    } else {
+        format!(" (+{remaining_count} more)")
+    };
+    Some(format!(
+        "Skipped {} unreadable directory entries: {visible_names}{suffix}",
+        skipped_entries.len()
+    ))
+}
+
+fn valid_output_file_name(file_name: &str) -> bool {
+    let mut components = Path::new(file_name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 impl PathTarget {
@@ -433,6 +499,30 @@ mod tests {
 
         assert!(names.contains(&"userdata".to_owned()));
         assert!(!names.contains(&"openmw.cfg".to_owned()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_non_file_output_names() {
+        assert!(valid_output_file_name("openmw.cfg"));
+        assert!(!valid_output_file_name("."));
+        assert!(!valid_output_file_name(".."));
+        assert!(!valid_output_file_name("nested/openmw.cfg"));
+        assert!(!valid_output_file_name(""));
+    }
+
+    #[test]
+    fn refresh_clears_stale_file_selection() {
+        let root = unique_temp_dir();
+        let cfg = root.join("openmw.cfg");
+        File::create(&cfg).unwrap();
+        let mut picker = PathPickerState::new(PathTarget::ExistingOpenmwCfg, Some(&cfg));
+
+        fs::remove_file(&cfg).unwrap();
+        picker.refresh();
+
+        assert!(picker.chosen_path().is_none());
 
         fs::remove_dir_all(root).unwrap();
     }
