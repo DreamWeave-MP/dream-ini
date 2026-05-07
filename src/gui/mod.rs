@@ -126,11 +126,6 @@ impl GuiApp {
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
                         &mut language,
-                        UiLanguage::System,
-                        self.localizer.text(UiText::SystemLanguage),
-                    );
-                    ui.selectable_value(
-                        &mut language,
                         UiLanguage::English,
                         self.localizer.text(UiText::EnglishLanguage),
                     );
@@ -211,7 +206,6 @@ impl GuiApp {
 
 fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
     match language {
-        UiLanguage::System => localizer.text(UiText::SystemLanguage),
         UiLanguage::English => localizer.text(UiText::EnglishLanguage),
     }
 }

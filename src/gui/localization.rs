@@ -7,7 +7,6 @@ use dream_ini::{ImportError, ImportEvent, ImportWarning};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum UiLanguage {
-    System,
     #[default]
     English,
 }
@@ -15,7 +14,6 @@ pub(super) enum UiLanguage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UiText {
     Language,
-    SystemLanguage,
     EnglishLanguage,
     SourceSection,
     MorrowindIni,
@@ -63,32 +61,26 @@ impl Localizer {
     }
 
     pub(super) fn text(self, key: UiText) -> &'static str {
-        match self.resolved_language() {
-            UiLanguage::English | UiLanguage::System => english_text(key),
+        match self.language {
+            UiLanguage::English => english_text(key),
         }
     }
 
     pub(super) fn warning_title(self, warning: &ImportWarning) -> String {
-        match self.resolved_language() {
-            UiLanguage::English | UiLanguage::System => english_warning_title(warning),
+        match self.language {
+            UiLanguage::English => english_warning_title(warning),
         }
     }
 
     pub(super) fn event_title(self, event: &ImportEvent) -> String {
-        match self.resolved_language() {
-            UiLanguage::English | UiLanguage::System => english_event_title(event),
+        match self.language {
+            UiLanguage::English => english_event_title(event),
         }
     }
 
     pub(super) fn error_title(self, error: &ImportError) -> String {
-        match self.resolved_language() {
-            UiLanguage::English | UiLanguage::System => english_error_title(error),
-        }
-    }
-
-    const fn resolved_language(self) -> UiLanguage {
         match self.language {
-            UiLanguage::System | UiLanguage::English => UiLanguage::English,
+            UiLanguage::English => english_error_title(error),
         }
     }
 }
@@ -96,7 +88,6 @@ impl Localizer {
 const fn english_text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Language",
-        UiText::SystemLanguage => "System",
         UiText::EnglishLanguage => "English",
         UiText::SourceSection => "Source",
         UiText::MorrowindIni => "Morrowind.ini",
