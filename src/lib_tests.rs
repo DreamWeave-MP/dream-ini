@@ -1,13 +1,9 @@
 use super::*;
 use crate::importer::import_archives;
 use crate::plugin::{apply_morrowind_expansion_order, dependency_sort};
+use crate::test_support::{tes3_bytes, tes3_bytes_from_master_bytes, unique_test_dir, values};
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn values<'a>(map: &'a MultiMap, key: &str) -> &'a [String] {
-    map.get(key).map_or(&[], Vec::as_slice)
-}
 
 #[test]
 fn parses_ini_sections_comments_duplicates_and_equals() {
@@ -1035,44 +1031,4 @@ fn import_paths_missing_cfg_starts_empty() {
     assert_eq!(values(&result.cfg, "encoding"), &["win1252".to_owned()]);
 
     fs::remove_dir_all(dir).unwrap();
-}
-
-fn tes3_bytes(masters: &[&str]) -> Vec<u8> {
-    let masters: Vec<_> = masters.iter().map(|master| master.as_bytes()).collect();
-    tes3_bytes_from_master_bytes(&masters)
-}
-
-fn tes3_bytes_from_master_bytes(masters: &[&[u8]]) -> Vec<u8> {
-    let mut record = Vec::new();
-    subrecord(&mut record, *b"HEDR", &[0; 300]);
-    for master in masters {
-        let mut name = (*master).to_vec();
-        name.push(0);
-        subrecord(&mut record, *b"MAST", &name);
-        subrecord(&mut record, *b"DATA", &0u64.to_le_bytes());
-    }
-
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"TES3");
-    bytes.extend_from_slice(&u32::try_from(record.len()).unwrap().to_le_bytes());
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&0u32.to_le_bytes());
-    bytes.extend_from_slice(&record);
-    bytes
-}
-
-fn subrecord(output: &mut Vec<u8>, name: [u8; 4], data: &[u8]) {
-    output.extend_from_slice(&name);
-    output.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
-    output.extend_from_slice(data);
-}
-
-fn unique_test_dir(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "dream-ini-{name}-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
 }

@@ -44,6 +44,8 @@ mod importer;
 pub mod lua;
 mod parser;
 mod plugin;
+#[cfg(test)]
+mod test_support;
 mod warnings;
 
 pub use events::ImportEvent;
