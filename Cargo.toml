@@ -18,6 +18,7 @@ mlua = { version = "0.10", optional = true, features = ["luajit52", "vendored"] 
 rfd = { version = "0.15", optional = true }
 
 [features]
+default = ["gui"]
 gui = ["dep:eframe", "dep:rfd"]
 lua = ["dep:mlua"]
 
