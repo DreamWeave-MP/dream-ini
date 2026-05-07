@@ -134,6 +134,9 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
     if let Some(value) = table.get::<Option<String>>("userdata")? {
         options.userdata = Some(PathBuf::from(value));
     }
+    if let Some(value) = table.get::<Option<String>>("cfg_dir")? {
+        options.cfg_dir = Some(PathBuf::from(value));
+    }
 
     Ok(options)
 }
@@ -340,6 +343,43 @@ mod tests {
             event.get::<String>("path").unwrap(),
             data_dir.to_string_lossy()
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lua_import_maps_uses_cfg_dir_for_relative_data_paths() {
+        let dir = unique_test_dir("import-maps-cfg-dir");
+        let cfg_dir = dir.join("config");
+        let data_dir = cfg_dir.join("Data Files");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+        let lua = Lua::new();
+        register(&lua).unwrap();
+        let module = lua.globals().get::<Table>("dream_ini").unwrap();
+        let cfg = lua.create_table().unwrap();
+        let data_values = lua.create_table().unwrap();
+        data_values.set(1, "Data Files").unwrap();
+        cfg.set("data", data_values).unwrap();
+        let ini = lua.create_table().unwrap();
+        let game_files = lua.create_table().unwrap();
+        game_files.set(1, "Base.esm").unwrap();
+        ini.set("Game Files:GameFile0", game_files).unwrap();
+        let options = lua.create_table().unwrap();
+        options.set("game_files", true).unwrap();
+        options.set("archives", false).unwrap();
+        options
+            .set("cfg_dir", cfg_dir.to_string_lossy().as_ref())
+            .unwrap();
+
+        let result: Table = module
+            .get::<mlua::Function>("import_maps")
+            .unwrap()
+            .call((cfg, ini, options))
+            .unwrap();
+        let text: String = result.get("text").unwrap();
+        assert!(text.contains("content=Base.esm\n"));
 
         fs::remove_dir_all(dir).unwrap();
     }

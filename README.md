@@ -44,7 +44,7 @@ dream-ini -M > dream-ini.1
 - `-i, --ini <FILE>`: Morrowind.ini input path.
 - `-n, --no-archives`: disable BSA archive import.
 - `-r, --resources <DIR>`: set the singleton `resources` cfg key, replacing any existing value. The directory must resolve, must be a directory, and must not be empty.
-- `-u, --userdata <DIR>`: set the singleton `userdata` cfg key, replacing any existing value. Relative paths are preserved for OpenMW to resolve relative to openmw.cfg.
+- `-u, --userdata <DIR>`: set the singleton `userdata` cfg key, replacing any existing value.
 - `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
 - `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
 - `-w, --in-place`: write the imported result back to `--cfg`. Requires `--cfg` and conflicts with `--output`.
@@ -60,7 +60,8 @@ dream-ini -M > dream-ini.1
 - Omitting cfg starts from an empty config.
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg settings are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`, or by explicit singleton path options such as `--data-local`, `--resources`, and `--userdata`.
-- `--game-files` searches explicit `--data` paths first, then existing `data` and `data-local` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
+- `--game-files` searches explicit `--data` paths first, then existing `data-local` cfg paths, then existing `data` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. `data-local` is searched before ordinary `data` because it is OpenMW's highest-precedence data directory. Every `.esm`/`.esp` entry from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
+- Relative `data` and `data-local` paths read from `openmw.cfg` are resolved relative to that cfg file's parent directory for content-file lookup. `resources` and `userdata` are not interpreted as cfg-relative import search paths.
 
 ## Deliberate Differences From OpenMW's C++ Importer
 
@@ -96,6 +97,7 @@ local result = dream_ini.import_paths({
   archives = true,
   fonts = false,
   data_dirs = { "/games/Morrowind/Data Files" },
+  cfg_dir = "/home/user/.config/openmw",
   encoding = "win1252",
 })
 
