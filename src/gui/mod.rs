@@ -6,7 +6,7 @@ use dream_ini::{
 };
 use eframe::egui;
 
-use self::localization::{Localizer, UiText};
+use self::localization::{Localizer, UiLanguage, UiText};
 
 mod localization;
 
@@ -45,6 +45,8 @@ impl eframe::App for GuiApp {
 
 impl GuiApp {
     fn show_form(&mut self, ui: &mut egui::Ui) {
+        self.show_language_selector(ui);
+        ui.separator();
         ui.heading(self.localizer.text(UiText::SourceSection));
         path_file_row(
             ui,
@@ -115,6 +117,28 @@ impl GuiApp {
         }
     }
 
+    fn show_language_selector(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(self.localizer.text(UiText::Language));
+            let mut language = self.localizer.language();
+            egui::ComboBox::from_id_salt("gui-language")
+                .selected_text(language_label(self.localizer, language))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut language,
+                        UiLanguage::System,
+                        self.localizer.text(UiText::SystemLanguage),
+                    );
+                    ui.selectable_value(
+                        &mut language,
+                        UiLanguage::English,
+                        self.localizer.text(UiText::EnglishLanguage),
+                    );
+                });
+            self.localizer.set_language(language);
+        });
+    }
+
     fn show_results(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.localizer.text(UiText::Results));
         ui.horizontal(|ui| {
@@ -167,7 +191,11 @@ impl GuiApp {
                 {
                     *data_dir = path;
                 }
-                if ui.button("−").clicked() {
+                if ui
+                    .button("−")
+                    .on_hover_text(self.localizer.text(UiText::RemoveDataDir))
+                    .clicked()
+                {
                     remove_index = Some(index);
                 }
             });
@@ -175,9 +203,16 @@ impl GuiApp {
         if let Some(index) = remove_index {
             self.state.data_dirs.remove(index);
         }
-        if ui.button("+").clicked() {
+        if ui.button(self.localizer.text(UiText::AddDataDir)).clicked() {
             self.state.data_dirs.push(String::new());
         }
+    }
+}
+
+fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
+    match language {
+        UiLanguage::System => localizer.text(UiText::SystemLanguage),
+        UiLanguage::English => localizer.text(UiText::EnglishLanguage),
     }
 }
 
@@ -214,9 +249,7 @@ impl ImportFormState {
     fn import_preview(&self) -> GuiImportResult {
         let Some(ini_path) = optional_path(&self.morrowind_ini) else {
             return GuiImportResult::Error {
-                error: GuiImportError::Validation(
-                    "Select a Morrowind.ini file before importing.".to_owned(),
-                ),
+                error: GuiImportError::MissingMorrowindIni,
             };
         };
         let cfg_path = optional_path(&self.existing_cfg);
@@ -276,7 +309,7 @@ impl GuiImportResult {
 
 #[derive(Debug)]
 enum GuiImportError {
-    Validation(String),
+    MissingMorrowindIni,
     Import(ImportError),
 }
 
@@ -298,7 +331,7 @@ fn result_tab(ui: &mut egui::Ui, selected: &mut ResultPanel, panel: ResultPanel,
 fn show_error_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
     match result {
         GuiImportResult::Success { .. } => {
-            ui.label("No errors.");
+            ui.label(localizer.text(UiText::NoErrors));
         }
         GuiImportResult::Error { error } => {
             ui.colored_label(egui::Color32::RED, error_title(localizer, error));
@@ -308,11 +341,11 @@ fn show_error_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportR
 
 fn show_warning_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
     let GuiImportResult::Success { warnings, .. } = result else {
-        ui.label("No warnings.");
+        ui.label(localizer.text(UiText::NoWarnings));
         return;
     };
     if warnings.is_empty() {
-        ui.label("No warnings.");
+        ui.label(localizer.text(UiText::NoWarnings));
         return;
     }
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -324,11 +357,11 @@ fn show_warning_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImpor
 
 fn show_event_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
     let GuiImportResult::Success { events, .. } = result else {
-        ui.label("No events.");
+        ui.label(localizer.text(UiText::NoEvents));
         return;
     };
     if events.is_empty() {
-        ui.label("No events.");
+        ui.label(localizer.text(UiText::NoEvents));
         return;
     }
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -340,7 +373,7 @@ fn show_event_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportR
 
 fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mut GuiImportResult) {
     let GuiImportResult::Success { cfg_text, .. } = result else {
-        ui.label("No generated cfg.");
+        ui.label(localizer.text(UiText::NoGeneratedCfg));
         return;
     };
     if ui.button(localizer.text(UiText::Copy)).clicked() {
@@ -374,7 +407,9 @@ fn show_numbered_cfg(ui: &mut egui::Ui, cfg_text: &str) {
 
 fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
     match error {
-        GuiImportError::Validation(message) => message.clone(),
+        GuiImportError::MissingMorrowindIni => localizer
+            .text(UiText::SelectMorrowindIniBeforeImporting)
+            .to_owned(),
         GuiImportError::Import(error) => localizer.error_title(error),
     }
 }

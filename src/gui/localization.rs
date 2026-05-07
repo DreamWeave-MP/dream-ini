@@ -14,8 +14,6 @@ pub(super) enum UiLanguage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UiText {
-    AppTitle,
-    GuiReady,
     Language,
     SystemLanguage,
     EnglishLanguage,
@@ -41,6 +39,13 @@ pub(super) enum UiText {
     Events,
     GeneratedCfg,
     Copy,
+    AddDataDir,
+    RemoveDataDir,
+    NoErrors,
+    NoWarnings,
+    NoEvents,
+    NoGeneratedCfg,
+    SelectMorrowindIniBeforeImporting,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -49,6 +54,14 @@ pub(super) struct Localizer {
 }
 
 impl Localizer {
+    pub(super) const fn language(self) -> UiLanguage {
+        self.language
+    }
+
+    pub(super) fn set_language(&mut self, language: UiLanguage) {
+        self.language = language;
+    }
+
     pub(super) fn text(self, key: UiText) -> &'static str {
         match self.resolved_language() {
             UiLanguage::English | UiLanguage::System => english_text(key),
@@ -82,8 +95,6 @@ impl Localizer {
 
 const fn english_text(key: UiText) -> &'static str {
     match key {
-        UiText::AppTitle => "dream-ini",
-        UiText::GuiReady => "GUI support is enabled.",
         UiText::Language => "Language",
         UiText::SystemLanguage => "System",
         UiText::EnglishLanguage => "English",
@@ -109,6 +120,15 @@ const fn english_text(key: UiText) -> &'static str {
         UiText::Events => "Events",
         UiText::GeneratedCfg => "Generated cfg",
         UiText::Copy => "Copy",
+        UiText::AddDataDir => "Add data dir",
+        UiText::RemoveDataDir => "Remove data dir",
+        UiText::NoErrors => "No errors.",
+        UiText::NoWarnings => "No warnings.",
+        UiText::NoEvents => "No events.",
+        UiText::NoGeneratedCfg => "No generated cfg.",
+        UiText::SelectMorrowindIniBeforeImporting => {
+            "Select a Morrowind.ini file before importing."
+        }
     }
 }
 
@@ -162,7 +182,7 @@ mod tests {
     fn localizes_fixed_labels() {
         let localizer = Localizer::default();
 
-        assert_eq!(localizer.text(UiText::AppTitle), "dream-ini");
+        assert_eq!(localizer.text(UiText::Language), "Language");
         assert_eq!(localizer.text(UiText::PreviewOnly), "Preview only");
     }
 
