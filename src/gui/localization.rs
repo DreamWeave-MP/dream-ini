@@ -31,6 +31,9 @@ pub(super) enum UiText {
     Userdata,
     Output,
     PreviewOnly,
+    SaveAs,
+    OutputPath,
+    UpdateExistingCfg,
     ImportPreview,
     Results,
     Errors,
@@ -42,7 +45,10 @@ pub(super) enum UiText {
     NoWarnings,
     NoEvents,
     NoGeneratedCfg,
+    WroteCfgTo,
     SelectMorrowindIniBeforeImporting,
+    SelectOutputPathBeforeImporting,
+    SelectExistingCfgBeforeUpdating,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -104,6 +110,9 @@ const fn english_text(key: UiText) -> &'static str {
         UiText::Userdata => "userdata",
         UiText::Output => "Output",
         UiText::PreviewOnly => "Preview only",
+        UiText::SaveAs => "Save as",
+        UiText::OutputPath => "Output path",
+        UiText::UpdateExistingCfg => "Update existing openmw.cfg",
         UiText::ImportPreview => "Import / Preview",
         UiText::Results => "Results",
         UiText::Errors => "Errors",
@@ -115,8 +124,13 @@ const fn english_text(key: UiText) -> &'static str {
         UiText::NoWarnings => "No warnings.",
         UiText::NoEvents => "No events.",
         UiText::NoGeneratedCfg => "No generated cfg.",
+        UiText::WroteCfgTo => "Wrote cfg to:",
         UiText::SelectMorrowindIniBeforeImporting => {
             "Select a Morrowind.ini file before importing."
+        }
+        UiText::SelectOutputPathBeforeImporting => "Select an output path before importing.",
+        UiText::SelectExistingCfgBeforeUpdating => {
+            "Select an existing openmw.cfg before updating in place."
         }
     }
 }

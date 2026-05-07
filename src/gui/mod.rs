@@ -7,6 +7,8 @@ use dream_ini::{
 };
 use eframe::egui;
 
+use crate::command::save_config_text;
+
 use self::localization::{Localizer, UiLanguage, UiText};
 
 mod localization;
@@ -114,13 +116,13 @@ impl GuiApp {
 
         ui.separator();
         ui.heading(self.localizer.text(UiText::Output));
-        let _ = ui.radio(true, self.localizer.text(UiText::PreviewOnly));
+        self.show_output_options(ui);
 
         if ui
             .button(self.localizer.text(UiText::ImportPreview))
             .clicked()
         {
-            let result = self.state.import_preview();
+            let result = self.state.run_import();
             self.selected_result_panel = result.default_panel();
             self.result = Some(result);
         }
@@ -188,6 +190,41 @@ impl GuiApp {
             ResultPanel::GeneratedCfg => show_generated_cfg_panel(ui, self.localizer, result),
         }
     }
+
+    fn show_output_options(&mut self, ui: &mut egui::Ui) {
+        ui.radio_value(
+            &mut self.state.output_mode,
+            GuiOutputMode::PreviewOnly,
+            self.localizer.text(UiText::PreviewOnly),
+        );
+        ui.horizontal(|ui| {
+            ui.radio_value(
+                &mut self.state.output_mode,
+                GuiOutputMode::SaveAs,
+                self.localizer.text(UiText::SaveAs),
+            );
+            ui.add_enabled_ui(self.state.output_mode == GuiOutputMode::SaveAs, |ui| {
+                path_save_file_row(
+                    ui,
+                    self.localizer.text(UiText::OutputPath),
+                    self.localizer.text(UiText::Browse),
+                    &mut self.state.output_path,
+                );
+            });
+        });
+        ui.add_enabled_ui(optional_path(&self.state.existing_cfg).is_some(), |ui| {
+            ui.radio_value(
+                &mut self.state.output_mode,
+                GuiOutputMode::UpdateExistingCfg,
+                self.localizer.text(UiText::UpdateExistingCfg),
+            );
+        });
+        if self.state.output_mode == GuiOutputMode::UpdateExistingCfg
+            && optional_path(&self.state.existing_cfg).is_none()
+        {
+            self.state.output_mode = GuiOutputMode::PreviewOnly;
+        }
+    }
 }
 
 fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
@@ -208,6 +245,8 @@ struct ImportFormState {
     data_local: String,
     resources: String,
     userdata: String,
+    output_mode: GuiOutputMode,
+    output_path: String,
 }
 
 impl Default for ImportFormState {
@@ -223,12 +262,14 @@ impl Default for ImportFormState {
             data_local: String::new(),
             resources: String::new(),
             userdata: String::new(),
+            output_mode: GuiOutputMode::PreviewOnly,
+            output_path: String::new(),
         }
     }
 }
 
 impl ImportFormState {
-    fn import_preview(&self) -> GuiImportResult {
+    fn run_import(&self) -> GuiImportResult {
         let Some(ini_path) = optional_path(&self.morrowind_ini) else {
             return GuiImportResult::Error {
                 error: GuiImportError::MissingMorrowindIni,
@@ -238,14 +279,41 @@ impl ImportFormState {
         let importer = IniImporter::new(self.import_options());
 
         match importer.import_optional_cfg_path(&ini_path, cfg_path.as_deref()) {
-            Ok(result) => GuiImportResult::Success {
-                cfg_text: serialize_cfg(&result.cfg),
-                warnings: result.warnings,
-                events: result.events,
-            },
+            Ok(result) => {
+                let cfg_text = serialize_cfg(&result.cfg);
+                match self.write_output(&cfg_text) {
+                    Ok(output_path) => GuiImportResult::Success {
+                        cfg_text,
+                        warnings: result.warnings,
+                        events: result.events,
+                        output_path,
+                    },
+                    Err(error) => GuiImportResult::Error { error },
+                }
+            }
             Err(error) => GuiImportResult::Error {
                 error: GuiImportError::Import(error),
             },
+        }
+    }
+
+    fn write_output(&self, cfg_text: &str) -> Result<Option<PathBuf>, GuiImportError> {
+        match self.output_mode {
+            GuiOutputMode::PreviewOnly => Ok(None),
+            GuiOutputMode::SaveAs => {
+                let Some(output_path) = optional_path(&self.output_path) else {
+                    return Err(GuiImportError::MissingOutputPath);
+                };
+                save_config_text(&output_path, cfg_text).map_err(GuiImportError::Import)?;
+                Ok(Some(output_path))
+            }
+            GuiOutputMode::UpdateExistingCfg => {
+                let Some(cfg_path) = optional_path(&self.existing_cfg) else {
+                    return Err(GuiImportError::MissingExistingCfgForUpdate);
+                };
+                save_config_text(&cfg_path, cfg_text).map_err(GuiImportError::Import)?;
+                Ok(Some(cfg_path))
+            }
         }
     }
 
@@ -267,12 +335,21 @@ impl ImportFormState {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum GuiOutputMode {
+    #[default]
+    PreviewOnly,
+    SaveAs,
+    UpdateExistingCfg,
+}
+
 #[derive(Debug)]
 enum GuiImportResult {
     Success {
         cfg_text: String,
         warnings: Vec<ImportWarning>,
         events: Vec<ImportEvent>,
+        output_path: Option<PathBuf>,
     },
     Error {
         error: GuiImportError,
@@ -291,6 +368,8 @@ impl GuiImportResult {
 #[derive(Debug)]
 enum GuiImportError {
     MissingMorrowindIni,
+    MissingOutputPath,
+    MissingExistingCfgForUpdate,
     Import(ImportError),
 }
 
@@ -386,10 +465,22 @@ fn show_event_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportR
 }
 
 fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mut GuiImportResult) {
-    let GuiImportResult::Success { cfg_text, .. } = result else {
+    let GuiImportResult::Success {
+        cfg_text,
+        output_path,
+        ..
+    } = result
+    else {
         ui.label(localizer.text(UiText::NoGeneratedCfg));
         return;
     };
+    if let Some(path) = output_path {
+        ui.label(format!(
+            "{} {}",
+            localizer.text(UiText::WroteCfgTo),
+            path.display()
+        ));
+    }
     if ui.button(localizer.text(UiText::Copy)).clicked() {
         ui.ctx().copy_text(cfg_text.clone());
     }
@@ -424,6 +515,12 @@ fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
         GuiImportError::MissingMorrowindIni => localizer
             .text(UiText::SelectMorrowindIniBeforeImporting)
             .to_owned(),
+        GuiImportError::MissingOutputPath => localizer
+            .text(UiText::SelectOutputPathBeforeImporting)
+            .to_owned(),
+        GuiImportError::MissingExistingCfgForUpdate => localizer
+            .text(UiText::SelectExistingCfgBeforeUpdating)
+            .to_owned(),
         GuiImportError::Import(error) => localizer.error_title(error),
     }
 }
@@ -434,6 +531,10 @@ fn path_file_row(ui: &mut egui::Ui, label: &str, browse: &str, value: &mut Strin
 
 fn path_folder_row(ui: &mut egui::Ui, label: &str, browse: &str, value: &mut String) {
     path_row(ui, label, browse, value, pick_folder);
+}
+
+fn path_save_file_row(ui: &mut egui::Ui, label: &str, browse: &str, value: &mut String) {
+    path_row(ui, label, browse, value, pick_save_file);
 }
 
 fn path_row(
@@ -466,6 +567,13 @@ fn pick_file() -> Option<String> {
 fn pick_folder() -> Option<String> {
     rfd::FileDialog::new()
         .pick_folder()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn pick_save_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_file_name("openmw.cfg")
+        .save_file()
         .map(|path| path.to_string_lossy().into_owned())
 }
 
