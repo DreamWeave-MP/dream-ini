@@ -346,11 +346,14 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
     if ui.button(localizer.text(UiText::Copy)).clicked() {
         ui.ctx().copy_text(cfg_text.clone());
     }
-    egui::ScrollArea::both()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            show_numbered_cfg(ui, cfg_text);
-        });
+    ui.scope(|ui| {
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                show_numbered_cfg(ui, cfg_text);
+            });
+    });
 }
 
 fn show_numbered_cfg(ui: &mut egui::Ui, cfg_text: &str) {
