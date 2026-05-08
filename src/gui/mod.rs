@@ -531,7 +531,11 @@ impl ImportFormState {
                 &self.preserved_update(),
                 &result.changed_keys,
             )?;
-            Ok(config.to_string())
+            if self.relocated_existing_cfg_output() {
+                Ok(config.to_resolved_string())
+            } else {
+                Ok(config.to_string())
+            }
         } else {
             serialize_cfg_output(&result.cfg, &self.output_reference_dir())
         }
@@ -964,9 +968,51 @@ fn equivalent_dirs(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn default_gui_encoding_is_not_an_override() {
         assert_eq!(ImportFormState::default().import_options().encoding, None);
+    }
+
+    #[test]
+    fn relocated_save_as_preview_uses_resolved_paths() {
+        let dir = unique_test_dir("gui-relocated-preview");
+        let source_dir = dir.join("source");
+        let output_dir = dir.join("output");
+        std::fs::create_dir_all(source_dir.join("mods")).unwrap();
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let cfg = source_dir.join("openmw.cfg");
+        std::fs::write(&cfg, "data=mods\n").unwrap();
+
+        let state = ImportFormState {
+            existing_cfg: cfg.to_string_lossy().into_owned(),
+            output_mode: GuiOutputMode::SaveAs,
+            output_path: output_dir.join("openmw.cfg").to_string_lossy().into_owned(),
+            ..ImportFormState::default()
+        };
+        let result = ImportResult {
+            cfg: dream_ini::MultiMap::new(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            changed_keys: BTreeSet::new(),
+        };
+
+        let preview = state.serialize_result(&result).unwrap();
+        assert!(preview.contains(&format!("data={}\n", source_dir.join("mods").display())));
+        assert!(!preview.contains("data=mods\n"));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "dream-ini-gui-{name}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 }
