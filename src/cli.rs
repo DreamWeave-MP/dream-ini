@@ -12,7 +12,7 @@ use clap_complete::Shell;
     disable_help_flag = true,
     disable_version_flag = true,
     override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
-    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to overwrite the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
+    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to update the base cfg. Relative --data is resolved from the output cfg directory, or from --cfg for stdout preview. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
 )]
 pub(crate) struct Cli {
     /// Verbose output
@@ -51,7 +51,7 @@ pub(crate) struct Cli {
     )]
     pub(crate) output: Option<PathBuf>,
 
-    /// Explicit Data Files directory to search and write to the imported cfg
+    /// Explicit Data Files directory to search; relative paths are output-cfg-relative
     #[arg(short = 'd', long = "data", value_name = "DIR", display_order = 2)]
     pub(crate) data_dir: Option<PathBuf>,
 
@@ -64,7 +64,7 @@ pub(crate) struct Cli {
     )]
     pub(crate) data_local: Option<PathBuf>,
 
-    /// Set resources in the imported cfg, replacing any existing value; must be a non-empty directory
+    /// Set resources in the imported cfg, replacing any existing value
     #[arg(short, long, value_name = "DIR", display_order = 11)]
     pub(crate) resources: Option<PathBuf>,
 

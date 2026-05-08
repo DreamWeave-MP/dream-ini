@@ -14,7 +14,7 @@ cargo build --release
 dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]
 ```
 
-`--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file or `--in-place` with `--cfg` to update the base cfg. If `--cfg` is provided, it is read first, intentionally imported keys are replaced, and unrelated comments, entries, chain controls, and relative/token path spelling are preserved through `openmw-config`'s preservation-oriented serializer. If `--cfg` is omitted, import starts from an empty config.
+`--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file or `--in-place` with `--cfg` to update the base cfg. If `--cfg` is provided, it is read first and intentionally imported keys are replaced. In-place and same-directory output preserve unrelated comments, entries, chain controls, and relative/token path spelling through `openmw-config`'s preservation-oriented serializer. Relocated `--cfg` + `--output` writes a resolved export so relative paths do not silently change meaning. If `--cfg` is omitted, import starts from an empty config.
 
 ```bash
 dream-ini --ini Morrowind.ini > openmw.cfg
@@ -35,7 +35,7 @@ dream-ini -M > dream-ini.1
 ## Options
 
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
-- `-d, --data <DIR>`: explicit Data Files directory searched before cfg/default data paths.
+- `-d, --data <DIR>`: explicit Data Files directory searched before cfg/default data paths. Relative paths are resolved from the output cfg directory, or from `--cfg` for stdout preview.
 - `-l, --data-local <DIR>`: set the singleton `data-local` cfg key, replacing any existing value. The value is written as supplied and is not used as an importer search path.
 - `-e, --encoding <ENCODING>`: character encoding for imported content-file names; `win1250`, `win1251`, or `win1252`.
 - `-f, --fonts`: import bitmap font fallback settings.
@@ -54,7 +54,8 @@ dream-ini -M > dream-ini.1
 
 ## Behavior
 
-- Existing cfg output is updated through `openmw-config`'s preservation-oriented serialization. Comments, unrelated entries, and relative/token path spelling are preserved unless a key is intentionally replaced by the import.
+- Existing cfg output is updated through `openmw-config`'s preservation-oriented serialization when the output remains in the same cfg directory. Comments, unrelated entries, and relative/token path spelling are preserved unless a key is intentionally replaced by the import.
+- Existing cfg output written to a different directory uses resolved flattened serialization so relative paths keep their resolved meaning instead of becoming relative to the new output directory.
 - Output generated without `--cfg` is new `openmw.cfg` text built from imported/authored values. It has no source comments or formatting to preserve.
 - When no `--output` or `--in-place` mode is selected, cfg text is written to stdout. Diagnostics are written to stderr in stdout mode.
 - Missing cfg files are treated as empty configs and are not created unless they are also the `--output` path or `--in-place` target.
@@ -62,6 +63,7 @@ dream-ini -M > dream-ini.1
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg entries are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`, or by explicit singleton path options such as `--data-local`, `--resources`, and `--user-data`.
 - Content-file and fallback-archive import searches existing `data-local` cfg paths first, then the explicit `--data` path, then existing `data` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. `data-local` always wins because it is OpenMW's highest-precedence data directory. Every `.esm`/`.esp` and `.bsa` entry imported from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
+- Relative `--data` requires a cfg output context: `--output`, `--cfg`, or `--in-place`. Without `--cfg` or `--output`, use an absolute `--data` path for stdout output.
 - Explicit singleton options (`--data-local`, `--resources`, and `--user-data`) are output-only and are applied after content/archive resolution. Use `--data` to add an importer search path.
 - Directory-valued keys read from an existing cfg are interpreted by `openmw-config` for filesystem lookup. Their authored spelling is not rewritten for normal cfg output.
 - Config, Lua, and event path values are UTF-8 text. Non-UTF-8 operating-system paths are outside the supported API contract and may be represented lossy when converted for cfg/Lua output.
