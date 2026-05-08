@@ -126,6 +126,37 @@ fn relative_explicit_data_dir_is_written_as_supplied() {
 }
 
 #[test]
+fn existing_cfg_with_game_files_preserves_comments_and_added_data_spelling() {
+    let dir = unique_test_dir("preserve-game-files-added-data");
+    let work_dir = dir.join("work");
+    let extra_data = work_dir.join("extra-data");
+    fs::create_dir_all(&extra_data).unwrap();
+    let ini = work_dir.join("Morrowind.ini");
+    let cfg = work_dir.join("openmw.cfg");
+    let output_cfg = work_dir.join("out.cfg");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(extra_data.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(&cfg, "# existing data stays relative\ndata=mods\n").unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&work_dir)
+        .args(["--game-files", "--no-archives", "--data", "extra-data"])
+        .args(["--cfg", "openmw.cfg", "--output", "out.cfg"])
+        .args(["--ini", "Morrowind.ini"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("# existing data stays relative\ndata=mods\n"));
+    assert!(written.contains("data=extra-data\n"));
+    assert!(written.contains("content=Base.esm\n"));
+    assert!(!written.contains(&format!("data={}\n", extra_data.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn singleton_path_options_replace_existing_values() {
     let dir = unique_test_dir("singleton-path-options");
     let resources = dir.join("resources");
