@@ -59,7 +59,6 @@ fn run_with_writers(
         .clone()
         .or_else(|| cli.in_place.then(|| cfg_path.clone()).flatten());
     let data_dir_base = cfg_output_context_dir(output_path.as_deref(), cfg_path.as_deref());
-    validate_explicit_data_dir_context(cli.data_dir.as_deref(), data_dir_base.as_deref())?;
     let write_resolved_data_dirs = cfg_path
         .as_deref()
         .zip(output_path.as_deref())
@@ -166,19 +165,6 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
         ));
     }
 
-    Ok(())
-}
-
-fn validate_explicit_data_dir_context(
-    data_dir: Option<&Path>,
-    data_dir_base: Option<&Path>,
-) -> Result<(), CliError> {
-    if data_dir.is_some_and(Path::is_relative) && data_dir_base.is_none() {
-        return Err(CliError::InvalidUsage(
-            "relative --data requires --cfg or --output; use an absolute path for stdout output"
-                .to_owned(),
-        ));
-    }
     Ok(())
 }
 

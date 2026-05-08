@@ -61,7 +61,6 @@ pub(super) enum UiText {
     SelectMorrowindIniBeforeImporting,
     SelectOutputPathBeforeImporting,
     SelectExistingCfgBeforeUpdating,
-    RelativeDataRequiresCfgOrOutput,
     CancelPicker,
     ChoosePath,
     SelectPath,

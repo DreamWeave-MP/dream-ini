@@ -484,11 +484,6 @@ impl ImportFormState {
         {
             return Some(UiText::SelectExistingCfgBeforeUpdating);
         }
-        if optional_path(&self.explicit_search_path).is_some_and(|path| path.is_relative())
-            && self.output_context_dir().is_none()
-        {
-            return Some(UiText::RelativeDataRequiresCfgOrOutput);
-        }
         None
     }
 

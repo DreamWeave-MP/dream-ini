@@ -155,11 +155,13 @@ fn relative_explicit_data_dir_searches_from_output_cfg_directory() {
 }
 
 #[test]
-fn relative_explicit_data_dir_requires_cfg_context_for_stdout() {
+fn relative_explicit_data_dir_without_cfg_context_writes_absolute_path() {
     let dir = unique_test_dir("relative-data-no-context");
-    fs::create_dir_all(&dir).unwrap();
+    let data_dir = dir.join("relative-data");
+    fs::create_dir_all(&data_dir).unwrap();
     let ini = dir.join("Morrowind.ini");
     fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
     let output = Command::new(BIN)
         .current_dir(&dir)
@@ -169,12 +171,11 @@ fn relative_explicit_data_dir_requires_cfg_context_for_stdout() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("relative --data requires --cfg or --output")
-    );
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("content=Base.esm\n"));
+    assert!(stdout.contains(&format!("data={}\n", data_dir.display())));
+    assert!(!stdout.contains("data=relative-data\n"));
 
     fs::remove_dir_all(dir).unwrap();
 }

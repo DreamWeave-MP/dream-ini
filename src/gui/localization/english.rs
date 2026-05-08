@@ -65,9 +65,6 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Select an existing openmw.cfg before updating in place."
         }
-        UiText::RelativeDataRequiresCfgOrOutput => {
-            "Relative game install paths require an existing cfg or output cfg path."
-        }
         UiText::CancelPicker => "Cancel",
         UiText::ChoosePath => "Choose",
         UiText::SelectPath => "Select",

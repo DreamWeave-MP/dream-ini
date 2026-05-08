@@ -207,7 +207,9 @@ fn build_search_paths(
     search_paths.extend(explicit_data_dirs.iter().map(|path| {
         let resolved_path = resolve_explicit_data_path(path, explicit_data_dir_base);
         let search_path = fs::canonicalize(&resolved_path).unwrap_or(resolved_path);
-        let cfg_value = if write_resolved_data_dirs {
+        let cfg_value = if write_resolved_data_dirs
+            || (explicit_data_dir_base.is_none() && path.is_relative())
+        {
             search_path.to_string_lossy().into_owned()
         } else {
             path.to_string_lossy().into_owned()
