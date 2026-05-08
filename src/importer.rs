@@ -153,7 +153,7 @@ impl IniImporter {
         let warnings = Vec::new();
         let mut events = Vec::new();
         let mut changed_keys = BTreeSet::new();
-        let search_cfg = normalize_cfg(cfg, cfg_dir)?;
+        let mut search_cfg = normalize_cfg(cfg, cfg_dir)?;
         let mut imported_cfg = cfg.clone();
 
         if merge(&mut imported_cfg, ini) {
@@ -180,6 +180,11 @@ impl IniImporter {
             for data_dir in imported_content.data_dirs {
                 changed_keys.insert("data".to_owned());
                 insert_multimap(&mut imported_cfg, "data".to_owned(), data_dir.cfg_value);
+                insert_multimap(
+                    &mut search_cfg,
+                    "data".to_owned(),
+                    data_dir.path.to_string_lossy().into_owned(),
+                );
             }
             imported_cfg.insert("content".to_owned(), imported_content.content);
             changed_keys.insert("content".to_owned());

@@ -99,6 +99,37 @@ fn imports_game_files_from_default_data_files_path_and_writes_data() {
 }
 
 #[test]
+fn shared_content_and_archive_data_dir_is_written_once() {
+    let dir = unique_test_dir("game-files-archives-shared-data");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(data_dir.join("Morrowind.bsa"), []).unwrap();
+
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+    assert_eq!(
+        values(&cfg, "fallback-archive"),
+        &["Morrowind.bsa".to_owned()]
+    );
+    assert_eq!(
+        values(&cfg, "data"),
+        &[data_dir.to_string_lossy().into_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn explicit_data_dir_is_written_when_it_resolves_content() {
     let dir = unique_test_dir("game-files-explicit-data");
     let data_dir = dir.join("External Data");
