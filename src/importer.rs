@@ -157,11 +157,7 @@ impl IniImporter {
                 verbose: self.options.verbose,
             })?;
             for data_dir in imported_content.data_dirs {
-                insert_multimap(
-                    &mut imported_cfg,
-                    "data".to_owned(),
-                    data_dir.to_string_lossy().into_owned(),
-                );
+                insert_multimap(&mut imported_cfg, "data".to_owned(), data_dir.cfg_value);
             }
             imported_cfg.insert("content".to_owned(), imported_content.content);
             events.extend(imported_content.events);
@@ -177,11 +173,7 @@ impl IniImporter {
                 verbose: self.options.verbose,
             })?;
             for data_dir in imported_archives.data_dirs {
-                insert_multimap(
-                    &mut imported_cfg,
-                    "data".to_owned(),
-                    data_dir.to_string_lossy().into_owned(),
-                );
+                insert_multimap(&mut imported_cfg, "data".to_owned(), data_dir.cfg_value);
             }
             imported_cfg.insert("fallback-archive".to_owned(), imported_archives.archives);
             events.extend(imported_archives.events);

@@ -9,15 +9,21 @@ use crate::{Game, ImportError, MultiMap, TextEncoding};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportedContentFiles {
     pub(crate) content: Vec<String>,
-    pub(crate) data_dirs: Vec<PathBuf>,
+    pub(crate) data_dirs: Vec<DataDirToWrite>,
     pub(crate) events: Vec<ImportEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportedArchives {
     pub(crate) archives: Vec<String>,
-    pub(crate) data_dirs: Vec<PathBuf>,
+    pub(crate) data_dirs: Vec<DataDirToWrite>,
     pub(crate) events: Vec<ImportEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DataDirToWrite {
+    pub(crate) path: PathBuf,
+    pub(crate) cfg_value: String,
 }
 
 #[derive(Clone, Copy)]
@@ -56,7 +62,7 @@ pub(crate) fn import_archives(
     let data_dirs = used_archive_data_dirs_to_write(request.cfg, request.cfg_dir, &archives);
     for data_dir in &data_dirs {
         events.push(ImportEvent::DataDirAddedForArchive {
-            path: data_dir.clone(),
+            path: data_dir.path.clone(),
         });
     }
 
@@ -83,7 +89,7 @@ pub(crate) fn import_content_files(
     let data_dirs = used_data_dirs_to_write(request.cfg, request.cfg_dir, &content_files);
     for data_dir in &data_dirs {
         events.push(ImportEvent::DataDirAddedForContent {
-            path: data_dir.clone(),
+            path: data_dir.path.clone(),
         });
     }
 
@@ -169,6 +175,7 @@ fn resolve_archive(
             return Some(ResolvedArchive {
                 name: file.to_owned(),
                 data_path: search_path.path.clone(),
+                data_cfg_value: search_path.cfg_value.clone(),
                 search_path_origin: search_path.origin,
             });
         }
@@ -189,6 +196,7 @@ fn build_search_paths(
     }
     search_paths.extend(explicit_data_dirs.iter().map(|path| ContentSearchPath {
         path: fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
+        cfg_value: path.to_string_lossy().into_owned(),
         origin: SearchPathOrigin::Explicit,
     }));
     if let Some(paths) = cfg.get("data") {
@@ -200,6 +208,7 @@ fn build_search_paths(
         .join("Data Files");
     let default_data_path = fs::canonicalize(&default_data_path).unwrap_or(default_data_path);
     search_paths.push(ContentSearchPath {
+        cfg_value: default_data_path.to_string_lossy().into_owned(),
         path: default_data_path,
         origin: SearchPathOrigin::Default,
     });
@@ -264,6 +273,7 @@ fn resolve_content_file(
                 sort_key: system_time_key(modified),
                 path,
                 data_path: search_path.path.clone(),
+                data_cfg_value: search_path.cfg_value.clone(),
                 search_path_origin: search_path.origin,
             });
         }
@@ -307,6 +317,7 @@ enum SearchPathOrigin {
 #[derive(Debug, Clone)]
 struct ContentSearchPath {
     path: PathBuf,
+    cfg_value: String,
     origin: SearchPathOrigin,
 }
 
@@ -315,6 +326,7 @@ struct ResolvedContentFile {
     sort_key: u128,
     path: PathBuf,
     data_path: PathBuf,
+    data_cfg_value: String,
     search_path_origin: SearchPathOrigin,
 }
 
@@ -322,6 +334,7 @@ struct ResolvedContentFile {
 struct ResolvedArchive {
     name: String,
     data_path: PathBuf,
+    data_cfg_value: String,
     search_path_origin: SearchPathOrigin,
 }
 
@@ -329,8 +342,8 @@ fn used_data_dirs_to_write(
     cfg: &MultiMap,
     cfg_dir: Option<&Path>,
     content_files: &[ResolvedContentFile],
-) -> Vec<PathBuf> {
-    let mut used_paths: Vec<PathBuf> = Vec::new();
+) -> Vec<DataDirToWrite> {
+    let mut used_paths: Vec<DataDirToWrite> = Vec::new();
     for content_file in content_files {
         if content_file.search_path_origin == SearchPathOrigin::Config {
             continue;
@@ -338,9 +351,12 @@ fn used_data_dirs_to_write(
         if !has_equivalent_data_path(cfg, cfg_dir, &content_file.data_path)
             && !used_paths
                 .iter()
-                .any(|path| equivalent_paths(path.as_path(), &content_file.data_path))
+                .any(|path| equivalent_paths(path.path.as_path(), &content_file.data_path))
         {
-            used_paths.push(content_file.data_path.clone());
+            used_paths.push(DataDirToWrite {
+                path: content_file.data_path.clone(),
+                cfg_value: content_file.data_cfg_value.clone(),
+            });
         }
     }
     used_paths
@@ -350,8 +366,8 @@ fn used_archive_data_dirs_to_write(
     cfg: &MultiMap,
     cfg_dir: Option<&Path>,
     archives: &[ResolvedArchive],
-) -> Vec<PathBuf> {
-    let mut used_paths: Vec<PathBuf> = Vec::new();
+) -> Vec<DataDirToWrite> {
+    let mut used_paths: Vec<DataDirToWrite> = Vec::new();
     for archive in archives {
         if archive.search_path_origin == SearchPathOrigin::Config {
             continue;
@@ -359,9 +375,12 @@ fn used_archive_data_dirs_to_write(
         if !has_equivalent_data_path(cfg, cfg_dir, &archive.data_path)
             && !used_paths
                 .iter()
-                .any(|path| equivalent_paths(path.as_path(), &archive.data_path))
+                .any(|path| equivalent_paths(path.path.as_path(), &archive.data_path))
         {
-            used_paths.push(archive.data_path.clone());
+            used_paths.push(DataDirToWrite {
+                path: archive.data_path.clone(),
+                cfg_value: archive.data_cfg_value.clone(),
+            });
         }
     }
     used_paths
@@ -383,6 +402,7 @@ fn add_search_paths(
     for path in input {
         output.push(ContentSearchPath {
             path: resolve_cfg_path(unquote_path(path), cfg_dir),
+            cfg_value: path.clone(),
             origin,
         });
     }

@@ -99,6 +99,33 @@ fn explicit_data_dir_imports_content_and_writes_data() {
 }
 
 #[test]
+fn relative_explicit_data_dir_is_written_as_supplied() {
+    let dir = unique_test_dir("relative-explicit-data-dir");
+    let work_dir = dir.join("work");
+    let data_dir = work_dir.join("relative-data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let ini = work_dir.join("Morrowind.ini");
+    let output_cfg = work_dir.join("openmw.cfg");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&work_dir)
+        .args(["--game-files", "--no-archives", "--data", "relative-data"])
+        .args(["--output", "openmw.cfg", "--ini", "Morrowind.ini"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("content=Base.esm\n"));
+    assert!(written.contains("data=relative-data\n"));
+    assert!(!written.contains(&format!("data={}\n", data_dir.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn singleton_path_options_replace_existing_values() {
     let dir = unique_test_dir("singleton-path-options");
     let resources = dir.join("resources");
