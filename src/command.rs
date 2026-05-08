@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use dream_ini::{
-    ImportOptions, ImportResult, IniImporter, TextEncoding, save_resolved_cfg_to_path,
-    serialize_resolved_cfg,
+    ImportOptions, ImportResult, IniImporter, PreservedCfgUpdate, TextEncoding,
+    apply_preserved_cfg_update, load_cfg_document, save_cfg_output_to_path, serialize_cfg_output,
 };
 
 use crate::cli::Cli;
@@ -75,14 +75,21 @@ fn run_with_writers(
         .as_deref()
         .map(TextEncoding::parse)
         .transpose()?;
+    let update = PreservedCfgUpdate {
+        import_game_files: cli.game_files,
+        import_archives: !cli.no_archives,
+        data_local: cli.data_local.clone(),
+        resources: cli.resources.clone(),
+        user_data: cli.user_data.clone(),
+    };
     let options = ImportOptions {
         import_game_files: cli.game_files,
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
-        data_dirs: cli.data_dir.into_iter().collect(),
-        data_local: cli.data_local,
-        resources: cli.resources,
-        user_data: cli.user_data,
+        data_dirs: cli.data_dir.clone().into_iter().collect(),
+        data_local: cli.data_local.clone(),
+        resources: cli.resources.clone(),
+        user_data: cli.user_data.clone(),
         encoding,
         verbose: cli.verbose,
         ..ImportOptions::default()
@@ -118,6 +125,8 @@ fn run_with_writers(
         OutputMode {
             output_path,
             cfg_reference_path,
+            cfg_path,
+            update,
         },
         stdout,
         stderr,
@@ -156,6 +165,8 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
 struct OutputMode {
     output_path: Option<PathBuf>,
     cfg_reference_path: Option<PathBuf>,
+    cfg_path: Option<PathBuf>,
+    update: PreservedCfgUpdate,
 }
 
 fn write_result_output(
@@ -171,7 +182,13 @@ fn write_result_output(
             stderr,
             format_args!("write to: {}", output_path.display()),
         )?;
-        save_resolved_cfg_to_path(&result.cfg, &output_path)?;
+        if let Some(cfg_path) = &mode.cfg_path {
+            let mut config = load_cfg_document(cfg_path)?;
+            apply_preserved_cfg_update(&mut config, &result.cfg, &mode.update)?;
+            config.save_to_path(&output_path)?;
+        } else {
+            save_cfg_output_to_path(&result.cfg, &output_path)?;
+        }
     } else {
         let user_config_dir = mode
             .cfg_reference_path
@@ -181,7 +198,13 @@ fn write_result_output(
         write!(
             stdout,
             "{}",
-            serialize_resolved_cfg(&result.cfg, user_config_dir)?
+            if let Some(cfg_path) = &mode.cfg_path {
+                let mut config = load_cfg_document(cfg_path)?;
+                apply_preserved_cfg_update(&mut config, &result.cfg, &mode.update)?;
+                config.to_string()
+            } else {
+                serialize_cfg_output(&result.cfg, user_config_dir)?
+            }
         )?;
     }
 

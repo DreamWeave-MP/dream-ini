@@ -193,6 +193,77 @@ fn cfg_without_in_place_prints_without_writing_cfg() {
 }
 
 #[test]
+fn existing_cfg_output_preserves_comments_and_relative_paths() {
+    let dir = unique_test_dir("preserve-cfg-output");
+    fs::create_dir_all(dir.join("mods")).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    let output_cfg = dir.join("out.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!(
+            "# keep this data comment\n",
+            "data=mods\n",
+            "\n",
+            "# keep this resources comment\n",
+            "resources=resources\n",
+            "user-data=?userdata?\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("# keep this data comment\n"));
+    assert!(written.contains("data=mods\n"));
+    assert!(written.contains("# keep this resources comment\n"));
+    assert!(written.contains("resources=resources\n"));
+    assert!(written.contains("user-data=?userdata?\n"));
+    assert!(written.contains("no-sound=1\n"));
+    assert!(!written.contains(&format!("data={}\n", dir.join("mods").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn in_place_preserves_existing_cfg_comments_and_relative_paths() {
+    let dir = unique_test_dir("preserve-in-place");
+    fs::create_dir_all(dir.join("mods")).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "# data stays authored\ndata=mods\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--in-place", "--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(cfg).unwrap();
+    assert!(written.contains("# data stays authored\n"));
+    assert!(written.contains("data=mods\n"));
+    assert!(written.contains("no-sound=1\n"));
+    assert!(!written.contains(&format!("data={}\n", dir.join("mods").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn in_place_writes_back_to_cfg() {
     let dir = unique_test_dir("in-place");
     fs::create_dir_all(&dir).unwrap();
