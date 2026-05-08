@@ -205,10 +205,59 @@ fn import_paths_writes_exact_golden_output() {
                 "fallback-archive=Morrowind.bsa\n",
                 "fallback-archive=Tribunal.bsa\n",
                 "no-sound=1\n",
-                "resources=resources\n",
+                "resources={}\n",
             ),
-            dir.join("Data Files").display()
+            dir.join("Data Files").display(),
+            dir.join("resources").display()
         )
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn import_paths_absolutizes_existing_cfg_directory_paths() {
+    let dir = unique_test_dir("absolutize-cfg-directories");
+    fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(
+        &cfg,
+        concat!(
+            "data=Data Files\n",
+            "data=\"Extra Data\"\n",
+            "data-local=Local Data\n",
+            "resources=resources\n",
+            "user-data=user-data\n",
+        ),
+    )
+    .unwrap();
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let result = importer.import_paths(&ini, &cfg).unwrap();
+
+    assert_eq!(
+        values(&result.cfg, "data"),
+        &[
+            dir.join("Data Files").display().to_string(),
+            dir.join("Extra Data").display().to_string(),
+        ]
+    );
+    assert_eq!(
+        values(&result.cfg, "data-local"),
+        &[dir.join("Local Data").display().to_string()]
+    );
+    assert_eq!(
+        values(&result.cfg, "resources"),
+        &[dir.join("resources").display().to_string()]
+    );
+    assert_eq!(
+        values(&result.cfg, "user-data"),
+        &[dir.join("user-data").display().to_string()]
     );
 
     fs::remove_dir_all(dir).unwrap();
@@ -226,7 +275,7 @@ fn import_options_set_singleton_paths() {
             "data-local=old-local\n",
             "data-local=other-local\n",
             "resources=old-resources\n",
-            "userdata=old-userdata\n",
+            "user-data=old-user-data\n",
         ),
     )
     .unwrap();
@@ -235,7 +284,7 @@ fn import_options_set_singleton_paths() {
     let importer = IniImporter::new(ImportOptions {
         data_local: Some(PathBuf::from("new-local")),
         resources: Some(PathBuf::from("new-resources")),
-        userdata: Some(PathBuf::from("new-userdata")),
+        user_data: Some(PathBuf::from("new-user-data")),
         import_archives: false,
         ..ImportOptions::default()
     });
@@ -247,8 +296,8 @@ fn import_options_set_singleton_paths() {
         &["new-resources".to_owned()]
     );
     assert_eq!(
-        values(&result.cfg, "userdata"),
-        &["new-userdata".to_owned()]
+        values(&result.cfg, "user-data"),
+        &["new-user-data".to_owned()]
     );
 
     fs::remove_dir_all(dir).unwrap();

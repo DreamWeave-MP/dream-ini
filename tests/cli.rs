@@ -114,7 +114,7 @@ fn singleton_path_options_replace_existing_values() {
             "data-local=old-local\n",
             "data-local=other-local\n",
             "resources=old-resources\n",
-            "userdata=old-userdata\n",
+            "user-data=old-user-data\n",
         ),
     )
     .unwrap();
@@ -126,7 +126,7 @@ fn singleton_path_options_replace_existing_values() {
         .arg(&cfg)
         .args(["--output"])
         .arg(&output_cfg)
-        .args(["-l", "new-local", "-r", "resources", "-u", "new-userdata"])
+        .args(["-l", "new-local", "-r", "resources", "-u", "new-user-data"])
         .output()
         .unwrap();
 
@@ -134,10 +134,13 @@ fn singleton_path_options_replace_existing_values() {
     let written = fs::read_to_string(output_cfg).unwrap();
     assert_eq!(written.matches("data-local=").count(), 1);
     assert_eq!(written.matches("resources=").count(), 1);
-    assert_eq!(written.matches("userdata=").count(), 1);
-    assert!(written.contains("data-local=new-local\n"));
-    assert!(written.contains("resources=resources\n"));
-    assert!(written.contains("userdata=new-userdata\n"));
+    assert_eq!(written.matches("user-data=").count(), 1);
+    assert!(written.contains(&format!("data-local={}\n", dir.join("new-local").display())));
+    assert!(written.contains(&format!("resources={}\n", dir.join("resources").display())));
+    assert!(written.contains(&format!(
+        "user-data={}\n",
+        dir.join("new-user-data").display()
+    )));
 
     fs::remove_dir_all(dir).unwrap();
 }

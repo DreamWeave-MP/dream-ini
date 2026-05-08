@@ -131,8 +131,8 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
     if let Some(value) = table.get::<Option<String>>("resources")? {
         options.resources = Some(PathBuf::from(value));
     }
-    if let Some(value) = table.get::<Option<String>>("userdata")? {
-        options.userdata = Some(PathBuf::from(value));
+    if let Some(value) = table.get::<Option<String>>("user_data")? {
+        options.user_data = Some(PathBuf::from(value));
     }
     if let Some(value) = table.get::<Option<String>>("cfg_dir")? {
         options.cfg_dir = Some(PathBuf::from(value));

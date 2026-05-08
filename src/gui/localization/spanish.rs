@@ -49,7 +49,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::ResourcesTooltip => {
             "Sobrescribe la ruta de recursos del motor. Debe apuntar a recursos proporcionados por OpenMW; elíjala con cuidado."
         }
-        UiText::UserdataTooltip => {
+        UiText::UserDataTooltip => {
             "Sobrescribe dónde OpenMW guarda datos de usuario como partidas, capturas de pantalla y caché de navmesh."
         }
         UiText::NoErrors => "Sin errores.",
@@ -81,7 +81,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectGameDataDir => "Seleccionar ruta de instalación del juego",
         UiText::SelectDataLocalDir => "Seleccionar directorio data-local",
         UiText::SelectResourcesDir => "Seleccionar directorio resources",
-        UiText::SelectUserdataDir => "Seleccionar directorio userdata",
+        UiText::SelectUserDataDir => "Seleccionar directorio user-data",
     }
 }
 

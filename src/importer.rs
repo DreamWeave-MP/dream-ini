@@ -6,9 +6,8 @@ use crate::content_files::{
 };
 use crate::events::ImportEvent;
 use crate::fallback_keys::MORROWIND_FALLBACK_KEYS;
-use crate::parser::{
-    insert_multimap, parse_cfg_str, parse_ini_bytes_with_warnings, set_single_value,
-};
+use crate::openmw_cfg::{load_resolved_cfg, normalize_cfg};
+use crate::parser::{insert_multimap, parse_ini_bytes_with_warnings, set_single_value};
 use crate::{Game, ImportError, ImportWarning, MultiMap, TextEncoding};
 
 #[derive(Debug, Clone)]
@@ -21,7 +20,7 @@ pub struct ImportOptions {
     pub data_dirs: Vec<PathBuf>,
     pub data_local: Option<PathBuf>,
     pub resources: Option<PathBuf>,
-    pub userdata: Option<PathBuf>,
+    pub user_data: Option<PathBuf>,
     pub cfg_dir: Option<PathBuf>,
     pub encoding: Option<TextEncoding>,
     pub verbose: bool,
@@ -37,7 +36,7 @@ impl Default for ImportOptions {
             data_dirs: Vec::new(),
             data_local: None,
             resources: None,
-            userdata: None,
+            user_data: None,
             cfg_dir: None,
             encoding: None,
             verbose: false,
@@ -93,10 +92,10 @@ impl IniImporter {
         cfg_path: Option<&Path>,
     ) -> Result<ImportResult, ImportError> {
         let mut cfg = match cfg_path {
-            Some(path) if path.exists() => parse_cfg_str(&read_to_string(path)?),
+            Some(path) => load_resolved_cfg(path)?,
             _ => MultiMap::new(),
         };
-        let cfg_dir = cfg_path.and_then(Path::parent).map(Path::to_owned);
+        let cfg_dir = cfg_path.and_then(cfg_parent_dir);
 
         let encoding = self.effective_encoding(&cfg)?;
         set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
@@ -140,7 +139,7 @@ impl IniImporter {
     ) -> Result<ImportReport, ImportError> {
         let warnings = Vec::new();
         let mut events = Vec::new();
-        let mut imported_cfg = cfg.clone();
+        let mut imported_cfg = normalize_cfg(cfg, cfg_dir)?;
 
         merge(&mut imported_cfg, ini);
         merge_fallback(&mut imported_cfg, ini, self.options.import_fonts);
@@ -208,7 +207,7 @@ impl IniImporter {
     fn apply_singleton_path_overrides(&self, cfg: &mut MultiMap) {
         set_path_override(cfg, "data-local", self.options.data_local.as_deref());
         set_path_override(cfg, "resources", self.options.resources.as_deref());
-        set_path_override(cfg, "userdata", self.options.userdata.as_deref());
+        set_path_override(cfg, "user-data", self.options.user_data.as_deref());
     }
 }
 
@@ -245,11 +244,8 @@ fn set_path_override(cfg: &mut MultiMap, key: &str, path: Option<&Path>) {
     }
 }
 
-fn read_to_string(path: &Path) -> Result<String, ImportError> {
-    fs::read_to_string(path).map_err(|source| ImportError::Io {
-        path: path.to_owned(),
-        source,
-    })
+fn cfg_parent_dir(path: &Path) -> Option<PathBuf> {
+    path.parent().map(Path::to_owned)
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, ImportError> {

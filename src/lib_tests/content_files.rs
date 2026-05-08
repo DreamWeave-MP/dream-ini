@@ -233,7 +233,10 @@ fn cfg_data_paths_are_relative_to_cfg_parent() {
     let result = importer.import_paths(&ini, &cfg).unwrap();
 
     assert_eq!(values(&result.cfg, "content"), &["Base.esm".to_owned()]);
-    assert_eq!(values(&result.cfg, "data"), &["Data Files".to_owned()]);
+    assert_eq!(
+        values(&result.cfg, "data"),
+        &[data_dir.display().to_string()]
+    );
     assert!(result.events.is_empty());
     fs::remove_dir_all(dir).unwrap();
 }
@@ -260,7 +263,7 @@ fn import_maps_uses_explicit_cfg_dir_for_relative_data_paths() {
         .unwrap();
 
     assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
-    assert_eq!(values(&cfg, "data"), &["Data Files".to_owned()]);
+    assert_eq!(values(&cfg, "data"), &[data_dir.display().to_string()]);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -287,10 +290,13 @@ fn cfg_data_local_takes_precedence_over_cfg_data() {
     let result = importer.import_paths(&ini, &cfg).unwrap();
 
     assert_eq!(values(&result.cfg, "content"), &["Patch.esp".to_owned()]);
-    assert_eq!(values(&result.cfg, "data"), &["Data Files".to_owned()]);
+    assert_eq!(
+        values(&result.cfg, "data"),
+        &[data_dir.display().to_string()]
+    );
     assert_eq!(
         values(&result.cfg, "data-local"),
-        &["Local Data".to_owned()]
+        &[local_dir.display().to_string()]
     );
     fs::remove_dir_all(dir).unwrap();
 }
@@ -322,7 +328,7 @@ fn cfg_data_local_takes_precedence_over_explicit_data() {
     assert_eq!(values(&result.cfg, "data"), &[] as &[String]);
     assert_eq!(
         values(&result.cfg, "data-local"),
-        &["Local Data".to_owned()]
+        &[local_dir.display().to_string()]
     );
     fs::remove_dir_all(dir).unwrap();
 }

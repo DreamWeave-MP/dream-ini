@@ -18,7 +18,7 @@ fn run_with_generation_options_do_not_require_ini() {
             data_dir: None,
             data_local: None,
             resources: None,
-            userdata: None,
+            user_data: None,
             in_place: false,
             generate_completion: Some(Shell::Bash),
             generate_manpage: false,
@@ -47,7 +47,7 @@ fn run_with_generation_options_do_not_require_ini() {
             data_dir: None,
             data_local: None,
             resources: None,
-            userdata: None,
+            user_data: None,
             in_place: false,
             generate_completion: None,
             generate_manpage: true,
@@ -91,7 +91,7 @@ fn run_with_writes_output_from_flag_paths() {
         data_dir: None,
         data_local: None,
         resources: None,
-        userdata: None,
+        user_data: None,
         in_place: false,
         generate_completion: None,
         generate_manpage: false,
@@ -221,7 +221,7 @@ fn run_rejects_multiple_output_modes() {
         data_dir: None,
         data_local: None,
         resources: None,
-        userdata: None,
+        user_data: None,
         in_place: true,
         generate_completion: None,
         generate_manpage: false,
@@ -273,7 +273,7 @@ fn run_with_singleton_path_options_clobbers_existing_values() {
             "data-local=old-local\n",
             "data-local=other-local\n",
             "resources=old-resources\n",
-            "userdata=old-userdata\n",
+            "user-data=old-user-data\n",
         ),
     )
     .unwrap();
@@ -283,17 +283,18 @@ fn run_with_singleton_path_options_clobbers_existing_values() {
     cli.output = Some(output.clone());
     cli.data_local = Some(PathBuf::from("new-local"));
     cli.resources = Some(PathBuf::from("resources"));
-    cli.userdata = Some(PathBuf::from("new-userdata"));
+    cli.user_data = Some(PathBuf::from("new-user-data"));
     cli.no_archives = true;
     run_with(cli).unwrap();
 
     let written = fs::read_to_string(output).unwrap();
     assert_eq!(written.matches("data-local=").count(), 1);
     assert_eq!(written.matches("resources=").count(), 1);
-    assert_eq!(written.matches("userdata=").count(), 1);
-    assert!(written.contains("data-local=new-local\n"));
-    assert!(written.contains("resources=resources\n"));
-    assert!(written.contains("userdata=new-userdata\n"));
+    assert_eq!(written.matches("user-data=").count(), 1);
+    assert!(written.contains(&format!("data-local={}\n", dir.join("new-local").display())));
+    assert!(written.contains(&format!("resources={}\n", dir.join("resources").display())));
+    assert!(written.contains("user-data="));
+    assert!(written.contains("new-user-data"));
 
     fs::remove_dir_all(dir).unwrap();
 }
@@ -374,7 +375,7 @@ fn run_with_missing_ini_returns_parity_error() {
         data_dir: None,
         data_local: None,
         resources: None,
-        userdata: None,
+        user_data: None,
         in_place: true,
         generate_completion: None,
         generate_manpage: false,
@@ -504,7 +505,7 @@ fn import_cli(ini: PathBuf) -> Cli {
         data_dir: None,
         data_local: None,
         resources: None,
-        userdata: None,
+        user_data: None,
         in_place: false,
         generate_completion: None,
         generate_manpage: false,

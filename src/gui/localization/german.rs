@@ -49,7 +49,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::ResourcesTooltip => {
             "Überschreibt den Pfad für Engine-Ressourcen. Er sollte auf von OpenMW bereitgestellte Ressourcen zeigen; sorgfältig auswählen."
         }
-        UiText::UserdataTooltip => {
+        UiText::UserDataTooltip => {
             "Überschreibt den Speicherort für OpenMW-Benutzerdaten wie Spielstände, Screenshots und Navmesh-Cache."
         }
         UiText::NoErrors => "Keine Fehler.",
@@ -81,7 +81,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectGameDataDir => "Installationspfad des Spiels auswählen",
         UiText::SelectDataLocalDir => "data-local-Verzeichnis auswählen",
         UiText::SelectResourcesDir => "resources-Verzeichnis auswählen",
-        UiText::SelectUserdataDir => "userdata-Verzeichnis auswählen",
+        UiText::SelectUserDataDir => "user-data-Verzeichnis auswählen",
     }
 }
 

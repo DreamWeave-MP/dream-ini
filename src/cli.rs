@@ -68,9 +68,9 @@ pub(crate) struct Cli {
     #[arg(short, long, value_name = "DIR", display_order = 11)]
     pub(crate) resources: Option<PathBuf>,
 
-    /// Set userdata in the imported cfg, replacing any existing value
-    #[arg(short, long, value_name = "DIR", display_order = 12)]
-    pub(crate) userdata: Option<PathBuf>,
+    /// Set user-data in the imported cfg, replacing any existing value
+    #[arg(short, long = "user-data", value_name = "DIR", display_order = 12)]
+    pub(crate) user_data: Option<PathBuf>,
 
     /// Write the imported result back to the --cfg file
     #[arg(
@@ -96,7 +96,7 @@ pub(crate) struct Cli {
             "data_dir",
             "data_local",
             "resources",
-            "userdata",
+            "user_data",
             "in_place",
             "game_files",
             "fonts",
@@ -120,7 +120,7 @@ pub(crate) struct Cli {
             "data_dir",
             "data_local",
             "resources",
-            "userdata",
+            "user_data",
             "in_place",
             "game_files",
             "fonts",
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(cli.data_dir, Some(PathBuf::from("Data Files")));
         assert_eq!(cli.data_local, Some(PathBuf::from("local-data")));
         assert_eq!(cli.resources, Some(PathBuf::from("resources")));
-        assert_eq!(cli.userdata, Some(PathBuf::from("user-data")));
+        assert_eq!(cli.user_data, Some(PathBuf::from("user-data")));
         assert_eq!(cli.encoding.as_deref(), Some("win1251"));
         assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
     }
@@ -305,7 +305,7 @@ mod tests {
         assert!(help.contains("--data"));
         assert!(help.contains("--data-local"));
         assert!(help.contains("--resources"));
-        assert!(help.contains("--userdata"));
+        assert!(help.contains("--user-data"));
         assert!(help.contains("--in-place"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
@@ -322,7 +322,7 @@ mod tests {
             "-n, --no-archives",
             "-o, --output",
             "-r, --resources",
-            "-u, --userdata",
+            "-u, --user-data",
             "-v, --verbose",
             "-w, --in-place",
             "-C, --generate-completion",

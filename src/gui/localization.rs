@@ -51,7 +51,7 @@ pub(super) enum UiText {
     ExplicitSearchPathTooltip,
     DataLocalTooltip,
     ResourcesTooltip,
-    UserdataTooltip,
+    UserDataTooltip,
     NoErrors,
     NoWarnings,
     NoEvents,
@@ -75,7 +75,7 @@ pub(super) enum UiText {
     SelectGameDataDir,
     SelectDataLocalDir,
     SelectResourcesDir,
-    SelectUserdataDir,
+    SelectUserDataDir,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

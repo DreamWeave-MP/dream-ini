@@ -49,7 +49,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::ResourcesTooltip => {
             "Override the engine resources path. This should point at OpenMW-provided resources; choose with care."
         }
-        UiText::UserdataTooltip => {
+        UiText::UserDataTooltip => {
             "Override where OpenMW stores user data such as saves, screenshots, and the navmesh cache."
         }
         UiText::NoErrors => "No errors.",
@@ -79,7 +79,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectGameDataDir => "Select game install path",
         UiText::SelectDataLocalDir => "Select data-local directory",
         UiText::SelectResourcesDir => "Select resources directory",
-        UiText::SelectUserdataDir => "Select userdata directory",
+        UiText::SelectUserDataDir => "Select user data directory",
     }
 }
 

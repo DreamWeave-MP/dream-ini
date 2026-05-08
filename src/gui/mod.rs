@@ -3,11 +3,9 @@ use std::process::ExitCode;
 
 use dream_ini::{
     ImportError, ImportEvent, ImportOptions, ImportWarning, IniImporter, TextEncoding,
-    serialize_cfg,
+    save_resolved_cfg_to_path, serialize_resolved_cfg,
 };
 use eframe::egui;
-
-use crate::command::save_config_text;
 
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
@@ -17,7 +15,7 @@ mod localization;
 
 const CFG_KEY_DATA_LOCAL: &str = "data-local";
 const CFG_KEY_RESOURCES: &str = "resources";
-const CFG_KEY_USERDATA: &str = "userdata";
+const CFG_KEY_USERDATA: &str = "user-data";
 const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
 const OPENMW_CFG_LABEL: &str = "openmw.cfg";
 
@@ -253,11 +251,11 @@ impl GuiApp {
             label_width,
             CFG_KEY_USERDATA,
             self.localizer.text(UiText::Browse),
-            &mut self.state.userdata,
-            Some(self.localizer.text(UiText::UserdataTooltip)),
+            &mut self.state.user_data,
+            Some(self.localizer.text(UiText::UserDataTooltip)),
         ) {
-            let current_value = self.state.userdata.clone();
-            self.open_path_picker(PathTarget::UserdataDir, &current_value);
+            let current_value = self.state.user_data.clone();
+            self.open_path_picker(PathTarget::UserDataDir, &current_value);
         }
     }
 
@@ -423,7 +421,7 @@ impl GuiApp {
             PathTarget::GameDataDir => self.state.explicit_search_path = value,
             PathTarget::DataLocalDir => self.state.data_local = value,
             PathTarget::ResourcesDir => self.state.resources = value,
-            PathTarget::UserdataDir => self.state.userdata = value,
+            PathTarget::UserDataDir => self.state.user_data = value,
         }
     }
 }
@@ -448,7 +446,7 @@ struct ImportFormState {
     explicit_search_path: String,
     data_local: String,
     resources: String,
-    userdata: String,
+    user_data: String,
     output_mode: GuiOutputMode,
     output_path: String,
 }
@@ -465,7 +463,7 @@ impl Default for ImportFormState {
             explicit_search_path: String::new(),
             data_local: String::new(),
             resources: String::new(),
-            userdata: String::new(),
+            user_data: String::new(),
             output_mode: GuiOutputMode::PreviewOnly,
             output_path: String::new(),
         }
@@ -499,8 +497,16 @@ impl ImportFormState {
 
         match importer.import_optional_cfg_path(&ini_path, cfg_path.as_deref()) {
             Ok(result) => {
-                let cfg_text = serialize_cfg(&result.cfg);
-                match self.write_output(&cfg_text) {
+                let cfg_text =
+                    match serialize_resolved_cfg(&result.cfg, &self.output_reference_dir()) {
+                        Ok(cfg_text) => cfg_text,
+                        Err(error) => {
+                            return GuiImportResult::Error {
+                                error: GuiImportError::Import(error),
+                            };
+                        }
+                    };
+                match self.write_output(&result.cfg) {
                     Ok(output_path) => GuiImportResult::Success {
                         cfg_text,
                         warnings: result.warnings,
@@ -516,24 +522,37 @@ impl ImportFormState {
         }
     }
 
-    fn write_output(&self, cfg_text: &str) -> Result<Option<PathBuf>, GuiImportError> {
+    fn write_output(&self, cfg: &dream_ini::MultiMap) -> Result<Option<PathBuf>, GuiImportError> {
         match self.output_mode {
             GuiOutputMode::PreviewOnly => Ok(None),
             GuiOutputMode::SaveAs => {
                 let Some(output_path) = optional_path(&self.output_path) else {
                     return Err(GuiImportError::MissingOutputPath);
                 };
-                save_config_text(&output_path, cfg_text).map_err(GuiImportError::Import)?;
+                save_resolved_cfg_to_path(cfg, &output_path).map_err(GuiImportError::Import)?;
                 Ok(Some(output_path))
             }
             GuiOutputMode::UpdateExistingCfg => {
                 let Some(cfg_path) = optional_path(&self.existing_cfg) else {
                     return Err(GuiImportError::MissingExistingCfgForUpdate);
                 };
-                save_config_text(&cfg_path, cfg_text).map_err(GuiImportError::Import)?;
+                save_resolved_cfg_to_path(cfg, &cfg_path).map_err(GuiImportError::Import)?;
                 Ok(Some(cfg_path))
             }
         }
+    }
+
+    fn output_reference_dir(&self) -> PathBuf {
+        let reference = match self.output_mode {
+            GuiOutputMode::SaveAs => optional_path(&self.output_path),
+            GuiOutputMode::PreviewOnly | GuiOutputMode::UpdateExistingCfg => {
+                optional_path(&self.existing_cfg)
+            }
+        };
+
+        reference
+            .and_then(|path| path.parent().map(Path::to_owned))
+            .unwrap_or_default()
     }
 
     fn import_options(&self) -> ImportOptions {
@@ -546,7 +565,7 @@ impl ImportFormState {
                 .collect(),
             data_local: optional_path(&self.data_local),
             resources: optional_path(&self.resources),
-            userdata: optional_path(&self.userdata),
+            user_data: optional_path(&self.user_data),
             encoding: Some(self.encoding),
             verbose: true,
             ..ImportOptions::default()

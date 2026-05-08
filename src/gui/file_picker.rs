@@ -14,7 +14,7 @@ pub(super) enum PathTarget {
     GameDataDir,
     DataLocalDir,
     ResourcesDir,
-    UserdataDir,
+    UserDataDir,
 }
 
 #[derive(Debug)]
@@ -189,7 +189,7 @@ impl PathPickerState {
             PathTarget::GameDataDir => localizer.text(UiText::SelectGameDataDir),
             PathTarget::DataLocalDir => localizer.text(UiText::SelectDataLocalDir),
             PathTarget::ResourcesDir => localizer.text(UiText::SelectResourcesDir),
-            PathTarget::UserdataDir => localizer.text(UiText::SelectUserdataDir),
+            PathTarget::UserDataDir => localizer.text(UiText::SelectUserDataDir),
         }
     }
 
@@ -343,7 +343,7 @@ impl PathTarget {
     const fn is_directory_target(self) -> bool {
         matches!(
             self,
-            Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserdataDir
+            Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserDataDir
         )
     }
 
@@ -351,7 +351,7 @@ impl PathTarget {
         match self {
             Self::MorrowindIni | Self::ExistingOpenmwCfg => PickKind::ExistingFile,
             Self::OutputCfg => PickKind::OutputCfg,
-            Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserdataDir => {
+            Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserDataDir => {
                 PickKind::Directory
             }
         }
@@ -495,7 +495,7 @@ impl PathTarget {
         match self {
             Self::MorrowindIni => Some("Morrowind.ini"),
             Self::ExistingOpenmwCfg | Self::OutputCfg => Some("openmw.cfg"),
-            Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserdataDir => None,
+            Self::GameDataDir | Self::DataLocalDir | Self::ResourcesDir | Self::UserDataDir => None,
         }
     }
 }
@@ -538,15 +538,15 @@ mod tests {
     #[test]
     fn directory_targets_hide_files() {
         let root = unique_temp_dir();
-        fs::create_dir(root.join("userdata")).unwrap();
+        fs::create_dir(root.join("user-data")).unwrap();
         File::create(root.join("openmw.cfg")).unwrap();
 
-        let entries = read_entries(PathTarget::UserdataDir, &root, false)
+        let entries = read_entries(PathTarget::UserDataDir, &root, false)
             .unwrap()
             .entries;
         let names: Vec<_> = entries.into_iter().map(|entry| entry.name).collect();
 
-        assert!(names.contains(&"userdata".to_owned()));
+        assert!(names.contains(&"user-data".to_owned()));
         assert!(!names.contains(&"openmw.cfg".to_owned()));
 
         fs::remove_dir_all(root).unwrap();
@@ -615,7 +615,7 @@ mod tests {
         std::os::unix::fs::symlink(root.join("RealDir"), root.join("LinkedDir")).unwrap();
         std::os::unix::fs::symlink(root.join("Real.ini"), root.join("Morrowind.ini")).unwrap();
 
-        let directory_entries = read_entries(PathTarget::UserdataDir, &root, false)
+        let directory_entries = read_entries(PathTarget::UserDataDir, &root, false)
             .unwrap()
             .entries;
         let file_entries = read_entries(PathTarget::MorrowindIni, &root, false)

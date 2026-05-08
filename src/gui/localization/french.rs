@@ -49,7 +49,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::ResourcesTooltip => {
             "Remplace le chemin des ressources moteur. Il doit pointer vers les ressources fournies par OpenMW ; à choisir avec soin."
         }
-        UiText::UserdataTooltip => {
+        UiText::UserDataTooltip => {
             "Remplace l’emplacement où OpenMW stocke les données utilisateur : sauvegardes, captures d’écran et cache navmesh."
         }
         UiText::NoErrors => "Aucune erreur.",
@@ -81,7 +81,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectGameDataDir => "Sélectionner le chemin d’installation du jeu",
         UiText::SelectDataLocalDir => "Sélectionner le répertoire data-local",
         UiText::SelectResourcesDir => "Sélectionner le répertoire resources",
-        UiText::SelectUserdataDir => "Sélectionner le répertoire userdata",
+        UiText::SelectUserDataDir => "Sélectionner le répertoire user-data",
     }
 }
 

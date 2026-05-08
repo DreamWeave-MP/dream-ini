@@ -1,11 +1,11 @@
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use dream_ini::{
-    ImportError, ImportOptions, ImportResult, IniImporter, MultiMap, TextEncoding, serialize_cfg,
+    ImportOptions, ImportResult, IniImporter, TextEncoding, save_resolved_cfg_to_path,
+    serialize_resolved_cfg,
 };
 
 use crate::cli::Cli;
@@ -60,11 +60,12 @@ fn run_with_writers(
         .clone()
         .or_else(|| cli.in_place.then(|| cfg_path.clone()).flatten());
     let cfg_reference_path = output_path.as_deref().or(cfg_path.as_deref());
+    let cfg_reference_path = cfg_reference_path.map(Path::to_owned);
 
     if !ini_path.exists() {
         return Err(CliError::MissingIni);
     }
-    validate_resources_path(cli.resources.as_deref(), cfg_reference_path)?;
+    validate_resources_path(cli.resources.as_deref(), cfg_reference_path.as_deref())?;
 
     if let Some(cfg_path) = &cfg_path
         && !cfg_path.exists()
@@ -84,7 +85,7 @@ fn run_with_writers(
         data_dirs: cli.data_dir.into_iter().collect(),
         data_local: cli.data_local,
         resources: cli.resources,
-        userdata: cli.userdata,
+        user_data: cli.user_data,
         encoding,
         verbose: cli.verbose,
         ..ImportOptions::default()
@@ -115,7 +116,15 @@ fn run_with_writers(
         writeln!(stderr, "Warning: {warning}")?;
     }
 
-    write_result_output(&result, OutputMode { output_path }, stdout, stderr)?;
+    write_result_output(
+        &result,
+        OutputMode {
+            output_path,
+            cfg_reference_path,
+        },
+        stdout,
+        stderr,
+    )?;
 
     Ok(())
 }
@@ -204,6 +213,7 @@ fn resolve_cfg_relative_path(path: &Path, cfg_reference_path: Option<&Path>) -> 
 #[derive(Debug)]
 struct OutputMode {
     output_path: Option<PathBuf>,
+    cfg_reference_path: Option<PathBuf>,
 }
 
 fn write_result_output(
@@ -219,71 +229,21 @@ fn write_result_output(
             stderr,
             format_args!("write to: {}", output_path.display()),
         )?;
-        save_config_output(&output_path, &result.cfg)?;
+        save_resolved_cfg_to_path(&result.cfg, &output_path)?;
     } else {
-        write!(stdout, "{}", serialize_cfg(&result.cfg))?;
+        let user_config_dir = mode
+            .cfg_reference_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| Path::new(""));
+        write!(
+            stdout,
+            "{}",
+            serialize_resolved_cfg(&result.cfg, user_config_dir)?
+        )?;
     }
 
     Ok(())
-}
-
-fn save_config_output(output_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
-    save_config_text(output_path, &serialize_cfg(cfg))
-}
-
-pub(crate) fn save_config_text(output_path: &Path, cfg_text: &str) -> Result<(), ImportError> {
-    write_atomic(output_path, cfg_text.as_bytes())
-}
-
-fn write_atomic(output_path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
-    let temp_path = temporary_output_path(output_path);
-    let result = write_atomic_inner(output_path, &temp_path, bytes);
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    result
-}
-
-fn write_atomic_inner(
-    output_path: &Path,
-    temp_path: &Path,
-    bytes: &[u8],
-) -> Result<(), ImportError> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temp_path)
-        .map_err(|source| io_error(temp_path, source))?;
-    file.write_all(bytes)
-        .map_err(|source| io_error(temp_path, source))?;
-    file.sync_all()
-        .map_err(|source| io_error(temp_path, source))?;
-    drop(file);
-
-    fs::rename(temp_path, output_path).map_err(|source| io_error(output_path, source))
-}
-
-fn temporary_output_path(output_path: &Path) -> PathBuf {
-    let file_name = output_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("openmw.cfg");
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temp_name = format!(".{file_name}.dream-ini-{}-{unique}.tmp", std::process::id());
-    output_path
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .join(temp_name)
-}
-
-fn io_error(path: &Path, source: io::Error) -> ImportError {
-    ImportError::Io {
-        path: path.to_owned(),
-        source,
-    }
 }
 
 fn diagnostic(
