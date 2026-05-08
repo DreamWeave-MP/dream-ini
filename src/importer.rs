@@ -153,7 +153,8 @@ impl IniImporter {
         let warnings = Vec::new();
         let mut events = Vec::new();
         let mut changed_keys = BTreeSet::new();
-        let mut imported_cfg = normalize_cfg(cfg, cfg_dir)?;
+        let search_cfg = normalize_cfg(cfg, cfg_dir)?;
+        let mut imported_cfg = cfg.clone();
 
         if merge(&mut imported_cfg, ini) {
             changed_keys.insert("no-sound".to_owned());
@@ -166,7 +167,7 @@ impl IniImporter {
             let encoding = self.effective_encoding(&imported_cfg)?;
             let imported_content = import_content_files(ContentFileImportRequest {
                 ini,
-                cfg: &imported_cfg,
+                cfg: &search_cfg,
                 ini_path,
                 cfg_dir,
                 game: self.options.game,
@@ -188,7 +189,7 @@ impl IniImporter {
         if self.options.import_archives {
             let imported_archives = import_archives(ArchiveImportRequest {
                 ini,
-                cfg: &imported_cfg,
+                cfg: &search_cfg,
                 ini_path,
                 cfg_dir,
                 explicit_data_dirs: &self.options.data_dirs,

@@ -69,7 +69,13 @@ pub(crate) struct Cli {
     pub(crate) resources: Option<PathBuf>,
 
     /// Set user-data in the imported cfg, replacing any existing value
-    #[arg(short, long = "user-data", value_name = "DIR", display_order = 12)]
+    #[arg(
+        short,
+        long = "user-data",
+        alias = "userdata",
+        value_name = "DIR",
+        display_order = 12
+    )]
     pub(crate) user_data: Option<PathBuf>,
 
     /// Write the imported result back to the --cfg file
@@ -213,6 +219,25 @@ mod tests {
         assert_eq!(cli.user_data, Some(PathBuf::from("user-data")));
         assert_eq!(cli.encoding.as_deref(), Some("win1251"));
         assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
+    }
+
+    #[test]
+    fn parses_hidden_userdata_alias() {
+        let cli = Cli::parse_from([
+            "dream-ini",
+            "--ini",
+            "mw.ini",
+            "--userdata",
+            "legacy-user-data",
+        ]);
+
+        assert_eq!(cli.user_data, Some(PathBuf::from("legacy-user-data")));
+        assert!(
+            !Cli::command()
+                .render_help()
+                .to_string()
+                .contains("--userdata")
+        );
     }
 
     #[test]

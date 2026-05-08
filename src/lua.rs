@@ -131,7 +131,7 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
     if let Some(value) = table.get::<Option<String>>("resources")? {
         options.resources = Some(PathBuf::from(value));
     }
-    if let Some(value) = table.get::<Option<String>>("user_data")? {
+    if let Some(value) = option_string_with_alias(&table, "user_data", "userdata")? {
         options.user_data = Some(PathBuf::from(value));
     }
     if let Some(value) = table.get::<Option<String>>("cfg_dir")? {
@@ -147,6 +147,16 @@ fn effective_encoding(options: &ImportOptions) -> TextEncoding {
 
 fn option_string(table: Option<&Table>, key: &str) -> LuaResult<Option<String>> {
     table.map_or(Ok(None), |table| table.get(key))
+}
+
+fn option_string_with_alias(
+    table: &Table,
+    canonical_key: &str,
+    alias_key: &str,
+) -> LuaResult<Option<String>> {
+    table
+        .get::<Option<String>>(canonical_key)?
+        .map_or_else(|| table.get(alias_key), |value| Ok(Some(value)))
 }
 
 fn required_string(table: &Table, key: &str) -> LuaResult<String> {
@@ -387,7 +397,13 @@ mod tests {
         let dir = unique_test_dir("import-maps-cfg-dir");
         let cfg_dir = dir.join("config");
         let data_dir = cfg_dir.join("Data Files");
+        let local_dir = cfg_dir.join("Local Data");
+        let resources_dir = cfg_dir.join("resources");
+        let user_data_dir = cfg_dir.join("user-data");
         fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&local_dir).unwrap();
+        fs::create_dir_all(&resources_dir).unwrap();
+        fs::create_dir_all(&user_data_dir).unwrap();
         fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
         let lua = Lua::new();
@@ -397,6 +413,15 @@ mod tests {
         let data_values = lua.create_table().unwrap();
         data_values.set(1, "Data Files").unwrap();
         cfg.set("data", data_values).unwrap();
+        let data_local_values = lua.create_table().unwrap();
+        data_local_values.set(1, "Local Data").unwrap();
+        cfg.set("data-local", data_local_values).unwrap();
+        let resources_values = lua.create_table().unwrap();
+        resources_values.set(1, "resources").unwrap();
+        cfg.set("resources", resources_values).unwrap();
+        let user_data_values = lua.create_table().unwrap();
+        user_data_values.set(1, "user-data").unwrap();
+        cfg.set("user-data", user_data_values).unwrap();
         let ini = lua.create_table().unwrap();
         let game_files = lua.create_table().unwrap();
         game_files.set(1, "Base.esm").unwrap();
@@ -415,8 +440,33 @@ mod tests {
             .unwrap();
         let text: String = result.get("text").unwrap();
         assert!(text.contains("content=Base.esm\n"));
+        assert!(text.contains("data=Data Files\n"));
+        assert!(text.contains("data-local=Local Data\n"));
+        assert!(text.contains("resources=resources\n"));
+        assert!(text.contains("user-data=user-data\n"));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lua_import_maps_accepts_legacy_userdata_alias() {
+        let lua = Lua::new();
+        register(&lua).unwrap();
+
+        lua.load(
+            r#"
+            local cfg = { encoding = { "win1252" } }
+            local ini = { ["General:Disable Audio"] = { "1" } }
+            local result = dream_ini.import_maps(cfg, ini, {
+                archives = false,
+                userdata = "legacy-user-data",
+            })
+            assert(result.cfg["user-data"][1] == "legacy-user-data")
+            assert(result.text:find("user%-data=legacy%-user%-data\n") ~= nil)
+            "#,
+        )
+        .exec()
+        .unwrap();
     }
 
     #[test]

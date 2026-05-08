@@ -246,10 +246,18 @@ fn import_maps_uses_explicit_cfg_dir_for_relative_data_paths() {
     let dir = unique_test_dir("game-files-import-maps-cfg-dir");
     let cfg_dir = dir.join("config");
     let data_dir = cfg_dir.join("Data Files");
+    let local_dir = cfg_dir.join("Local Data");
+    let resources_dir = cfg_dir.join("resources");
+    let user_data_dir = cfg_dir.join("user-data");
     fs::create_dir_all(&data_dir).unwrap();
+    fs::create_dir_all(&local_dir).unwrap();
+    fs::create_dir_all(&resources_dir).unwrap();
+    fs::create_dir_all(&user_data_dir).unwrap();
     fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
-    let mut cfg = parse_cfg_str("data=Data Files\n");
+    let mut cfg = parse_cfg_str(
+        "data=Data Files\ndata-local=Local Data\nresources=resources\nuser-data=user-data\n",
+    );
     let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
@@ -263,7 +271,10 @@ fn import_maps_uses_explicit_cfg_dir_for_relative_data_paths() {
         .unwrap();
 
     assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
-    assert_eq!(values(&cfg, "data"), &[data_dir.display().to_string()]);
+    assert_eq!(values(&cfg, "data"), &["Data Files".to_owned()]);
+    assert_eq!(values(&cfg, "data-local"), &["Local Data".to_owned()]);
+    assert_eq!(values(&cfg, "resources"), &["resources".to_owned()]);
+    assert_eq!(values(&cfg, "user-data"), &["user-data".to_owned()]);
     fs::remove_dir_all(dir).unwrap();
 }
 
