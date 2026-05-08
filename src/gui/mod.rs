@@ -554,9 +554,17 @@ impl ImportFormState {
                         &result.changed_keys,
                     )
                     .map_err(GuiImportError::Import)?;
-                    config.save_to_path(&output_path).map_err(|error| {
-                        GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
-                    })?;
+                    if same_cfg_context(&cfg_path, &output_path) {
+                        config.save_to_path(&output_path).map_err(|error| {
+                            GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
+                        })?;
+                    } else {
+                        config
+                            .save_resolved_to_path(&output_path)
+                            .map_err(|error| {
+                                GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
+                            })?;
+                    }
                 } else {
                     save_cfg_output_to_path(&result.cfg, &output_path)
                         .map_err(GuiImportError::Import)?;
@@ -914,6 +922,22 @@ fn path_label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
 fn optional_path(value: &str) -> Option<PathBuf> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+fn same_cfg_context(left: &Path, right: &Path) -> bool {
+    equivalent_dirs(cfg_parent(left), cfg_parent(right))
+}
+
+fn cfg_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn equivalent_dirs(left: &Path, right: &Path) -> bool {
+    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_owned());
+    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_owned());
+    left == right
 }
 
 #[cfg(test)]

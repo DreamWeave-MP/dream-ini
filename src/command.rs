@@ -190,7 +190,11 @@ fn write_result_output(
                 &mode.update,
                 &result.changed_keys,
             )?;
-            config.save_to_path(&output_path)?;
+            if same_cfg_context(cfg_path, &output_path) {
+                config.save_to_path(&output_path)?;
+            } else {
+                config.save_resolved_to_path(&output_path)?;
+            }
         } else {
             save_cfg_output_to_path(&result.cfg, &output_path)?;
         }
@@ -219,6 +223,22 @@ fn write_result_output(
     }
 
     Ok(())
+}
+
+fn same_cfg_context(left: &Path, right: &Path) -> bool {
+    equivalent_dirs(cfg_parent(left), cfg_parent(right))
+}
+
+fn cfg_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn equivalent_dirs(left: &Path, right: &Path) -> bool {
+    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_owned());
+    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_owned());
+    left == right
 }
 
 fn diagnostic(

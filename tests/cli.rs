@@ -295,6 +295,37 @@ fn existing_cfg_output_preserves_comments_and_relative_paths() {
 }
 
 #[test]
+fn relocated_existing_cfg_output_uses_resolved_paths() {
+    let dir = unique_test_dir("relocated-existing-cfg");
+    let source_dir = dir.join("source");
+    let output_dir = dir.join("output");
+    fs::create_dir_all(source_dir.join("mods")).unwrap();
+    fs::create_dir_all(&output_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = source_dir.join("openmw.cfg");
+    let output_cfg = output_dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "# preserved only in source context\ndata=mods\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains(&format!("data={}\n", source_dir.join("mods").display())));
+    assert!(!written.contains("data=mods\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn existing_cfg_preview_does_not_rewrite_unimported_singletons() {
     let dir = unique_test_dir("preserve-unimported-singletons");
     fs::create_dir_all(&dir).unwrap();
