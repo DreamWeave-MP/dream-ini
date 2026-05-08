@@ -310,7 +310,7 @@ fn import_maps_uses_explicit_cfg_dir_for_relative_data_paths() {
 }
 
 #[test]
-fn cfg_resources_vfs_is_searched_but_not_written_as_data() {
+fn cfg_resources_vfs_is_not_used_for_morrowind_content_import() {
     let dir = unique_test_dir("game-files-resources-vfs");
     let cfg_dir = dir.join("config");
     let resources = cfg_dir.join("resources");
@@ -330,10 +330,10 @@ fn cfg_resources_vfs_is_searched_but_not_written_as_data() {
 
     importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap();
+        .unwrap_err();
 
-    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
     assert_eq!(values(&cfg, "resources"), &["resources".to_owned()]);
+    assert_eq!(values(&cfg, "content"), &[] as &[String]);
     assert_eq!(values(&cfg, "data"), &[] as &[String]);
     fs::remove_dir_all(dir).unwrap();
 }

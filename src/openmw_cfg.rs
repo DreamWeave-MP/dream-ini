@@ -162,7 +162,7 @@ pub(crate) fn normalize_cfg(
     let mut cfg = crate::parse_cfg_str(
         &configuration_from_multimap_resolved(cfg, user_config_dir)?.to_resolved_string(),
     );
-    add_composed_resource_vfs_data_dir(&mut cfg);
+    remove_composed_resource_vfs_data_dir(&mut cfg);
     Ok(cfg)
 }
 
@@ -281,21 +281,6 @@ fn remove_composed_resource_vfs_data_dir(cfg: &mut MultiMap) {
 
     if let Some(data_dirs) = cfg.get_mut("data") {
         data_dirs.retain(|data_dir| data_dir != &engine_vfs);
-    }
-}
-
-fn add_composed_resource_vfs_data_dir(cfg: &mut MultiMap) {
-    let Some(resources) = cfg.get("resources").and_then(|values| values.last()) else {
-        return;
-    };
-    let engine_vfs = Path::new(resources)
-        .join("vfs")
-        .to_string_lossy()
-        .into_owned();
-
-    let data_dirs = cfg.entry("data".to_owned()).or_default();
-    if !data_dirs.iter().any(|data_dir| data_dir == &engine_vfs) {
-        data_dirs.push(engine_vfs);
     }
 }
 
