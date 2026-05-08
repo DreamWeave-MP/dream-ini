@@ -126,6 +126,60 @@ fn relative_explicit_data_dir_is_written_as_supplied() {
 }
 
 #[test]
+fn relative_explicit_data_dir_searches_from_output_cfg_directory() {
+    let dir = unique_test_dir("relative-data-output-context");
+    let output_dir = dir.join("cfg-context");
+    let data_dir = output_dir.join("relative-data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let output_cfg = output_dir.join("openmw.cfg");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["--game-files", "--no-archives", "--data", "relative-data"])
+        .args(["--output"])
+        .arg(&output_cfg)
+        .args(["--ini"])
+        .arg(&ini)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("content=Base.esm\n"));
+    assert!(written.contains("data=relative-data\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn relative_explicit_data_dir_requires_cfg_context_for_stdout() {
+    let dir = unique_test_dir("relative-data-no-context");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["--game-files", "--no-archives", "--data", "relative-data"])
+        .args(["--ini"])
+        .arg(&ini)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("relative --data requires --cfg or --output")
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn existing_cfg_with_game_files_preserves_comments_and_added_data_spelling() {
     let dir = unique_test_dir("preserve-game-files-added-data");
     let work_dir = dir.join("work");

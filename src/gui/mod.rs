@@ -484,6 +484,11 @@ impl ImportFormState {
         {
             return Some(UiText::SelectExistingCfgBeforeUpdating);
         }
+        if optional_path(&self.explicit_search_path).is_some_and(|path| path.is_relative())
+            && self.output_context_dir().is_none()
+        {
+            return Some(UiText::RelativeDataRequiresCfgOrOutput);
+        }
         None
     }
 
@@ -622,6 +627,8 @@ impl ImportFormState {
             data_dirs: optional_path(&self.explicit_search_path)
                 .into_iter()
                 .collect(),
+            data_dir_base: self.output_context_dir(),
+            write_resolved_data_dirs: self.relocated_existing_cfg_output(),
             data_local: optional_path(&self.data_local),
             resources: optional_path(&self.resources),
             user_data: optional_path(&self.user_data),
@@ -629,6 +636,25 @@ impl ImportFormState {
             verbose: true,
             ..ImportOptions::default()
         }
+    }
+
+    fn output_context_dir(&self) -> Option<PathBuf> {
+        match self.output_mode {
+            GuiOutputMode::SaveAs => optional_path(&self.output_path),
+            GuiOutputMode::PreviewOnly | GuiOutputMode::UpdateExistingCfg => {
+                optional_path(&self.existing_cfg)
+            }
+        }
+        .map(|path| cfg_parent(&path).to_owned())
+    }
+
+    fn relocated_existing_cfg_output(&self) -> bool {
+        if self.output_mode != GuiOutputMode::SaveAs {
+            return false;
+        }
+        optional_path(&self.existing_cfg)
+            .zip(optional_path(&self.output_path))
+            .is_some_and(|(cfg_path, output_path)| !same_cfg_context(&cfg_path, &output_path))
     }
 }
 

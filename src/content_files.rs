@@ -34,6 +34,8 @@ pub(crate) struct ContentFileImportRequest<'a> {
     pub(crate) cfg_dir: Option<&'a Path>,
     pub(crate) game: Game,
     pub(crate) explicit_data_dirs: &'a [PathBuf],
+    pub(crate) explicit_data_dir_base: Option<&'a Path>,
+    pub(crate) write_resolved_data_dirs: bool,
     pub(crate) encoding: TextEncoding,
     pub(crate) verbose: bool,
 }
@@ -45,6 +47,8 @@ pub(crate) struct ArchiveImportRequest<'a> {
     pub(crate) ini_path: &'a Path,
     pub(crate) cfg_dir: Option<&'a Path>,
     pub(crate) explicit_data_dirs: &'a [PathBuf],
+    pub(crate) explicit_data_dir_base: Option<&'a Path>,
+    pub(crate) write_resolved_data_dirs: bool,
     pub(crate) verbose: bool,
 }
 
@@ -56,6 +60,8 @@ pub(crate) fn import_archives(
         request.ini_path,
         request.cfg_dir,
         request.explicit_data_dirs,
+        request.explicit_data_dir_base,
+        request.write_resolved_data_dirs,
     );
     let mut events = Vec::new();
     let archives = resolve_archives(request.ini, &search_paths, request.verbose, &mut events)?;
@@ -81,6 +87,8 @@ pub(crate) fn import_content_files(
         request.ini_path,
         request.cfg_dir,
         request.explicit_data_dirs,
+        request.explicit_data_dir_base,
+        request.write_resolved_data_dirs,
     );
     let mut events = Vec::new();
     let mut content_files =
@@ -189,15 +197,26 @@ fn build_search_paths(
     ini_path: &Path,
     cfg_dir: Option<&Path>,
     explicit_data_dirs: &[PathBuf],
+    explicit_data_dir_base: Option<&Path>,
+    write_resolved_data_dirs: bool,
 ) -> Vec<ContentSearchPath> {
     let mut search_paths = Vec::new();
     if let Some(paths) = cfg.get("data-local") {
         add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
     }
-    search_paths.extend(explicit_data_dirs.iter().map(|path| ContentSearchPath {
-        path: fs::canonicalize(path).unwrap_or_else(|_| path.clone()),
-        cfg_value: path.to_string_lossy().into_owned(),
-        origin: SearchPathOrigin::Explicit,
+    search_paths.extend(explicit_data_dirs.iter().map(|path| {
+        let resolved_path = resolve_explicit_data_path(path, explicit_data_dir_base);
+        let search_path = fs::canonicalize(&resolved_path).unwrap_or(resolved_path);
+        let cfg_value = if write_resolved_data_dirs {
+            search_path.to_string_lossy().into_owned()
+        } else {
+            path.to_string_lossy().into_owned()
+        };
+        ContentSearchPath {
+            path: search_path,
+            cfg_value,
+            origin: SearchPathOrigin::Explicit,
+        }
     }));
     if let Some(paths) = cfg.get("data") {
         add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
@@ -414,6 +433,16 @@ fn resolve_cfg_path(path: &str, cfg_dir: Option<&Path>) -> PathBuf {
         path.to_owned()
     } else if let Some(cfg_dir) = cfg_dir {
         cfg_dir.join(path)
+    } else {
+        path.to_owned()
+    }
+}
+
+fn resolve_explicit_data_path(path: &Path, base: Option<&Path>) -> PathBuf {
+    if path.is_absolute() {
+        path.to_owned()
+    } else if let Some(base) = base {
+        base.join(path)
     } else {
         path.to_owned()
     }

@@ -67,6 +67,9 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Sélectionnez un openmw.cfg existant avant de le mettre à jour sur place."
         }
+        UiText::RelativeDataRequiresCfgOrOutput => {
+            "Les chemins d’installation relatifs nécessitent un cfg existant ou un chemin de sortie."
+        }
         UiText::CancelPicker => "Annuler",
         UiText::ChoosePath => "Choisir",
         UiText::SelectPath => "Sélectionner",

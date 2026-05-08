@@ -58,6 +58,12 @@ fn run_with_writers(
         .output
         .clone()
         .or_else(|| cli.in_place.then(|| cfg_path.clone()).flatten());
+    let data_dir_base = cfg_output_context_dir(output_path.as_deref(), cfg_path.as_deref());
+    validate_explicit_data_dir_context(cli.data_dir.as_deref(), data_dir_base.as_deref())?;
+    let write_resolved_data_dirs = cfg_path
+        .as_deref()
+        .zip(output_path.as_deref())
+        .is_some_and(|(cfg_path, output_path)| !same_cfg_context(cfg_path, output_path));
     let cfg_reference_path = output_path.as_deref().or(cfg_path.as_deref());
     let cfg_reference_path = cfg_reference_path.map(Path::to_owned);
 
@@ -87,6 +93,8 @@ fn run_with_writers(
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
         data_dirs: cli.data_dir.clone().into_iter().collect(),
+        data_dir_base,
+        write_resolved_data_dirs,
         data_local: cli.data_local.clone(),
         resources: cli.resources.clone(),
         user_data: cli.user_data.clone(),
@@ -158,6 +166,19 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
         ));
     }
 
+    Ok(())
+}
+
+fn validate_explicit_data_dir_context(
+    data_dir: Option<&Path>,
+    data_dir_base: Option<&Path>,
+) -> Result<(), CliError> {
+    if data_dir.is_some_and(Path::is_relative) && data_dir_base.is_none() {
+        return Err(CliError::InvalidUsage(
+            "relative --data requires --cfg or --output; use an absolute path for stdout output"
+                .to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -233,6 +254,12 @@ fn cfg_parent(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
+}
+
+fn cfg_output_context_dir(output_path: Option<&Path>, cfg_path: Option<&Path>) -> Option<PathBuf> {
+    output_path
+        .or(cfg_path)
+        .map(|path| cfg_parent(path).to_owned())
 }
 
 fn equivalent_dirs(left: &Path, right: &Path) -> bool {

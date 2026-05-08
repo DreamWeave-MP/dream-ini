@@ -19,6 +19,8 @@ pub struct ImportOptions {
     pub import_fonts: bool,
     pub import_archives: bool,
     pub data_dirs: Vec<PathBuf>,
+    pub data_dir_base: Option<PathBuf>,
+    pub write_resolved_data_dirs: bool,
     pub data_local: Option<PathBuf>,
     pub resources: Option<PathBuf>,
     pub user_data: Option<PathBuf>,
@@ -35,6 +37,8 @@ impl Default for ImportOptions {
             import_fonts: false,
             import_archives: true,
             data_dirs: Vec::new(),
+            data_dir_base: None,
+            write_resolved_data_dirs: false,
             data_local: None,
             resources: None,
             user_data: None,
@@ -166,6 +170,8 @@ impl IniImporter {
                 cfg_dir,
                 game: self.options.game,
                 explicit_data_dirs: &self.options.data_dirs,
+                explicit_data_dir_base: self.options.data_dir_base.as_deref(),
+                write_resolved_data_dirs: self.options.write_resolved_data_dirs,
                 encoding,
                 verbose: self.options.verbose,
             })?;
@@ -185,6 +191,8 @@ impl IniImporter {
                 ini_path,
                 cfg_dir,
                 explicit_data_dirs: &self.options.data_dirs,
+                explicit_data_dir_base: self.options.data_dir_base.as_deref(),
+                write_resolved_data_dirs: self.options.write_resolved_data_dirs,
                 verbose: self.options.verbose,
             })?;
             for data_dir in imported_archives.data_dirs {
