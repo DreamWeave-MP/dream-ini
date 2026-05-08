@@ -166,7 +166,8 @@ pub(crate) fn normalize_cfg(
     Ok(cfg)
 }
 
-fn serialize_resolved_configuration(config: &OpenMWConfiguration) -> String {
+#[must_use]
+pub fn serialize_resolved_configuration(config: &OpenMWConfiguration) -> String {
     let mut cfg = crate::parse_cfg_str(&config.to_resolved_string());
     remove_composed_resource_vfs_data_dir(&mut cfg);
     crate::serialize_cfg(&cfg)

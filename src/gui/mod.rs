@@ -4,7 +4,8 @@ use std::process::ExitCode;
 use dream_ini::{
     ImportError, ImportEvent, ImportOptions, ImportResult, ImportWarning, IniImporter,
     PreservedCfgUpdate, TextEncoding, apply_preserved_cfg_update, load_cfg_document,
-    save_cfg_output_to_path, serialize_cfg_output,
+    save_cfg_output_to_path, save_resolved_configuration_to_path, serialize_cfg_output,
+    serialize_resolved_configuration,
 };
 use eframe::egui;
 
@@ -532,7 +533,7 @@ impl ImportFormState {
                 &result.changed_keys,
             )?;
             if self.relocated_existing_cfg_output() {
-                Ok(config.to_resolved_string())
+                Ok(serialize_resolved_configuration(&config))
             } else {
                 Ok(config.to_string())
             }
@@ -563,11 +564,8 @@ impl ImportFormState {
                             GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
                         })?;
                     } else {
-                        config
-                            .save_resolved_to_path(&output_path)
-                            .map_err(|error| {
-                                GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
-                            })?;
+                        save_resolved_configuration_to_path(&config, &output_path)
+                            .map_err(GuiImportError::Import)?;
                     }
                 } else {
                     save_cfg_output_to_path(&result.cfg, &output_path)
@@ -1004,6 +1002,69 @@ mod tests {
         assert!(!preview.contains("data=mods\n"));
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn relocated_save_as_preview_filters_composed_resource_vfs_data_dir() {
+        let dir = unique_test_dir("gui-relocated-preview-resource-vfs");
+        let source_dir = dir.join("source");
+        let output_dir = dir.join("output");
+        let resources = source_dir.join("resources");
+        std::fs::create_dir_all(resources.join("vfs")).unwrap();
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let cfg = source_dir.join("openmw.cfg");
+        std::fs::write(&cfg, "resources=resources\n").unwrap();
+
+        let state = ImportFormState {
+            existing_cfg: cfg.to_string_lossy().into_owned(),
+            output_mode: GuiOutputMode::SaveAs,
+            output_path: output_dir.join("openmw.cfg").to_string_lossy().into_owned(),
+            ..ImportFormState::default()
+        };
+        let result = empty_import_result();
+
+        let preview = state.serialize_result(&result).unwrap();
+        assert!(preview.contains(&format!("resources={}\n", resources.display())));
+        assert!(!preview.contains(&format!("data={}\n", resources.join("vfs").display())));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn relocated_save_as_write_filters_composed_resource_vfs_data_dir() {
+        let dir = unique_test_dir("gui-relocated-write-resource-vfs");
+        let source_dir = dir.join("source");
+        let output_dir = dir.join("output");
+        let resources = source_dir.join("resources");
+        std::fs::create_dir_all(resources.join("vfs")).unwrap();
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let cfg = source_dir.join("openmw.cfg");
+        let output_cfg = output_dir.join("openmw.cfg");
+        std::fs::write(&cfg, "resources=resources\n").unwrap();
+
+        let state = ImportFormState {
+            existing_cfg: cfg.to_string_lossy().into_owned(),
+            output_mode: GuiOutputMode::SaveAs,
+            output_path: output_cfg.to_string_lossy().into_owned(),
+            ..ImportFormState::default()
+        };
+        let result = empty_import_result();
+
+        state.write_output(&result).unwrap();
+        let written = std::fs::read_to_string(output_cfg).unwrap();
+        assert!(written.contains(&format!("resources={}\n", resources.display())));
+        assert!(!written.contains(&format!("data={}\n", resources.join("vfs").display())));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn empty_import_result() -> ImportResult {
+        ImportResult {
+            cfg: dream_ini::MultiMap::new(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            changed_keys: BTreeSet::new(),
+        }
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
