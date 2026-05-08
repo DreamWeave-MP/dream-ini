@@ -264,6 +264,40 @@ fn existing_cfg_output_preserves_comments_and_relative_paths() {
 }
 
 #[test]
+fn existing_cfg_preview_does_not_rewrite_unimported_singletons() {
+    let dir = unique_test_dir("preserve-unimported-singletons");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!(
+            "# keep encoding comment\n",
+            "encoding=win1252\n",
+            "# keep no-sound comment\n",
+            "no-sound=0\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("# keep encoding comment\nencoding=win1252\n"));
+    assert!(stdout.contains("# keep no-sound comment\nno-sound=0\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn in_place_preserves_existing_cfg_comments_and_relative_paths() {
     let dir = unique_test_dir("preserve-in-place");
     fs::create_dir_all(dir.join("mods")).unwrap();

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use openmw_config::{EncodingSetting, OpenMWConfiguration};
@@ -74,28 +75,36 @@ pub fn apply_preserved_cfg_update(
     config: &mut OpenMWConfiguration,
     imported_cfg: &MultiMap,
     update: &PreservedCfgUpdate,
+    changed_keys: &BTreeSet<String>,
 ) -> Result<(), ImportError> {
-    if let Some(encoding) = imported_cfg
-        .get("encoding")
-        .and_then(|values| values.last())
+    if changed_keys.contains("encoding")
+        && let Some(encoding) = imported_cfg
+            .get("encoding")
+            .and_then(|values| values.last())
     {
         set_encoding(config, encoding)?;
     }
-    config.set_generic_settings("no-sound", imported_cfg.get("no-sound").cloned());
-    config
-        .set_game_settings(imported_cfg.get("fallback").cloned())
-        .map_err(|error| config_error(&error))?;
+    if changed_keys.contains("no-sound") {
+        config.set_generic_settings("no-sound", imported_cfg.get("no-sound").cloned());
+    }
+    if changed_keys.contains("fallback") {
+        config
+            .set_game_settings(imported_cfg.get("fallback").cloned())
+            .map_err(|error| config_error(&error))?;
+    }
 
-    for data_dir in imported_cfg.get("data").into_iter().flatten() {
-        if !config.has_data_dir(data_dir) {
-            config.add_data_directory(Path::new(data_dir));
+    if changed_keys.contains("data") {
+        for data_dir in imported_cfg.get("data").into_iter().flatten() {
+            if !config.has_data_dir(data_dir) {
+                config.add_data_directory(Path::new(data_dir));
+            }
         }
     }
 
-    if update.import_game_files {
+    if update.import_game_files && changed_keys.contains("content") {
         config.set_content_files(imported_cfg.get("content").cloned());
     }
-    if update.import_archives {
+    if update.import_archives && changed_keys.contains("fallback-archive") {
         config.set_fallback_archives(imported_cfg.get("fallback-archive").cloned());
     }
     if let Some(path) = &update.data_local {

@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use dream_ini::{
-    ImportError, ImportEvent, ImportOptions, ImportWarning, IniImporter, TextEncoding,
-    save_resolved_cfg_to_path, serialize_resolved_cfg,
+    ImportError, ImportEvent, ImportOptions, ImportResult, ImportWarning, IniImporter,
+    PreservedCfgUpdate, TextEncoding, apply_preserved_cfg_update, load_cfg_document,
+    save_cfg_output_to_path, serialize_cfg_output,
 };
 use eframe::egui;
 
@@ -497,16 +498,15 @@ impl ImportFormState {
 
         match importer.import_optional_cfg_path(&ini_path, cfg_path.as_deref()) {
             Ok(result) => {
-                let cfg_text =
-                    match serialize_resolved_cfg(&result.cfg, &self.output_reference_dir()) {
-                        Ok(cfg_text) => cfg_text,
-                        Err(error) => {
-                            return GuiImportResult::Error {
-                                error: GuiImportError::Import(error),
-                            };
-                        }
-                    };
-                match self.write_output(&result.cfg) {
+                let cfg_text = match self.serialize_result(&result) {
+                    Ok(cfg_text) => cfg_text,
+                    Err(error) => {
+                        return GuiImportResult::Error {
+                            error: GuiImportError::Import(error),
+                        };
+                    }
+                };
+                match self.write_output(&result) {
                     Ok(output_path) => GuiImportResult::Success {
                         cfg_text,
                         warnings: result.warnings,
@@ -522,23 +522,74 @@ impl ImportFormState {
         }
     }
 
-    fn write_output(&self, cfg: &dream_ini::MultiMap) -> Result<Option<PathBuf>, GuiImportError> {
+    fn serialize_result(&self, result: &ImportResult) -> Result<String, ImportError> {
+        if let Some(cfg_path) = optional_path(&self.existing_cfg) {
+            let mut config = load_cfg_document(&cfg_path)?;
+            apply_preserved_cfg_update(
+                &mut config,
+                &result.cfg,
+                &self.preserved_update(),
+                &result.changed_keys,
+            )?;
+            Ok(config.to_string())
+        } else {
+            serialize_cfg_output(&result.cfg, &self.output_reference_dir())
+        }
+    }
+
+    fn write_output(&self, result: &ImportResult) -> Result<Option<PathBuf>, GuiImportError> {
         match self.output_mode {
             GuiOutputMode::PreviewOnly => Ok(None),
             GuiOutputMode::SaveAs => {
                 let Some(output_path) = optional_path(&self.output_path) else {
                     return Err(GuiImportError::MissingOutputPath);
                 };
-                save_resolved_cfg_to_path(cfg, &output_path).map_err(GuiImportError::Import)?;
+                if let Some(cfg_path) = optional_path(&self.existing_cfg) {
+                    let mut config =
+                        load_cfg_document(&cfg_path).map_err(GuiImportError::Import)?;
+                    apply_preserved_cfg_update(
+                        &mut config,
+                        &result.cfg,
+                        &self.preserved_update(),
+                        &result.changed_keys,
+                    )
+                    .map_err(GuiImportError::Import)?;
+                    config.save_to_path(&output_path).map_err(|error| {
+                        GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
+                    })?;
+                } else {
+                    save_cfg_output_to_path(&result.cfg, &output_path)
+                        .map_err(GuiImportError::Import)?;
+                }
                 Ok(Some(output_path))
             }
             GuiOutputMode::UpdateExistingCfg => {
                 let Some(cfg_path) = optional_path(&self.existing_cfg) else {
                     return Err(GuiImportError::MissingExistingCfgForUpdate);
                 };
-                save_resolved_cfg_to_path(cfg, &cfg_path).map_err(GuiImportError::Import)?;
+                let mut config = load_cfg_document(&cfg_path).map_err(GuiImportError::Import)?;
+                apply_preserved_cfg_update(
+                    &mut config,
+                    &result.cfg,
+                    &self.preserved_update(),
+                    &result.changed_keys,
+                )
+                .map_err(GuiImportError::Import)?;
+                config.save_to_path(&cfg_path).map_err(|error| {
+                    GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
+                })?;
                 Ok(Some(cfg_path))
             }
+        }
+    }
+
+    fn preserved_update(&self) -> PreservedCfgUpdate {
+        PreservedCfgUpdate {
+            import_game_files: self.import_content_files,
+            import_archives: self.import_archives,
+            data_local: optional_path(&self.data_local),
+            resources: optional_path(&self.resources),
+            user_data: optional_path(&self.user_data),
         }
     }
 

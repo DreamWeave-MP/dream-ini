@@ -184,7 +184,12 @@ fn write_result_output(
         )?;
         if let Some(cfg_path) = &mode.cfg_path {
             let mut config = load_cfg_document(cfg_path)?;
-            apply_preserved_cfg_update(&mut config, &result.cfg, &mode.update)?;
+            apply_preserved_cfg_update(
+                &mut config,
+                &result.cfg,
+                &mode.update,
+                &result.changed_keys,
+            )?;
             config.save_to_path(&output_path)?;
         } else {
             save_cfg_output_to_path(&result.cfg, &output_path)?;
@@ -200,7 +205,12 @@ fn write_result_output(
             "{}",
             if let Some(cfg_path) = &mode.cfg_path {
                 let mut config = load_cfg_document(cfg_path)?;
-                apply_preserved_cfg_update(&mut config, &result.cfg, &mode.update)?;
+                apply_preserved_cfg_update(
+                    &mut config,
+                    &result.cfg,
+                    &mode.update,
+                    &result.changed_keys,
+                )?;
                 config.to_string()
             } else {
                 serialize_cfg_output(&result.cfg, user_config_dir)?

@@ -14,7 +14,7 @@ cargo build --release
 dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]
 ```
 
-`--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file or `--in-place` with `--cfg` to overwrite the base cfg with a resolved flattened export. If `--cfg` is provided, it is read first, imported keys are replaced, and unrelated settings are preserved as cfg entries, but comments, `config=`/`replace=` chain controls, and relative/token path spelling are not preserved in resolved output. If `--cfg` is omitted, import starts from an empty config.
+`--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file or `--in-place` with `--cfg` to update the base cfg. If `--cfg` is provided, it is read first, intentionally imported keys are replaced, and unrelated comments, entries, chain controls, and relative/token path spelling are preserved through `openmw-config`'s preservation-oriented serializer. If `--cfg` is omitted, import starts from an empty config.
 
 ```bash
 dream-ini --ini Morrowind.ini > openmw.cfg

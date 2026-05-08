@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -49,12 +50,14 @@ pub struct ImportResult {
     pub cfg: MultiMap,
     pub warnings: Vec<ImportWarning>,
     pub events: Vec<ImportEvent>,
+    pub changed_keys: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pub warnings: Vec<ImportWarning>,
     pub events: Vec<ImportEvent>,
+    pub changed_keys: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,7 +100,11 @@ impl IniImporter {
         };
         let cfg_dir = cfg_path.and_then(cfg_parent_dir);
 
+        let mut changed_keys = BTreeSet::new();
         let encoding = self.effective_encoding(&cfg)?;
+        if self.options.encoding.is_some() || !cfg.contains_key("encoding") {
+            changed_keys.insert("encoding".to_owned());
+        }
         set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
 
         let ini_bytes = read_bytes(ini_path)?;
@@ -109,10 +116,12 @@ impl IniImporter {
             cfg_dir.as_deref(),
         )?;
         report.warnings.splice(0..0, parsed_ini.warnings);
+        changed_keys.extend(report.changed_keys);
         Ok(ImportResult {
             cfg,
             warnings: report.warnings,
             events: report.events,
+            changed_keys,
         })
     }
 
@@ -139,10 +148,14 @@ impl IniImporter {
     ) -> Result<ImportReport, ImportError> {
         let warnings = Vec::new();
         let mut events = Vec::new();
+        let mut changed_keys = BTreeSet::new();
         let mut imported_cfg = normalize_cfg(cfg, cfg_dir)?;
 
-        merge(&mut imported_cfg, ini);
+        if merge(&mut imported_cfg, ini) {
+            changed_keys.insert("no-sound".to_owned());
+        }
         merge_fallback(&mut imported_cfg, ini, self.options.import_fonts);
+        changed_keys.insert("fallback".to_owned());
 
         if self.options.import_game_files {
             let encoding = self.effective_encoding(&imported_cfg)?;
@@ -157,9 +170,11 @@ impl IniImporter {
                 verbose: self.options.verbose,
             })?;
             for data_dir in imported_content.data_dirs {
+                changed_keys.insert("data".to_owned());
                 insert_multimap(&mut imported_cfg, "data".to_owned(), data_dir.cfg_value);
             }
             imported_cfg.insert("content".to_owned(), imported_content.content);
+            changed_keys.insert("content".to_owned());
             events.extend(imported_content.events);
         }
 
@@ -173,16 +188,22 @@ impl IniImporter {
                 verbose: self.options.verbose,
             })?;
             for data_dir in imported_archives.data_dirs {
+                changed_keys.insert("data".to_owned());
                 insert_multimap(&mut imported_cfg, "data".to_owned(), data_dir.cfg_value);
             }
             imported_cfg.insert("fallback-archive".to_owned(), imported_archives.archives);
+            changed_keys.insert("fallback-archive".to_owned());
             events.extend(imported_archives.events);
         }
 
-        self.apply_singleton_path_overrides(&mut imported_cfg);
+        self.apply_singleton_path_overrides(&mut imported_cfg, &mut changed_keys);
 
         *cfg = imported_cfg;
-        Ok(ImportReport { warnings, events })
+        Ok(ImportReport {
+            warnings,
+            events,
+            changed_keys,
+        })
     }
 
     fn effective_encoding(&self, cfg: &MultiMap) -> Result<TextEncoding, ImportError> {
@@ -197,19 +218,40 @@ impl IniImporter {
         Ok(TextEncoding::Win1252)
     }
 
-    fn apply_singleton_path_overrides(&self, cfg: &mut MultiMap) {
-        set_path_override(cfg, "data-local", self.options.data_local.as_deref());
-        set_path_override(cfg, "resources", self.options.resources.as_deref());
-        set_path_override(cfg, "user-data", self.options.user_data.as_deref());
+    fn apply_singleton_path_overrides(
+        &self,
+        cfg: &mut MultiMap,
+        changed_keys: &mut BTreeSet<String>,
+    ) {
+        set_path_override(
+            cfg,
+            changed_keys,
+            "data-local",
+            self.options.data_local.as_deref(),
+        );
+        set_path_override(
+            cfg,
+            changed_keys,
+            "resources",
+            self.options.resources.as_deref(),
+        );
+        set_path_override(
+            cfg,
+            changed_keys,
+            "user-data",
+            self.options.user_data.as_deref(),
+        );
     }
 }
 
-fn merge(cfg: &mut MultiMap, ini: &MultiMap) {
+fn merge(cfg: &mut MultiMap, ini: &MultiMap) -> bool {
     if let Some(values) = ini.get("General:Disable Audio")
         && let Some(value) = values.last()
     {
         cfg.insert("no-sound".to_owned(), vec![value.clone()]);
+        return true;
     }
+    false
 }
 
 fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap, import_fonts: bool) {
@@ -231,9 +273,15 @@ fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap, import_fonts: bool) {
     }
 }
 
-fn set_path_override(cfg: &mut MultiMap, key: &str, path: Option<&Path>) {
+fn set_path_override(
+    cfg: &mut MultiMap,
+    changed_keys: &mut BTreeSet<String>,
+    key: &str,
+    path: Option<&Path>,
+) {
     if let Some(path) = path {
         set_single_value(cfg, key, path.to_string_lossy().into_owned());
+        changed_keys.insert(key.to_owned());
     }
 }
 
