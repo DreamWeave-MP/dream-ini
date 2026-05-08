@@ -415,6 +415,34 @@ fn existing_cfg_preview_does_not_rewrite_unimported_singletons() {
 }
 
 #[test]
+fn existing_cfg_preview_does_not_rewrite_unimported_fallbacks() {
+    let dir = unique_test_dir("preserve-unimported-fallbacks");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!("# keep fallback comment\n", "fallback=Old_Setting,old\n",),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("# keep fallback comment\nfallback=Old_Setting,old\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn in_place_preserves_existing_cfg_comments_and_relative_paths() {
     let dir = unique_test_dir("preserve-in-place");
     fs::create_dir_all(dir.join("mods")).unwrap();

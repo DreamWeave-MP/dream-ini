@@ -158,8 +158,9 @@ impl IniImporter {
         if merge(&mut imported_cfg, ini) {
             changed_keys.insert("no-sound".to_owned());
         }
-        merge_fallback(&mut imported_cfg, ini, self.options.import_fonts);
-        changed_keys.insert("fallback".to_owned());
+        if merge_fallback(&mut imported_cfg, ini, self.options.import_fonts) {
+            changed_keys.insert("fallback".to_owned());
+        }
 
         if self.options.import_game_files {
             let encoding = self.effective_encoding(&imported_cfg)?;
@@ -262,8 +263,8 @@ fn merge(cfg: &mut MultiMap, ini: &MultiMap) -> bool {
     false
 }
 
-fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap, import_fonts: bool) {
-    cfg.remove("fallback");
+fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap, import_fonts: bool) -> bool {
+    let mut imported = Vec::new();
     for key in MORROWIND_FALLBACK_KEYS {
         if !import_fonts && matches!(*key, "Fonts:Font 0" | "Fonts:Font 1" | "Fonts:Font 2") {
             continue;
@@ -271,14 +272,17 @@ fn merge_fallback(cfg: &mut MultiMap, ini: &MultiMap, import_fonts: bool) {
         if let Some(values) = ini.get(*key) {
             for value in values {
                 let fallback_key = key.replace([' ', ':'], "_");
-                insert_multimap(
-                    cfg,
-                    "fallback".to_owned(),
-                    format!("{fallback_key},{value}"),
-                );
+                imported.push(format!("{fallback_key},{value}"));
             }
         }
     }
+
+    if imported.is_empty() {
+        return false;
+    }
+
+    cfg.insert("fallback".to_owned(), imported);
+    true
 }
 
 fn set_path_override(
