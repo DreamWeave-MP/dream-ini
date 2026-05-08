@@ -143,7 +143,6 @@ impl IniImporter {
 
         merge(&mut imported_cfg, ini);
         merge_fallback(&mut imported_cfg, ini, self.options.import_fonts);
-        self.apply_singleton_path_overrides(&mut imported_cfg);
 
         if self.options.import_game_files {
             let encoding = self.effective_encoding(&imported_cfg)?;
@@ -187,6 +186,8 @@ impl IniImporter {
             imported_cfg.insert("fallback-archive".to_owned(), imported_archives.archives);
             events.extend(imported_archives.events);
         }
+
+        self.apply_singleton_path_overrides(&mut imported_cfg);
 
         *cfg = imported_cfg;
         Ok(ImportReport { warnings, events })

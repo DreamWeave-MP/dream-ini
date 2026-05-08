@@ -1,4 +1,3 @@
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -65,8 +64,6 @@ fn run_with_writers(
     if !ini_path.exists() {
         return Err(CliError::MissingIni);
     }
-    validate_resources_path(cli.resources.as_deref(), cfg_reference_path.as_deref())?;
-
     if let Some(cfg_path) = &cfg_path
         && !cfg_path.exists()
     {
@@ -153,61 +150,6 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
     }
 
     Ok(())
-}
-
-fn validate_resources_path(
-    resources: Option<&Path>,
-    cfg_reference_path: Option<&Path>,
-) -> Result<(), CliError> {
-    let Some(resources) = resources else {
-        return Ok(());
-    };
-    let resolved = resolve_cfg_relative_path(resources, cfg_reference_path);
-    let metadata = fs::metadata(&resolved).map_err(|source| {
-        CliError::InvalidUsage(format!(
-            "--resources must resolve to an installed, non-empty directory: {} ({source})",
-            resources.display()
-        ))
-    })?;
-    if !metadata.is_dir() {
-        return Err(CliError::InvalidUsage(format!(
-            "--resources must be a directory, not a file: {}",
-            resources.display()
-        )));
-    }
-    let mut entries = fs::read_dir(&resolved).map_err(|source| {
-        CliError::InvalidUsage(format!(
-            "--resources directory cannot be read: {} ({source})",
-            resources.display()
-        ))
-    })?;
-    if entries
-        .next()
-        .transpose()
-        .map_err(|source| {
-            CliError::InvalidUsage(format!(
-                "--resources directory cannot be read: {} ({source})",
-                resources.display()
-            ))
-        })?
-        .is_none()
-    {
-        return Err(CliError::InvalidUsage(format!(
-            "--resources must not be an empty directory: {}",
-            resources.display()
-        )));
-    }
-    Ok(())
-}
-
-fn resolve_cfg_relative_path(path: &Path, cfg_reference_path: Option<&Path>) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_owned();
-    }
-    cfg_reference_path
-        .and_then(Path::parent)
-        .unwrap_or_else(|| Path::new(""))
-        .join(path)
 }
 
 #[derive(Debug)]

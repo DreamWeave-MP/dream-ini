@@ -135,45 +135,10 @@ fn singleton_path_options_replace_existing_values() {
     assert_eq!(written.matches("data-local=").count(), 1);
     assert_eq!(written.matches("resources=").count(), 1);
     assert_eq!(written.matches("user-data=").count(), 1);
-    assert!(written.contains(&format!("data-local={}\n", dir.join("new-local").display())));
-    assert!(written.contains(&format!("resources={}\n", dir.join("resources").display())));
-    assert!(written.contains(&format!(
-        "user-data={}\n",
-        dir.join("new-user-data").display()
-    )));
+    assert!(written.contains("data-local=new-local\n"));
+    assert!(written.contains("resources=resources\n"));
+    assert!(written.contains("user-data=new-user-data\n"));
 
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn resources_rejects_files_and_empty_directories() {
-    let dir = unique_test_dir("bad-resources");
-    fs::create_dir_all(&dir).unwrap();
-    let ini = dir.join("Morrowind.ini");
-    let output_cfg = dir.join("openmw.cfg");
-    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
-    fs::write(dir.join("resources-file"), "not a directory").unwrap();
-    fs::create_dir_all(dir.join("empty-resources")).unwrap();
-
-    for resources in ["resources-file", "empty-resources"] {
-        let output = Command::new(BIN)
-            .args(["--no-archives", "--ini"])
-            .arg(&ini)
-            .args(["--output"])
-            .arg(&output_cfg)
-            .args(["--resources", resources])
-            .output()
-            .unwrap();
-
-        assert!(!output.status.success());
-        assert!(
-            String::from_utf8(output.stderr)
-                .unwrap()
-                .contains("--resources")
-        );
-    }
-
-    assert!(!output_cfg.exists());
     fs::remove_dir_all(dir).unwrap();
 }
 

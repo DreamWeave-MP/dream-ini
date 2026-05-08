@@ -36,15 +36,15 @@ dream-ini -M > dream-ini.1
 
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.
 - `-d, --data <DIR>`: explicit Data Files directory searched before cfg/default data paths.
-- `-l, --data-local <DIR>`: set the singleton `data-local` cfg key, replacing any existing value. Relative paths and OpenMW path tokens are resolved in generated output.
+- `-l, --data-local <DIR>`: set the singleton `data-local` cfg key, replacing any existing value. The value is written as supplied and is not used as an importer search path.
 - `-e, --encoding <ENCODING>`: character encoding for imported content-file names; `win1250`, `win1251`, or `win1252`.
 - `-f, --fonts`: import bitmap font fallback settings.
 - `-g, --game-files`: import `.esm` and `.esp` content files.
 - `-h, --help`: print help.
 - `-i, --ini <FILE>`: Morrowind.ini input path.
 - `-n, --no-archives`: disable BSA archive import.
-- `-r, --resources <DIR>`: set the singleton `resources` cfg key, replacing any existing value. The directory must resolve, must be a directory, and must not be empty.
-- `-u, --user-data <DIR>`: set the singleton `user-data` cfg key, replacing any existing value.
+- `-r, --resources <DIR>`: set the singleton `resources` cfg key, replacing any existing value. The value is written as supplied.
+- `-u, --user-data <DIR>`: set the singleton `user-data` cfg key, replacing any existing value. The value is written as supplied; this is OpenMW's saves/screenshots/navmesh-cache location, not a mod data directory.
 - `-v, --verbose`: print content-file timestamp messages during `--game-files` import.
 - `-C, --generate-completion <SHELL>`: write a completion script for `bash`, `zsh`, `fish`, `powershell`, or `elvish` to stdout.
 - `-w, --in-place`: overwrite `--cfg` with the resolved flattened import result. Requires `--cfg` and conflicts with `--output`.
@@ -61,7 +61,8 @@ dream-ini -M > dream-ini.1
 - Missing INI files fail with shell exit code `253`, matching the C++ importer's `return -3` behavior.
 - Existing cfg entries are preserved unless replaced by imported keys such as `encoding`, `no-sound`, `fallback`, `fallback-archive`, or `content`, or by explicit singleton path options such as `--data-local`, `--resources`, and `--user-data`.
 - Content-file and fallback-archive import searches existing `data-local` cfg paths first, then the explicit `--data` path, then existing `data` cfg paths, then `<Morrowind.ini parent>/Data Files` as a fallback. `data-local` always wins because it is OpenMW's highest-precedence data directory. Every `.esm`/`.esp` and `.bsa` entry imported from the INI must be found or the import fails. Any used explicit or fallback data directory is written as `data=...` if an equivalent `data`/`data-local` entry is not already present.
-- Directory-valued cfg keys such as `data`, `data-local`, `resources`, and `user-data` are interpreted by `openmw-config`; relative paths and OpenMW path tokens are resolved before output.
+- Explicit singleton options (`--data-local`, `--resources`, and `--user-data`) are output-only and are applied after content/archive resolution. Use `--data` to add an importer search path.
+- Directory-valued keys read from an existing cfg are interpreted by `openmw-config`; relative paths and OpenMW path tokens from that cfg are resolved before flattened output.
 - Config, Lua, and event path values are UTF-8 text. Non-UTF-8 operating-system paths are outside the supported API contract and may be represented lossy when converted for cfg/Lua output.
 
 ## Deliberate Differences From OpenMW's C++ Importer

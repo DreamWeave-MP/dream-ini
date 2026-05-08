@@ -1,5 +1,8 @@
 use super::*;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use clap_complete::Shell;
 
@@ -291,38 +294,10 @@ fn run_with_singleton_path_options_clobbers_existing_values() {
     assert_eq!(written.matches("data-local=").count(), 1);
     assert_eq!(written.matches("resources=").count(), 1);
     assert_eq!(written.matches("user-data=").count(), 1);
-    assert!(written.contains(&format!("data-local={}\n", dir.join("new-local").display())));
-    assert!(written.contains(&format!("resources={}\n", dir.join("resources").display())));
-    assert!(written.contains("user-data="));
-    assert!(written.contains("new-user-data"));
+    assert!(written.contains("data-local=new-local\n"));
+    assert!(written.contains("resources=resources\n"));
+    assert!(written.contains("user-data=new-user-data\n"));
 
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn run_with_resources_rejects_files_and_empty_directories() {
-    let dir = unique_test_dir("bad-resources-run");
-    fs::create_dir_all(&dir).unwrap();
-    let ini = dir.join("Morrowind.ini");
-    let output = dir.join("out.cfg");
-    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
-    fs::write(dir.join("resources-file"), "not a directory").unwrap();
-    fs::create_dir_all(dir.join("empty-resources")).unwrap();
-
-    for resources in ["resources-file", "empty-resources"] {
-        let mut cli = import_cli(ini.clone());
-        cli.output = Some(output.clone());
-        cli.resources = Some(PathBuf::from(resources));
-        cli.no_archives = true;
-        let error = run_with(cli).unwrap_err();
-
-        match error {
-            CliError::InvalidUsage(error) => assert!(error.contains("--resources")),
-            CliError::MissingIni | CliError::Other(_) => panic!("expected invalid usage error"),
-        }
-    }
-
-    assert!(!output.exists());
     fs::remove_dir_all(dir).unwrap();
 }
 

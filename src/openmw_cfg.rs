@@ -58,10 +58,8 @@ fn configuration_from_multimap(
     for (key, values) in cfg {
         match key.as_str() {
             "data" => config.set_data_directories(Some(paths(values))),
-            "data-local" => set_last_path(values, |path| config.set_data_local_path(path)),
-            "resources" => set_last_path(values, |path| config.set_resources_path(path)),
-            "user-data" => {
-                set_last_path(values, |path| config.set_user_data_path(path));
+            "data-local" | "resources" | "user-data" => {
+                config.set_generic_settings(key, Some(values.clone()));
             }
             "content" => config.set_content_files(Some(values.clone())),
             "fallback-archive" => config.set_fallback_archives(Some(values.clone())),
@@ -87,22 +85,11 @@ fn paths(values: &[String]) -> Vec<PathBuf> {
     values.iter().map(PathBuf::from).collect()
 }
 
-fn set_last_path<F>(values: &[String], mut set: F)
-where
-    F: FnMut(&Path),
-{
-    if let Some(value) = values.last() {
-        set(Path::new(value));
-    }
-}
-
 fn remove_composed_resource_vfs_data_dir(cfg: &mut MultiMap) {
     // openmw-config 1.0.5 serializes <resources>/vfs as a composed data= entry in resolved
     // output. That path is an implicit engine VFS mount derived from resources=, not a persisted
     // user data directory, so dream-ini must not write it back as data=... while the importer still
-    // uses the legacy MultiMap adapter. Once flattened into the map we cannot distinguish that
-    // synthetic entry from a deliberately authored data=<resources>/vfs entry; prefer preserving
-    // OpenMW's source-of-truth spelling, resources=..., over promoting the implicit mount.
+    // uses the legacy MultiMap adapter. Keep resources=... as the source of truth.
     let Some(resources) = cfg.get("resources").and_then(|values| values.last()) else {
         return;
     };
