@@ -440,7 +440,7 @@ fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
 struct ImportFormState {
     morrowind_ini: String,
     existing_cfg: String,
-    encoding: TextEncoding,
+    encoding: Option<TextEncoding>,
     import_fonts: bool,
     import_archives: bool,
     import_content_files: bool,
@@ -457,7 +457,7 @@ impl Default for ImportFormState {
         Self {
             morrowind_ini: String::new(),
             existing_cfg: String::new(),
-            encoding: TextEncoding::Win1252,
+            encoding: None,
             import_fonts: false,
             import_archives: true,
             import_content_files: false,
@@ -617,7 +617,7 @@ impl ImportFormState {
             data_local: optional_path(&self.data_local),
             resources: optional_path(&self.resources),
             user_data: optional_path(&self.user_data),
-            encoding: Some(self.encoding),
+            encoding: self.encoding,
             verbose: true,
             ..ImportOptions::default()
         }
@@ -677,30 +677,42 @@ fn result_tab(ui: &mut egui::Ui, selected: &mut ResultPanel, panel: ResultPanel,
     }
 }
 
-fn encoding_dropdown(ui: &mut egui::Ui, localizer: Localizer, encoding: &mut TextEncoding) {
+fn encoding_dropdown(ui: &mut egui::Ui, localizer: Localizer, encoding: &mut Option<TextEncoding>) {
     ui.horizontal(|ui| {
         ui.label(localizer.text(UiText::Encoding))
             .on_hover_text(localizer.text(UiText::EncodingTooltip));
         egui::ComboBox::from_id_salt("import-encoding")
-            .selected_text(encoding_label(*encoding))
+            .selected_text(optional_encoding_label(localizer, *encoding))
             .show_ui(ui, |ui| {
                 ui.selectable_value(
                     encoding,
-                    TextEncoding::Win1250,
+                    None,
+                    localizer.text(UiText::EncodingUseCfgDefault),
+                );
+                ui.selectable_value(
+                    encoding,
+                    Some(TextEncoding::Win1250),
                     encoding_label(TextEncoding::Win1250),
                 );
                 ui.selectable_value(
                     encoding,
-                    TextEncoding::Win1251,
+                    Some(TextEncoding::Win1251),
                     encoding_label(TextEncoding::Win1251),
                 );
                 ui.selectable_value(
                     encoding,
-                    TextEncoding::Win1252,
+                    Some(TextEncoding::Win1252),
                     encoding_label(TextEncoding::Win1252),
                 );
             });
     });
+}
+
+fn optional_encoding_label(localizer: Localizer, encoding: Option<TextEncoding>) -> &'static str {
+    encoding.map_or_else(
+        || localizer.text(UiText::EncodingUseCfgDefault),
+        encoding_label,
+    )
 }
 
 const fn encoding_label(encoding: TextEncoding) -> &'static str {
@@ -902,4 +914,14 @@ fn path_label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
 fn optional_path(value: &str) -> Option<PathBuf> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_gui_encoding_is_not_an_override() {
+        assert_eq!(ImportFormState::default().import_options().encoding, None);
+    }
 }

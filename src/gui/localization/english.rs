@@ -14,6 +14,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Browse => "Browse…",
         UiText::ImportOptions => "Import options",
         UiText::Encoding => "Encoding",
+        UiText::EncodingUseCfgDefault => "cfg/default",
         UiText::ImportFallbacks => "Import bitmap fonts",
         UiText::ImportArchives => "Import archives",
         UiText::ImportContentFiles => "Import content files / load order",
