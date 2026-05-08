@@ -13,7 +13,7 @@ pub fn serialize_resolved_cfg(
     cfg: &MultiMap,
     user_config_dir: &Path,
 ) -> Result<String, ImportError> {
-    Ok(configuration_from_multimap(cfg, user_config_dir)?.to_resolved_string())
+    Ok(configuration_from_multimap_resolved(cfg, user_config_dir)?.to_resolved_string())
 }
 
 /// Writes cfg entries with `OpenMW` directory semantics and resolved directory paths.
@@ -23,7 +23,7 @@ pub fn serialize_resolved_cfg(
 /// if writing the destination fails.
 pub fn save_resolved_cfg_to_path(cfg: &MultiMap, output_path: &Path) -> Result<(), ImportError> {
     let user_config_dir = output_path.parent().unwrap_or_else(|| Path::new(""));
-    configuration_from_multimap(cfg, user_config_dir)?
+    configuration_from_multimap_resolved(cfg, user_config_dir)?
         .save_resolved_to_path(output_path)
         .map_err(|error| config_error(&error))
 }
@@ -51,7 +51,7 @@ pub fn load_cfg_document(path: &Path) -> Result<OpenMWConfiguration, ImportError
 /// # Errors
 /// Returns [`ImportError`] if the cfg cannot be represented as an `openmw-config` configuration.
 pub fn serialize_cfg_output(cfg: &MultiMap, user_config_dir: &Path) -> Result<String, ImportError> {
-    Ok(configuration_from_multimap(cfg, user_config_dir)?.to_string())
+    Ok(configuration_from_multimap_preserving(cfg, user_config_dir)?.to_string())
 }
 
 /// Writes cfg entries with `OpenMW` directory semantics while preserving authored path spelling.
@@ -61,7 +61,7 @@ pub fn serialize_cfg_output(cfg: &MultiMap, user_config_dir: &Path) -> Result<St
 /// if writing the destination fails.
 pub fn save_cfg_output_to_path(cfg: &MultiMap, output_path: &Path) -> Result<(), ImportError> {
     let user_config_dir = output_path.parent().unwrap_or_else(|| Path::new(""));
-    configuration_from_multimap(cfg, user_config_dir)?
+    configuration_from_multimap_preserving(cfg, user_config_dir)?
         .save_to_path(output_path)
         .map_err(|error| config_error(&error))
 }
@@ -143,7 +143,7 @@ pub(crate) fn normalize_cfg(
     )?))
 }
 
-fn configuration_from_multimap(
+fn configuration_from_multimap_preserving(
     cfg: &MultiMap,
     user_config_dir: &Path,
 ) -> Result<OpenMWConfiguration, ImportError> {
@@ -169,6 +169,32 @@ fn configuration_from_multimap(
     Ok(config)
 }
 
+fn configuration_from_multimap_resolved(
+    cfg: &MultiMap,
+    user_config_dir: &Path,
+) -> Result<OpenMWConfiguration, ImportError> {
+    let user_config_dir = effective_user_config_dir(user_config_dir);
+    let mut config =
+        OpenMWConfiguration::new_empty(&user_config_dir).map_err(|error| config_error(&error))?;
+
+    for (key, values) in cfg {
+        match key.as_str() {
+            "data" => config.set_data_directories(Some(paths(values))),
+            "data-local" => set_last_path(values, |path| config.set_data_local_path(path)),
+            "resources" => set_last_path(values, |path| config.set_resources_path(path)),
+            "user-data" => set_last_path(values, |path| config.set_user_data_path(path)),
+            "content" => config.set_content_files(Some(values.clone())),
+            "fallback-archive" => config.set_fallback_archives(Some(values.clone())),
+            "fallback" => config
+                .set_game_settings(Some(values.clone()))
+                .map_err(|error| config_error(&error))?,
+            other => config.set_generic_settings(other, Some(values.clone())),
+        }
+    }
+
+    Ok(config)
+}
+
 fn effective_user_config_dir(path: &Path) -> PathBuf {
     if path.as_os_str().is_empty() {
         return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -179,6 +205,15 @@ fn effective_user_config_dir(path: &Path) -> PathBuf {
 
 fn paths(values: &[String]) -> Vec<PathBuf> {
     values.iter().map(PathBuf::from).collect()
+}
+
+fn set_last_path<F>(values: &[String], mut set: F)
+where
+    F: FnMut(&Path),
+{
+    if let Some(value) = values.last() {
+        set(Path::new(value));
+    }
 }
 
 fn set_encoding(config: &mut OpenMWConfiguration, encoding: &str) -> Result<(), ImportError> {

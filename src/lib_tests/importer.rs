@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::test_support::{unique_test_dir, values};
 use crate::{
     ImportError, ImportOptions, IniImporter, MultiMap, parse_cfg_str, parse_ini_str, serialize_cfg,
+    serialize_resolved_cfg,
 };
 
 #[test]
@@ -34,6 +35,21 @@ fn imports_merge_fallback_and_archives() {
     );
     assert!(result.warnings.is_empty());
     assert_eq!(result.events.len(), 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn resolved_cfg_serialization_resolves_singleton_directories() {
+    let dir = unique_test_dir("resolved-singletons");
+    fs::create_dir_all(&dir).unwrap();
+    let cfg = parse_cfg_str("data-local=local\nresources=resources\nuser-data=user\n");
+
+    let written = serialize_resolved_cfg(&cfg, &dir).unwrap();
+
+    assert!(written.contains(&format!("data-local={}\n", dir.join("local").display())));
+    assert!(written.contains(&format!("resources={}\n", dir.join("resources").display())));
+    assert!(written.contains(&format!("user-data={}\n", dir.join("user").display())));
+
     fs::remove_dir_all(dir).unwrap();
 }
 
