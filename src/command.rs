@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use dream_ini::{
     ImportOptions, ImportResult, IniImporter, PreservedCfgUpdate, TextEncoding,
-    apply_preserved_cfg_update, load_cfg_document, save_cfg_output_to_path, serialize_cfg_output,
+    apply_preserved_cfg_update, load_cfg_document, save_cfg_output_to_path,
+    save_resolved_configuration_to_path, serialize_cfg_output,
 };
 
 use crate::cli::Cli;
@@ -200,7 +201,7 @@ fn write_result_output(
             if same_cfg_context(cfg_path, &output_path) {
                 config.save_to_path(&output_path)?;
             } else {
-                config.save_resolved_to_path(&output_path)?;
+                save_resolved_configuration_to_path(&config, &output_path)?;
             }
         } else {
             save_cfg_output_to_path(&result.cfg, &output_path)?;

@@ -310,6 +310,35 @@ fn import_maps_uses_explicit_cfg_dir_for_relative_data_paths() {
 }
 
 #[test]
+fn cfg_resources_vfs_is_searched_but_not_written_as_data() {
+    let dir = unique_test_dir("game-files-resources-vfs");
+    let cfg_dir = dir.join("config");
+    let resources = cfg_dir.join("resources");
+    let vfs = resources.join("vfs");
+    fs::create_dir_all(&vfs).unwrap();
+    fs::write(resources.join("version"), "installed").unwrap();
+    fs::write(vfs.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let mut cfg = parse_cfg_str("resources=resources\n");
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        cfg_dir: Some(cfg_dir),
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+    assert_eq!(values(&cfg, "resources"), &["resources".to_owned()]);
+    assert_eq!(values(&cfg, "data"), &[] as &[String]);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn cfg_data_local_takes_precedence_over_cfg_data() {
     let dir = unique_test_dir("game-files-data-local-precedence");
     let cfg_dir = dir.join("config");

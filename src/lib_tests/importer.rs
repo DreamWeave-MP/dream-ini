@@ -54,6 +54,21 @@ fn resolved_cfg_serialization_resolves_singleton_directories() {
 }
 
 #[test]
+fn resolved_cfg_serialization_does_not_persist_composed_resource_vfs_data_dir() {
+    let dir = unique_test_dir("resolved-resource-vfs");
+    let resources = dir.join("resources");
+    fs::create_dir_all(resources.join("vfs")).unwrap();
+    let cfg = parse_cfg_str(&format!("resources={}\n", resources.display()));
+
+    let written = serialize_resolved_cfg(&cfg, &dir).unwrap();
+
+    assert!(written.contains(&format!("resources={}\n", resources.display())));
+    assert!(!written.contains(&format!("data={}\n", resources.join("vfs").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn font_import_is_option_gated() {
     let ini = parse_ini_str("[Fonts]\nFont 0=magic\n[Movies]\nNew Game=intro.bik\n");
     let mut cfg = MultiMap::new();

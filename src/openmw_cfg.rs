@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use openmw_config::{EncodingSetting, OpenMWConfiguration};
@@ -13,7 +14,9 @@ pub fn serialize_resolved_cfg(
     cfg: &MultiMap,
     user_config_dir: &Path,
 ) -> Result<String, ImportError> {
-    Ok(configuration_from_multimap_resolved(cfg, user_config_dir)?.to_resolved_string())
+    Ok(serialize_resolved_configuration(
+        &configuration_from_multimap_resolved(cfg, user_config_dir)?,
+    ))
 }
 
 /// Writes cfg entries with `OpenMW` directory semantics and resolved directory paths.
@@ -23,9 +26,28 @@ pub fn serialize_resolved_cfg(
 /// if writing the destination fails.
 pub fn save_resolved_cfg_to_path(cfg: &MultiMap, output_path: &Path) -> Result<(), ImportError> {
     let user_config_dir = output_path.parent().unwrap_or_else(|| Path::new(""));
-    configuration_from_multimap_resolved(cfg, user_config_dir)?
-        .save_resolved_to_path(output_path)
-        .map_err(|error| config_error(&error))
+    save_resolved_configuration_to_path(
+        &configuration_from_multimap_resolved(cfg, user_config_dir)?,
+        output_path,
+    )
+}
+
+/// Writes an `openmw-config` document with resolved paths without persisting composed engine VFS
+/// data directories.
+///
+/// # Errors
+/// Returns [`ImportError`] if serializing or writing the destination fails.
+pub fn save_resolved_configuration_to_path(
+    config: &OpenMWConfiguration,
+    output_path: &Path,
+) -> Result<(), ImportError> {
+    fs::write(output_path, serialize_resolved_configuration(config)).map_err(|source| {
+        ImportError::Io {
+            path: output_path.to_owned(),
+            source,
+        }
+    })?;
+    Ok(())
 }
 
 /// Import changes that should be applied to a preserving `openmw.cfg` document.
@@ -137,10 +159,17 @@ pub(crate) fn normalize_cfg(
     let Some(user_config_dir) = user_config_dir else {
         return Ok(cfg.clone());
     };
-    Ok(crate::parse_cfg_str(&serialize_resolved_cfg(
-        cfg,
-        user_config_dir,
-    )?))
+    let mut cfg = crate::parse_cfg_str(
+        &configuration_from_multimap_resolved(cfg, user_config_dir)?.to_resolved_string(),
+    );
+    add_composed_resource_vfs_data_dir(&mut cfg);
+    Ok(cfg)
+}
+
+fn serialize_resolved_configuration(config: &OpenMWConfiguration) -> String {
+    let mut cfg = crate::parse_cfg_str(&config.to_resolved_string());
+    remove_composed_resource_vfs_data_dir(&mut cfg);
+    crate::serialize_cfg(&cfg)
 }
 
 fn configuration_from_multimap_preserving(
@@ -252,6 +281,21 @@ fn remove_composed_resource_vfs_data_dir(cfg: &mut MultiMap) {
 
     if let Some(data_dirs) = cfg.get_mut("data") {
         data_dirs.retain(|data_dir| data_dir != &engine_vfs);
+    }
+}
+
+fn add_composed_resource_vfs_data_dir(cfg: &mut MultiMap) {
+    let Some(resources) = cfg.get("resources").and_then(|values| values.last()) else {
+        return;
+    };
+    let engine_vfs = Path::new(resources)
+        .join("vfs")
+        .to_string_lossy()
+        .into_owned();
+
+    let data_dirs = cfg.entry("data".to_owned()).or_default();
+    if !data_dirs.iter().any(|data_dir| data_dir == &engine_vfs) {
+        data_dirs.push(engine_vfs);
     }
 }
 

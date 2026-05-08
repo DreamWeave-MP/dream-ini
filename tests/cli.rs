@@ -381,6 +381,38 @@ fn relocated_existing_cfg_output_uses_resolved_paths() {
 }
 
 #[test]
+fn relocated_existing_cfg_output_does_not_persist_composed_resource_vfs_data_dir() {
+    let dir = unique_test_dir("relocated-resource-vfs");
+    let source_dir = dir.join("source");
+    let output_dir = dir.join("output");
+    let resources = source_dir.join("resources");
+    fs::create_dir_all(resources.join("vfs")).unwrap();
+    fs::create_dir_all(&output_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = source_dir.join("openmw.cfg");
+    let output_cfg = output_dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "resources=resources\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains(&format!("resources={}\n", resources.display())));
+    assert!(!written.contains(&format!("data={}\n", resources.join("vfs").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn existing_cfg_preview_does_not_rewrite_unimported_singletons() {
     let dir = unique_test_dir("preserve-unimported-singletons");
     fs::create_dir_all(&dir).unwrap();
