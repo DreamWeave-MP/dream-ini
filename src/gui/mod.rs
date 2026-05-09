@@ -258,6 +258,8 @@ struct OskState {
     buffer: String,
     selected_row: usize,
     selected_col: usize,
+    caps_lock: bool,
+    shift_next: bool,
 }
 
 impl OskState {
@@ -267,6 +269,8 @@ impl OskState {
             buffer: value,
             selected_row: 0,
             selected_col: 0,
+            caps_lock: false,
+            shift_next: false,
         }
     }
 
@@ -281,6 +285,7 @@ impl OskState {
             ControllerAction::ClearCurrent => {
                 self.buffer.pop();
             }
+            ControllerAction::Shift => self.toggle_shift(),
             ControllerAction::SelectCurrent => {
                 return OskOutcome::Commit {
                     target: self.target,
@@ -330,7 +335,9 @@ impl OskState {
 
     fn press_selected_key(&mut self) -> OskOutcome {
         match OSK_LAYOUT[self.selected_row][self.selected_col] {
-            OskKey::Char(value) => self.buffer.push(value),
+            OskKey::Char(value) => self.push_char(value),
+            OskKey::Shift => self.toggle_shift(),
+            OskKey::Caps => self.caps_lock = !self.caps_lock,
             OskKey::Backspace => {
                 self.buffer.pop();
             }
@@ -345,6 +352,19 @@ impl OskState {
         }
         OskOutcome::None
     }
+
+    fn toggle_shift(&mut self) {
+        self.shift_next = !self.shift_next;
+    }
+
+    fn push_char(&mut self, value: char) {
+        if value.is_ascii_alphabetic() && (self.caps_lock ^ self.shift_next) {
+            self.buffer.push(value.to_ascii_uppercase());
+        } else {
+            self.buffer.push(value);
+        }
+        self.shift_next = false;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,6 +378,8 @@ enum OskDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OskKey {
     Char(char),
+    Shift,
+    Caps,
     Backspace,
     Clear,
     Cancel,
@@ -425,7 +447,14 @@ const OSK_ROW_4: &[OskKey] = &[
     OskKey::Char('-'),
     OskKey::Char(' '),
 ];
-const OSK_ROW_5: &[OskKey] = &[OskKey::Backspace, OskKey::Clear, OskKey::Cancel, OskKey::Ok];
+const OSK_ROW_5: &[OskKey] = &[
+    OskKey::Caps,
+    OskKey::Shift,
+    OskKey::Backspace,
+    OskKey::Clear,
+    OskKey::Cancel,
+    OskKey::Ok,
+];
 const OSK_LAYOUT: &[&[OskKey]] = &[
     OSK_ROW_0, OSK_ROW_1, OSK_ROW_2, OSK_ROW_3, OSK_ROW_4, OSK_ROW_5,
 ];
@@ -515,6 +544,7 @@ impl GuiApp {
                 ControllerAction::Right => self.adjust_selected_form_control(FormAdjustment::Next),
                 ControllerAction::Accept => self.activate_selected_form_control(shell, context),
                 ControllerAction::ClearCurrent => self.clear_selected_form_control(),
+                ControllerAction::Shift => {}
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
                 ControllerAction::ToggleHiddenDirectories => {
                     self.page_generated_cfg_preview(PreviewPageScroll::Up);
@@ -1545,6 +1575,7 @@ fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
                 | ControllerAction::Accept
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
+                | ControllerAction::Shift
                 | ControllerAction::PagePreviewDown
                 | ControllerAction::SelectCurrent
                 | ControllerAction::ToggleHiddenDirectories => egui::Vec2::ZERO,
@@ -1556,39 +1587,44 @@ fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState)
     let screen_rect = ui.ctx().input(egui::InputState::content_rect);
     let size = osk_overlay_size(screen_rect.size());
     let mut outcome = OskOutcome::None;
+    let modal_id = egui::Id::new("path-osk-modal");
+    let modal_area = egui::Modal::default_area(modal_id)
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -OSK_MARGIN));
 
-    egui::Modal::new(egui::Id::new("path-osk-modal")).show(ui.ctx(), |ui| {
-        ui.set_min_size(size);
-        ui.set_max_size(size);
-        ui.vertical_centered(|ui| {
-            ui.heading(localizer.text(UiText::OskTitle));
-        });
-        ui.separator();
-        ui.label(localizer.text(UiText::OskControllerHelp));
-        ui.add_sized(
-            [ui.available_width(), ui.spacing().interact_size.y],
-            egui::TextEdit::singleline(&mut osk.buffer),
-        );
-        ui.separator();
+    egui::Modal::new(modal_id)
+        .area(modal_area)
+        .show(ui.ctx(), |ui| {
+            ui.set_min_width(size.x);
+            ui.set_max_width(size.x);
+            ui.set_max_height(size.y);
+            ui.vertical_centered(|ui| {
+                ui.heading(localizer.text(UiText::OskTitle));
+            });
+            ui.separator();
+            ui.label(localizer.text(UiText::OskControllerHelp));
+            ui.add_sized(
+                [ui.available_width(), ui.spacing().interact_size.y],
+                egui::TextEdit::singleline(&mut osk.buffer),
+            );
+            ui.separator();
 
-        let keyboard_height = osk_keyboard_height();
-        let keyboard_max_height = ui
-            .available_height()
-            .min(keyboard_height)
-            .max(OSK_KEY_HEIGHT);
-        egui::ScrollArea::vertical()
-            .id_salt("path-osk-keys-scroll")
-            .max_height(keyboard_max_height)
-            .show(ui, |ui| {
-                egui::Grid::new("path-osk-keys")
-                    .num_columns(10)
-                    .spacing([OSK_KEY_SPACING, OSK_KEY_SPACING])
-                    .show(ui, |ui| {
-                        for (row_index, row) in OSK_LAYOUT.iter().enumerate() {
+            let keyboard_height = osk_keyboard_height();
+            let keyboard_max_height = ui
+                .available_height()
+                .min(keyboard_height)
+                .max(OSK_KEY_HEIGHT);
+            egui::ScrollArea::vertical()
+                .id_salt("path-osk-keys-scroll")
+                .max_height(keyboard_max_height)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(OSK_KEY_SPACING, OSK_KEY_SPACING);
+                    for (row_index, row) in OSK_LAYOUT.iter().enumerate() {
+                        ui.horizontal_centered(|ui| {
                             for (col_index, key) in row.iter().enumerate() {
                                 let selected =
                                     osk.selected_row == row_index && osk.selected_col == col_index;
-                                let mut button = egui::Button::new(osk_key_label(localizer, *key));
+                                let mut button =
+                                    egui::Button::new(osk_key_label(osk, localizer, *key));
                                 if selected {
                                     button = button.fill(ui.visuals().selection.bg_fill);
                                 }
@@ -1601,11 +1637,10 @@ fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState)
                                     outcome = osk.press_selected_key();
                                 }
                             }
-                            ui.end_row();
-                        }
-                    });
-            });
-    });
+                        });
+                    }
+                });
+        });
 
     outcome
 }
@@ -1650,10 +1685,27 @@ fn osk_keyboard_content_width(overlay_size: egui::Vec2) -> f32 {
     (overlay_size.x - OSK_CONTENT_HORIZONTAL_PADDING).max(OSK_KEY_WIDTH)
 }
 
-fn osk_key_label(localizer: Localizer, key: OskKey) -> String {
+fn osk_key_label(osk: &OskState, localizer: Localizer, key: OskKey) -> String {
     match key {
-        OskKey::Char(' ') => "Space".to_owned(),
+        OskKey::Char(' ') => "Spc".to_owned(),
+        OskKey::Char(value) if value.is_ascii_alphabetic() && (osk.caps_lock ^ osk.shift_next) => {
+            value.to_ascii_uppercase().to_string()
+        }
         OskKey::Char(value) => value.to_string(),
+        OskKey::Shift => {
+            if osk.shift_next {
+                "SHFT*".to_owned()
+            } else {
+                "SHFT".to_owned()
+            }
+        }
+        OskKey::Caps => {
+            if osk.caps_lock {
+                "CAPS*".to_owned()
+            } else {
+                "CAPS".to_owned()
+            }
+        }
         OskKey::Backspace => "Bksp".to_owned(),
         OskKey::Clear => "Clr".to_owned(),
         OskKey::Cancel => "Esc".to_owned(),
@@ -2538,6 +2590,56 @@ mod tests {
     }
 
     #[test]
+    fn osk_shift_capitalizes_one_letter() {
+        let mut osk = OskState::new(PathTarget::MorrowindIni, String::new());
+        select_osk_key(&mut osk, OskKey::Char('m'));
+
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Shift),
+            OskOutcome::None
+        );
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Accept),
+            OskOutcome::None
+        );
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Accept),
+            OskOutcome::None
+        );
+
+        assert_eq!(osk.buffer, "Mm");
+        assert!(!osk.shift_next);
+    }
+
+    #[test]
+    fn osk_caps_lock_toggles_letter_case() {
+        let mut osk = OskState::new(PathTarget::MorrowindIni, String::new());
+
+        select_osk_key(&mut osk, OskKey::Caps);
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Accept),
+            OskOutcome::None
+        );
+        select_osk_key(&mut osk, OskKey::Char('o'));
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Accept),
+            OskOutcome::None
+        );
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Shift),
+            OskOutcome::None
+        );
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Accept),
+            OskOutcome::None
+        );
+
+        assert_eq!(osk.buffer, "Oo");
+        assert!(osk.caps_lock);
+        assert!(!osk.shift_next);
+    }
+
+    #[test]
     fn osk_letter_rows_are_qwerty_ordered() {
         assert_eq!(osk_row_chars(OSK_ROW_0), "qwertyuiop");
         assert_eq!(osk_row_chars(OSK_ROW_1), "asdfghjkl");
@@ -2570,6 +2672,8 @@ mod tests {
             OskKey::Char('_'),
             OskKey::Char('-'),
             OskKey::Char(' '),
+            OskKey::Caps,
+            OskKey::Shift,
             OskKey::Backspace,
             OskKey::Clear,
             OskKey::Cancel,
@@ -2916,6 +3020,8 @@ mod tests {
             .filter_map(|key| match key {
                 OskKey::Char(value) if value.is_ascii_alphabetic() => Some(*value),
                 OskKey::Char(_)
+                | OskKey::Shift
+                | OskKey::Caps
                 | OskKey::Backspace
                 | OskKey::Clear
                 | OskKey::Cancel

@@ -95,7 +95,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         }
         UiText::OskTitle => "Path keyboard",
         UiText::OskControllerHelp => {
-            "Controller: D-pad/left stick moves • A presses key • X backspaces • B/Escape cancels • Start/OK applies"
+            "Controller: D-pad/left stick moves • A presses key • Y shifts • X backspaces • B/Escape cancels • Start/OK applies"
         }
         UiText::OskOk => "OK",
     }

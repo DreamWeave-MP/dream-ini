@@ -268,6 +268,7 @@ fn immediate_button_action(button: Button) -> Option<ControllerAction> {
         Button::South => Some(ControllerAction::Accept),
         Button::East => Some(ControllerAction::Cancel),
         Button::West => Some(ControllerAction::ClearCurrent),
+        Button::North => Some(ControllerAction::Shift),
         Button::Select => Some(ControllerAction::Cancel),
         Button::Start => Some(ControllerAction::SelectCurrent),
         Button::LeftTrigger => Some(ControllerAction::ToggleHiddenDirectories),

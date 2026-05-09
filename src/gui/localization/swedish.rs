@@ -94,7 +94,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         }
         UiText::OskTitle => "Sökvägstangentbord",
         UiText::OskControllerHelp => {
-            "Handkontroll: styrkors/vänster spak flyttar • A trycker tangent • X backsteg • B/Escape avbryter • Start/OK använder"
+            "Handkontroll: styrkors/vänster spak flyttar • A trycker tangent • Y skiftar • X backsteg • B/Escape avbryter • Start/OK använder"
         }
         UiText::OskOk => "OK",
     }

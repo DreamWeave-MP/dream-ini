@@ -92,7 +92,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         }
         UiText::OskTitle => "Клавиатура пути",
         UiText::OskControllerHelp => {
-            "Контроллер: D-pad/левый стик — перемещение • A — нажать клавишу • X — удалить символ • B/Escape — отмена • Start/OK — применить"
+            "Контроллер: D-pad/левый стик — перемещение • A — нажать клавишу • Y — Shift • X — удалить символ • B/Escape — отмена • Start/OK — применить"
         }
         UiText::OskOk => "OK",
     }

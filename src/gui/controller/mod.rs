@@ -21,6 +21,7 @@ pub(in crate::gui) enum ControllerAction {
     Accept,
     Cancel,
     ClearCurrent,
+    Shift,
     SelectCurrent,
     ToggleHiddenDirectories,
     PagePreviewDown,

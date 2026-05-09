@@ -166,6 +166,7 @@ impl ActionRepeater {
             ControllerAction::Accept
             | ControllerAction::Cancel
             | ControllerAction::ClearCurrent
+            | ControllerAction::Shift
             | ControllerAction::SelectCurrent
             | ControllerAction::PagePreviewDown
             | ControllerAction::ToggleHiddenDirectories => None,

@@ -97,7 +97,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         }
         UiText::OskTitle => "Clavier de chemin",
         UiText::OskControllerHelp => {
-            "Manette : croix/stick gauche déplace • A appuie • X efface arrière • B/Échap annule • Start/OK applique"
+            "Manette : croix/stick gauche déplace • A appuie • Y majuscule • X efface arrière • B/Échap annule • Start/OK applique"
         }
         UiText::OskOk => "OK",
     }
