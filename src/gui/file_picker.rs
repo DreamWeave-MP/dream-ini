@@ -126,7 +126,7 @@ impl PathPickerState {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for entry in &self.entries {
-                    entry_action = self.entry_row(ui, entry, localizer);
+                    entry_action = self.entry_row(ui, entry);
                     if !matches!(entry_action, EntryAction::None) {
                         break;
                     }
@@ -135,7 +135,6 @@ impl PathPickerState {
         match entry_action {
             EntryAction::None => {}
             EntryAction::Navigate(path) => self.enter_directory(path),
-            EntryAction::SelectDirectory(path) => self.selected = Some(path),
             EntryAction::SelectFile(path) => self.select_file(path),
             EntryAction::Choose(path) => {
                 outcome = PickOutcome::Chosen {
@@ -161,21 +160,23 @@ impl PathPickerState {
                 .map_or_else(String::new, |path| path.display().to_string()),
         );
 
-        let choose_enabled = chosen_path.is_some();
-        let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
-        if (ui
-            .add_enabled(
-                choose_enabled,
-                egui::Button::new(localizer.text(UiText::ChoosePath)),
-            )
-            .clicked()
-            || (enter_pressed && choose_enabled))
-            && let Some(path) = chosen_path
-        {
-            outcome = PickOutcome::Chosen {
-                target: self.target,
-                path,
-            };
+        if !self.target.is_directory_target() {
+            let choose_enabled = chosen_path.is_some();
+            let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if (ui
+                .add_enabled(
+                    choose_enabled,
+                    egui::Button::new(localizer.text(UiText::ChoosePath)),
+                )
+                .clicked()
+                || (enter_pressed && choose_enabled))
+                && let Some(path) = chosen_path
+            {
+                outcome = PickOutcome::Chosen {
+                    target: self.target,
+                    path,
+                };
+            }
         }
 
         outcome
@@ -232,7 +233,7 @@ impl PathPickerState {
         self.refresh();
     }
 
-    fn entry_row(&self, ui: &mut egui::Ui, entry: &PathEntry, localizer: Localizer) -> EntryAction {
+    fn entry_row(&self, ui: &mut egui::Ui, entry: &PathEntry) -> EntryAction {
         let label = match entry.kind {
             EntryKind::Parent => format!("↑ {}", entry.name),
             EntryKind::Directory => format!("📁 {}", entry.name),
@@ -242,22 +243,6 @@ impl PathPickerState {
             .selected
             .as_ref()
             .is_some_and(|path| path == &entry.path);
-        if self.target.is_directory_target() && entry.kind == EntryKind::Directory {
-            let mut action = EntryAction::None;
-            ui.horizontal(|ui| {
-                let response = ui.selectable_label(selected, &label);
-                if response.double_clicked() {
-                    action = EntryAction::Navigate(entry.path.clone());
-                } else if response.clicked() {
-                    action = EntryAction::SelectDirectory(entry.path.clone());
-                }
-                if ui.button(localizer.text(UiText::SelectPath)).clicked() {
-                    action = EntryAction::Choose(entry.path.clone());
-                }
-            });
-            return action;
-        }
-
         let response = ui.selectable_label(selected, label);
         if response.double_clicked() {
             return match entry.kind {
@@ -269,9 +254,6 @@ impl PathPickerState {
         }
         if response.clicked() {
             return match entry.kind {
-                EntryKind::Directory if self.target.is_directory_target() => {
-                    EntryAction::SelectDirectory(entry.path.clone())
-                }
                 EntryKind::Parent | EntryKind::Directory => {
                     EntryAction::Navigate(entry.path.clone())
                 }
@@ -375,7 +357,6 @@ enum EntryKind {
 enum EntryAction {
     None,
     Navigate(PathBuf),
-    SelectDirectory(PathBuf),
     SelectFile(PathBuf),
     Choose(PathBuf),
 }
