@@ -30,8 +30,9 @@ pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(APP_ID)
-            .with_inner_size([640.0, 480.0])
+            .with_inner_size([760.0, 860.0])
             .with_min_inner_size([480.0, 320.0])
+            .with_clamp_size_to_monitor_size(true)
             .with_icon(window_icon()),
         ..Default::default()
     };
