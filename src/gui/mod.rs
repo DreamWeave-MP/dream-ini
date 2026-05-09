@@ -184,7 +184,9 @@ impl GuiApp {
         let mut actions = Vec::new();
         for event in self.controller.drain_events() {
             match event {
-                ControllerEvent::PurgeQueuedActions => actions.clear(),
+                ControllerEvent::PurgeQueuedActions => {
+                    actions.retain(|action: &ControllerAction| !action.is_repeatable());
+                }
                 event => {
                     if let Some(action) = self.handle_controller_event(event) {
                         actions.push(action);
@@ -1796,10 +1798,14 @@ mod tests {
         app.controller = controller;
 
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Accept)));
         assert!(sender.send(ControllerEvent::PurgeQueuedActions));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Up)));
 
-        assert_eq!(app.drain_controller_actions(), vec![ControllerAction::Up]);
+        assert_eq!(
+            app.drain_controller_actions(),
+            vec![ControllerAction::Accept, ControllerAction::Up]
+        );
     }
 
     #[test]

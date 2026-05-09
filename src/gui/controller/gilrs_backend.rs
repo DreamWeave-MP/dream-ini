@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -59,14 +59,14 @@ impl Drop for ControllerWorker {
 
 struct WorkerState {
     gilrs: Option<Gilrs>,
-    gamepads: HashMap<GamepadId, GamepadInputState>,
+    gamepads: BTreeMap<GamepadId, GamepadInputState>,
 }
 
 impl WorkerState {
     fn new() -> Self {
         Self {
             gilrs: Gilrs::new().ok(),
-            gamepads: HashMap::new(),
+            gamepads: BTreeMap::new(),
         }
     }
 
@@ -108,7 +108,7 @@ impl WorkerState {
         match event.event {
             EventType::ButtonPressed(button, _) => {
                 let gamepad = self.gamepad_state(event.id);
-                button_pressed(button, &mut gamepad.repeater, now)
+                button_pressed(button, gamepad, now)
             }
             EventType::Connected => InputActions::default(),
             EventType::Disconnected => {
@@ -118,8 +118,10 @@ impl WorkerState {
             EventType::ButtonReleased(button, _) => {
                 if let Some(action) = repeatable_button_action(button) {
                     let gamepad = self.gamepad_state(event.id);
-                    gamepad.repeater.stop(action);
-                    return InputActions::released();
+                    if remove_held_button(&mut gamepad.held_buttons, button) {
+                        gamepad.repeater.stop(action);
+                        return InputActions::released();
+                    }
                 }
                 InputActions::default()
             }
@@ -181,6 +183,7 @@ impl WorkerState {
 #[derive(Debug, Default)]
 struct GamepadInputState {
     axes: AxisState,
+    held_buttons: Vec<Button>,
     repeater: ActionRepeater,
 }
 
@@ -229,13 +232,29 @@ struct AxisState {
     right_y: AxisDirection,
 }
 
-fn button_pressed(button: Button, repeater: &mut ActionRepeater, now: Instant) -> InputActions {
+fn button_pressed(button: Button, gamepad: &mut GamepadInputState, now: Instant) -> InputActions {
     if let Some(action) = immediate_button_action(button) {
         return InputActions::action(action);
     }
     repeatable_button_action(button).map_or_else(InputActions::default, |action| {
-        InputActions::repeated(repeater.start(action, now))
+        if gamepad.held_buttons.contains(&button) {
+            InputActions::default()
+        } else {
+            gamepad.held_buttons.push(button);
+            InputActions::repeated(gamepad.repeater.start(action, now))
+        }
     })
+}
+
+fn remove_held_button(held_buttons: &mut Vec<Button>, button: Button) -> bool {
+    let Some(index) = held_buttons
+        .iter()
+        .position(|held_button| *held_button == button)
+    else {
+        return false;
+    };
+    held_buttons.swap_remove(index);
+    true
 }
 
 fn immediate_button_action(button: Button) -> Option<ControllerAction> {

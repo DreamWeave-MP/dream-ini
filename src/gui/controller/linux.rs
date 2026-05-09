@@ -21,6 +21,7 @@ const MAX_WORKER_ACTIONS_PER_POLL: usize = 32;
 
 const EV_KEY: u16 = 0x01;
 const EV_ABS: u16 = 0x03;
+const EV_MAX: u16 = 0x1f;
 const KEY_MAX: u16 = 0x2ff;
 const ABS_MAX: u16 = 0x3f;
 
@@ -311,6 +312,7 @@ struct InputDevice {
     file: File,
     capabilities: DeviceCapabilities,
     axes: AxisState,
+    held_buttons: BTreeSet<u16>,
     repeater: ActionRepeater,
 }
 
@@ -332,6 +334,7 @@ impl InputDevice {
             file,
             capabilities,
             axes,
+            held_buttons: BTreeSet::new(),
             repeater: ActionRepeater::default(),
         })
     }
@@ -380,6 +383,7 @@ impl InputDevice {
                 event.code,
                 event.value,
                 self.capabilities.has_hat_axes,
+                &mut self.held_buttons,
                 &mut self.repeater,
                 now,
             ),
@@ -638,7 +642,7 @@ const fn input_event_size() -> usize {
 }
 
 fn read_controller_capabilities(fd: RawFd) -> Option<DeviceCapabilities> {
-    let event_bits = ioctl_bitset(fd, 0, 1).unwrap_or_default();
+    let event_bits = ioctl_bitset(fd, 0, EV_MAX).unwrap_or_default();
     let key_bits = ioctl_bitset(fd, EV_KEY, KEY_MAX).unwrap_or_default();
     let abs_bits = if test_bit(&event_bits, EV_ABS) {
         ioctl_bitset(fd, EV_ABS, ABS_MAX).unwrap_or_default()
@@ -730,6 +734,7 @@ fn key_actions(
     code: u16,
     value: i32,
     ignore_dpad_keys: bool,
+    held_buttons: &mut BTreeSet<u16>,
     repeater: &mut ActionRepeater,
     now: Instant,
 ) -> InputActions {
@@ -747,27 +752,24 @@ fn key_actions(
             ),
             1,
         ) => InputActions::action(action),
-        (Some(action), 1) => InputActions::repeated(repeater.start(action, now)),
+        (Some(action), 1) if action.is_repeatable() && held_buttons.insert(code) => {
+            InputActions::repeated(repeater.start(action, now))
+        }
+        (Some(action), 1) if action.is_repeatable() => InputActions::default(),
         (Some(action), 0) if action_repeats(action) => {
-            repeater.stop(action);
-            InputActions::released()
+            if held_buttons.remove(&code) {
+                repeater.stop(action);
+                InputActions::released()
+            } else {
+                InputActions::default()
+            }
         }
         (Some(_) | None, _) => InputActions::default(),
     }
 }
 
 const fn action_repeats(action: ControllerAction) -> bool {
-    matches!(
-        action,
-        ControllerAction::Up
-            | ControllerAction::Down
-            | ControllerAction::Left
-            | ControllerAction::Right
-            | ControllerAction::ScrollPreviewLeft
-            | ControllerAction::ScrollPreviewRight
-            | ControllerAction::ScrollPreviewUp
-            | ControllerAction::ScrollPreviewDown
-    )
+    action.is_repeatable()
 }
 
 fn is_dpad_key(code: u16) -> bool {
@@ -834,6 +836,7 @@ fn preview_vertical_scroll_action(direction: AxisDirection) -> Option<Controller
 
 #[cfg(test)]
 mod tests {
+    use super::super::common::INITIAL_REPEAT_DELAY;
     use super::*;
 
     #[test]
@@ -856,15 +859,23 @@ mod tests {
     #[test]
     fn dpad_key_events_are_ignored_when_hat_axes_are_present() {
         let mut repeater = ActionRepeater::default();
+        let mut held_buttons = BTreeSet::new();
         let now = Instant::now();
 
         assert!(
-            key_actions(BTN_DPAD_DOWN, 1, true, &mut repeater, now)
-                .actions
-                .is_empty()
+            key_actions(
+                BTN_DPAD_DOWN,
+                1,
+                true,
+                &mut held_buttons,
+                &mut repeater,
+                now
+            )
+            .actions
+            .is_empty()
         );
         assert_eq!(
-            key_actions(BTN_SOUTH, 1, true, &mut repeater, now).actions,
+            key_actions(BTN_SOUTH, 1, true, &mut held_buttons, &mut repeater, now).actions,
             vec![ControllerAction::Accept]
         );
     }
@@ -872,12 +883,57 @@ mod tests {
     #[test]
     fn immediate_button_release_does_not_purge_queued_input() {
         let mut repeater = ActionRepeater::default();
+        let mut held_buttons = BTreeSet::new();
         let now = Instant::now();
 
-        let input = key_actions(BTN_SOUTH, 0, false, &mut repeater, now);
+        let input = key_actions(BTN_SOUTH, 0, false, &mut held_buttons, &mut repeater, now);
 
         assert!(input.actions.is_empty());
         assert!(!input.released);
+    }
+
+    #[test]
+    fn duplicate_repeatable_button_press_is_ignored_until_release() {
+        let mut repeater = ActionRepeater::default();
+        let mut held_buttons = BTreeSet::new();
+        let now = Instant::now();
+
+        assert_eq!(
+            key_actions(
+                BTN_DPAD_DOWN,
+                1,
+                false,
+                &mut held_buttons,
+                &mut repeater,
+                now
+            )
+            .actions,
+            vec![ControllerAction::Down]
+        );
+        assert!(
+            key_actions(
+                BTN_DPAD_DOWN,
+                1,
+                false,
+                &mut held_buttons,
+                &mut repeater,
+                now
+            )
+            .actions
+            .is_empty()
+        );
+        assert!(
+            key_actions(
+                BTN_DPAD_DOWN,
+                0,
+                false,
+                &mut held_buttons,
+                &mut repeater,
+                now
+            )
+            .released
+        );
+        assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
     }
 
     #[test]
