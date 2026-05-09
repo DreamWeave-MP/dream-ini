@@ -121,18 +121,7 @@ impl PathPickerState {
         }
 
         ui.separator();
-        let mut entry_action = EntryAction::None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for entry in &self.entries {
-                    entry_action = self.entry_row(ui, entry);
-                    if !matches!(entry_action, EntryAction::None) {
-                        break;
-                    }
-                }
-            });
-        match entry_action {
+        match self.show_entries(ui) {
             EntryAction::None => {}
             EntryAction::Navigate(path) => self.enter_directory(path),
             EntryAction::SelectFile(path) => self.select_file(path),
@@ -180,6 +169,23 @@ impl PathPickerState {
         }
 
         outcome
+    }
+
+    fn show_entries(&mut self, ui: &mut egui::Ui) -> EntryAction {
+        let mut entry_action = self.keyboard_entry_action(ui);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for entry in &self.entries {
+                    let row_action = self.entry_row(ui, entry);
+                    if matches!(entry_action, EntryAction::None)
+                        && !matches!(row_action, EntryAction::None)
+                    {
+                        entry_action = row_action;
+                    }
+                }
+            });
+        entry_action
     }
 
     fn title(&self, localizer: Localizer) -> &'static str {
@@ -261,6 +267,52 @@ impl PathPickerState {
             };
         }
         EntryAction::None
+    }
+
+    fn keyboard_entry_action(&mut self, ui: &egui::Ui) -> EntryAction {
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
+            self.move_selection(SelectionStep::Previous);
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
+            self.move_selection(SelectionStep::Next);
+        }
+
+        if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+            return self.selected_entry_action();
+        }
+        EntryAction::None
+    }
+
+    fn move_selection(&mut self, step: SelectionStep) {
+        if self.entries.is_empty() {
+            self.selected = None;
+            return;
+        }
+
+        let current_index = self.selected_entry_index();
+        let next_index = match (step, current_index) {
+            (SelectionStep::Previous, Some(0) | None) => self.entries.len() - 1,
+            (SelectionStep::Previous, Some(index)) => index - 1,
+            (SelectionStep::Next, Some(index)) if index + 1 < self.entries.len() => index + 1,
+            (SelectionStep::Next, Some(_) | None) => 0,
+        };
+        self.selected = Some(self.entries[next_index].path.clone());
+    }
+
+    fn selected_entry_index(&self) -> Option<usize> {
+        let selected = self.selected.as_ref()?;
+        self.entries.iter().position(|entry| &entry.path == selected)
+    }
+
+    fn selected_entry_action(&self) -> EntryAction {
+        let Some(index) = self.selected_entry_index() else {
+            return EntryAction::None;
+        };
+        let entry = &self.entries[index];
+        match entry.kind {
+            EntryKind::Parent | EntryKind::Directory => EntryAction::Navigate(entry.path.clone()),
+            EntryKind::File => EntryAction::Choose(entry.path.clone()),
+        }
     }
 
     fn select_file(&mut self, path: PathBuf) {
@@ -359,6 +411,12 @@ enum EntryAction {
     Navigate(PathBuf),
     SelectFile(PathBuf),
     Choose(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SelectionStep {
+    Previous,
+    Next,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -583,6 +641,45 @@ mod tests {
         picker.refresh();
 
         assert!(picker.chosen_path().is_none());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn keyboard_selection_wraps_through_visible_entries() {
+        let root = unique_temp_dir();
+        let alpha = root.join("alpha");
+        let beta = root.join("beta");
+        fs::create_dir(&alpha).unwrap();
+        fs::create_dir(&beta).unwrap();
+        let mut picker = PathPickerState::new(PathTarget::UserDataDir, Some(&root));
+
+        picker.move_selection(SelectionStep::Next);
+        assert_eq!(picker.selected.as_deref(), Some(root.parent().unwrap()));
+
+        picker.move_selection(SelectionStep::Next);
+        assert_eq!(picker.selected.as_deref(), Some(alpha.as_path()));
+
+        picker.move_selection(SelectionStep::Previous);
+        assert_eq!(picker.selected.as_deref(), Some(root.parent().unwrap()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn keyboard_accept_navigates_selected_directory() {
+        let root = unique_temp_dir();
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        let mut picker = PathPickerState::new(PathTarget::UserDataDir, Some(&root));
+        picker.selected = Some(child.clone());
+
+        match picker.selected_entry_action() {
+            EntryAction::Navigate(path) => assert_eq!(path, child),
+            EntryAction::None | EntryAction::SelectFile(_) | EntryAction::Choose(_) => {
+                panic!("selected directory should navigate")
+            }
+        }
 
         fs::remove_dir_all(root).unwrap();
     }
