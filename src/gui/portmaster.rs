@@ -3,22 +3,36 @@
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
+#[cfg(target_os = "linux")]
 use std::num::NonZeroUsize;
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
+#[cfg(target_os = "linux")]
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "linux")]
+use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "linux")]
 use super::controller::{Controller, ControllerAction, ControllerEvent};
 
 const LOG_FILE_NAME: &str = "dream-ini-portmaster.log";
+#[cfg(target_os = "linux")]
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
+#[cfg(target_os = "linux")]
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
+#[cfg(target_os = "linux")]
 const FRAME_DELAY: Duration = Duration::from_millis(33);
+#[cfg(target_os = "linux")]
 const AUTO_EXIT_AFTER: Duration = Duration::from_secs(120);
+#[cfg(target_os = "linux")]
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 
 type SharedLog = Arc<Mutex<File>>;
@@ -37,6 +51,7 @@ pub(crate) fn run() -> ExitCode {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
     let mut framebuffer = Framebuffer::open()?;
     framebuffer.log_info(log);
@@ -92,6 +107,15 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
+    let message = "PortMaster framebuffer probe is only supported on Linux";
+    write_log(log, message);
+    eprintln!("{message}");
+    Err(io::Error::other(message))
+}
+
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct Framebuffer {
     path: PathBuf,
@@ -102,6 +126,7 @@ struct Framebuffer {
     memory_len: NonZeroUsize,
 }
 
+#[cfg(target_os = "linux")]
 impl Framebuffer {
     fn open() -> io::Result<Self> {
         let mut last_error = None;
@@ -266,6 +291,7 @@ impl Framebuffer {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for Framebuffer {
     fn drop(&mut self) {
         // SAFETY: memory and memory_len are the same mapping returned by mmap in
@@ -274,6 +300,7 @@ impl Drop for Framebuffer {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct FbBitfield {
@@ -282,6 +309,7 @@ struct FbBitfield {
     msb_right: u32,
 }
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct FbFixScreeninfo {
@@ -302,6 +330,7 @@ struct FbFixScreeninfo {
     reserved: [u16; 2],
 }
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct FbVarScreeninfo {
@@ -336,6 +365,7 @@ struct FbVarScreeninfo {
     reserved: [u32; 4],
 }
 
+#[cfg(target_os = "linux")]
 fn get_fix_info(file: &File) -> io::Result<FbFixScreeninfo> {
     let mut fix = FbFixScreeninfo::default();
     // SAFETY: fix points to writable memory matching Linux fb_fix_screeninfo.
@@ -346,6 +376,7 @@ fn get_fix_info(file: &File) -> io::Result<FbFixScreeninfo> {
     Ok(fix)
 }
 
+#[cfg(target_os = "linux")]
 fn get_var_info(file: &File) -> io::Result<FbVarScreeninfo> {
     let mut var = FbVarScreeninfo::default();
     // SAFETY: var points to writable memory matching Linux fb_var_screeninfo.
@@ -356,6 +387,7 @@ fn get_var_info(file: &File) -> io::Result<FbVarScreeninfo> {
     Ok(var)
 }
 
+#[cfg(target_os = "linux")]
 fn framebuffer_memory_len(
     fix: &FbFixScreeninfo,
     var: &FbVarScreeninfo,
@@ -375,6 +407,7 @@ fn framebuffer_memory_len(
     NonZeroUsize::new(length).ok_or_else(|| io::Error::other("framebuffer memory length is zero"))
 }
 
+#[cfg(target_os = "linux")]
 fn fb_id(fix: &FbFixScreeninfo) -> String {
     let nul = fix
         .id
@@ -388,6 +421,7 @@ fn fb_id(fix: &FbFixScreeninfo) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+#[cfg(target_os = "linux")]
 fn bitfield_info(field: &FbBitfield) -> String {
     format!(
         "offset={} length={} msb_right={}",
@@ -395,6 +429,7 @@ fn bitfield_info(field: &FbBitfield) -> String {
     )
 }
 
+#[cfg(target_os = "linux")]
 fn pattern_color(
     x: usize,
     y: usize,
@@ -419,10 +454,12 @@ fn pattern_color(
     }
 }
 
+#[cfg(target_os = "linux")]
 fn pack_color(var: &FbVarScreeninfo, (red, green, blue): (u8, u8, u8)) -> u32 {
     pack_channel(red, &var.red) | pack_channel(green, &var.green) | pack_channel(blue, &var.blue)
 }
 
+#[cfg(target_os = "linux")]
 fn pack_channel(value: u8, field: &FbBitfield) -> u32 {
     if field.length == 0 || field.offset >= 32 {
         return 0;
@@ -433,11 +470,13 @@ fn pack_channel(value: u8, field: &FbBitfield) -> u32 {
     u32::try_from(scaled << field.offset).unwrap_or(0)
 }
 
+#[cfg(target_os = "linux")]
 fn write_pixel(pixel: &mut [u8], bytes_per_pixel: usize, packed: u32) {
     let bytes = packed.to_ne_bytes();
     pixel[..bytes_per_pixel].copy_from_slice(&bytes[..bytes_per_pixel]);
 }
 
+#[cfg(target_os = "linux")]
 const fn action_phase_step(action: ControllerAction) -> u32 {
     match action {
         ControllerAction::Up => 17,
@@ -457,6 +496,7 @@ const fn action_phase_step(action: ControllerAction) -> u32 {
     }
 }
 
+#[cfg(target_os = "linux")]
 const fn action_name(action: ControllerAction) -> &'static str {
     match action {
         ControllerAction::Up => "up",
