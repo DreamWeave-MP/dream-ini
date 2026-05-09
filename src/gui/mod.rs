@@ -55,7 +55,11 @@ pub(crate) fn run() -> ExitCode {
     let result = eframe::run_native(
         APP_NAME,
         options,
-        Box::new(|creation_context| Ok(Box::new(GuiApp::new(creation_context.egui_ctx.clone())))),
+        Box::new(|creation_context| {
+            Ok(Box::new(DesktopGuiApp::new(
+                creation_context.egui_ctx.clone(),
+            )))
+        }),
     );
 
     match result {
@@ -132,6 +136,50 @@ impl GuiApp {
     }
 }
 
+#[cfg(feature = "gui")]
+struct DesktopGuiApp {
+    app: GuiApp,
+    shell: DesktopGuiShell,
+}
+
+#[cfg(feature = "gui")]
+impl DesktopGuiApp {
+    fn new(context: egui::Context) -> Self {
+        Self {
+            app: GuiApp::new(context),
+            shell: DesktopGuiShell,
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+impl eframe::App for DesktopGuiApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.app.ui(ui, &mut self.shell);
+    }
+}
+
+trait GuiShell {
+    fn request_exit(&mut self, context: &egui::Context);
+
+    fn copy_text(&mut self, context: &egui::Context, text: String);
+}
+
+#[cfg(feature = "gui")]
+#[derive(Debug, Default)]
+struct DesktopGuiShell;
+
+#[cfg(feature = "gui")]
+impl GuiShell for DesktopGuiShell {
+    fn request_exit(&mut self, context: &egui::Context) {
+        context.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn copy_text(&mut self, context: &egui::Context, text: String) {
+        context.copy_text(text);
+    }
+}
+
 enum GuiMode {
     ImportForm,
     PathPicker(PathPickerState),
@@ -186,21 +234,20 @@ enum PreviewPageScroll {
     Down,
 }
 
-#[cfg(feature = "gui")]
-impl eframe::App for GuiApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+impl GuiApp {
+    fn ui(&mut self, ui: &mut egui::Ui, shell: &mut impl GuiShell) {
         let context = ui.ctx().clone();
         let controller_actions = self.drain_controller_actions();
         let controller_actions_consumed =
-            self.handle_controller_actions(&context, &controller_actions);
-        self.handle_shortcuts(&context);
+            self.handle_controller_actions(shell, &context, &controller_actions);
+        self.handle_shortcuts(shell, &context);
         let controller_actions_for_ui: &[ControllerAction] = if controller_actions_consumed {
             &[]
         } else {
             &controller_actions
         };
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            self.show_current_mode(ui, controller_actions_for_ui);
+            self.show_current_mode(ui, shell, controller_actions_for_ui);
         });
     }
 }
@@ -239,6 +286,7 @@ impl GuiApp {
 
     fn handle_controller_actions(
         &mut self,
+        shell: &mut impl GuiShell,
         context: &egui::Context,
         actions: &[ControllerAction],
     ) -> bool {
@@ -254,7 +302,7 @@ impl GuiApp {
         for action in actions {
             match action {
                 ControllerAction::Cancel => {
-                    context.send_viewport_cmd(egui::ViewportCommand::Close);
+                    shell.request_exit(context);
                     return true;
                 }
                 ControllerAction::Up => self.move_form_selection(FormSelectionStep::Previous),
@@ -263,7 +311,7 @@ impl GuiApp {
                     self.adjust_selected_form_control(FormAdjustment::Previous);
                 }
                 ControllerAction::Right => self.adjust_selected_form_control(FormAdjustment::Next),
-                ControllerAction::Accept => self.activate_selected_form_control(context),
+                ControllerAction::Accept => self.activate_selected_form_control(shell, context),
                 ControllerAction::ClearCurrent => self.clear_selected_form_control(),
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
                 ControllerAction::ToggleHiddenDirectories => {
@@ -292,12 +340,12 @@ impl GuiApp {
         true
     }
 
-    fn handle_shortcuts(&mut self, context: &egui::Context) {
+    fn handle_shortcuts(&mut self, shell: &mut impl GuiShell, context: &egui::Context) {
         if !matches!(self.mode, GuiMode::ImportForm) {
             return;
         }
         if context.input(|input| input.key_pressed(egui::Key::Escape)) {
-            context.send_viewport_cmd(egui::ViewportCommand::Close);
+            shell.request_exit(context);
         }
         if context.input(|input| input.key_pressed(egui::Key::Enter))
             && self.state.disabled_import_reason().is_none()
@@ -394,7 +442,11 @@ impl GuiApp {
         self.pending_form_scroll = Some(self.selected_form_control);
     }
 
-    fn activate_selected_form_control(&mut self, context: &egui::Context) {
+    fn activate_selected_form_control(
+        &mut self,
+        shell: &mut impl GuiShell,
+        context: &egui::Context,
+    ) {
         match self.selected_form_control {
             FormControl::Language => self.cycle_language(FormAdjustment::Next),
             FormControl::MorrowindIni => self.open_form_path_picker(PathTarget::MorrowindIni),
@@ -423,7 +475,7 @@ impl GuiApp {
             }
             FormControl::Import => self.run_import_if_enabled(),
             FormControl::ResultTabs => self.cycle_result_panel(FormAdjustment::Next),
-            FormControl::CopyResult => self.copy_result_to_clipboard(context),
+            FormControl::CopyResult => self.copy_result_to_clipboard(shell, context),
             FormControl::ClearResult => self.result = None,
         }
     }
@@ -538,18 +590,23 @@ impl GuiApp {
         self.selected_result_panel = cycled_result_panel(self.selected_result_panel, adjustment);
     }
 
-    fn copy_result_to_clipboard(&self, context: &egui::Context) {
+    fn copy_result_to_clipboard(&self, shell: &mut impl GuiShell, context: &egui::Context) {
         if let Some(GuiImportResult::Success { cfg_text, .. }) = &self.result {
-            context.copy_text(cfg_text.clone());
+            shell.copy_text(context, cfg_text.clone());
         }
     }
 
-    fn show_current_mode(&mut self, ui: &mut egui::Ui, controller_actions: &[ControllerAction]) {
+    fn show_current_mode(
+        &mut self,
+        ui: &mut egui::Ui,
+        shell: &mut impl GuiShell,
+        controller_actions: &[ControllerAction],
+    ) {
         match &mut self.mode {
             GuiMode::ImportForm => {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| self.show_form(ui));
+                    .show(ui, |ui| self.show_form(ui, shell));
             }
             GuiMode::PathPicker(picker) => {
                 let controller_scroll_delta = path_picker_scroll_delta(controller_actions);
@@ -579,7 +636,7 @@ impl GuiApp {
         }
     }
 
-    fn show_form(&mut self, ui: &mut egui::Ui) {
+    fn show_form(&mut self, ui: &mut egui::Ui, shell: &mut impl GuiShell) {
         self.ensure_selected_form_control_available();
         self.show_language_selector(ui);
         self.show_controller_help(ui);
@@ -653,7 +710,7 @@ impl GuiApp {
 
         if self.result.is_some() {
             ui.separator();
-            self.show_results(ui);
+            self.show_results(ui, shell);
         }
     }
 
@@ -853,7 +910,7 @@ impl GuiApp {
         self.scroll_selected_form_control_into_view(ui, FormControl::Language);
     }
 
-    fn show_results(&mut self, ui: &mut egui::Ui) {
+    fn show_results(&mut self, ui: &mut egui::Ui, shell: &mut impl GuiShell) {
         ui.heading(self.localizer.text(UiText::Results));
         if let Some(GuiImportResult::Success {
             output_path: Some(path),
@@ -919,7 +976,7 @@ impl GuiApp {
                     .clicked()
                     && let Some(text) = &copy_text
                 {
-                    ui.ctx().copy_text(text.clone());
+                    shell.copy_text(ui.ctx(), text.clone());
                 }
                 if ui.button(clear_label.as_str()).clicked() {
                     clear_results = true;
@@ -1723,6 +1780,22 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[derive(Debug, Default)]
+    struct TestGuiShell {
+        exit_requested: bool,
+        copied_text: Option<String>,
+    }
+
+    impl GuiShell for TestGuiShell {
+        fn request_exit(&mut self, _context: &egui::Context) {
+            self.exit_requested = true;
+        }
+
+        fn copy_text(&mut self, _context: &egui::Context, text: String) {
+            self.copied_text = Some(text);
+        }
+    }
+
     #[test]
     fn default_gui_encoding_is_not_an_override() {
         assert_eq!(ImportFormState::default().import_options().encoding, None);
@@ -1786,9 +1859,10 @@ mod tests {
     #[test]
     fn form_controller_save_as_activation_selects_output_path() {
         let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
         app.selected_form_control = FormControl::OutputSaveAs;
 
-        app.activate_selected_form_control(&egui::Context::default());
+        app.activate_selected_form_control(&mut shell, &egui::Context::default());
 
         assert_eq!(app.state.output_mode, GuiOutputMode::SaveAs);
         assert_eq!(app.selected_form_control, FormControl::OutputPath);
@@ -1797,11 +1871,44 @@ mod tests {
     #[test]
     fn form_controller_accept_opens_selected_path_picker() {
         let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
         app.selected_form_control = FormControl::MorrowindIni;
 
-        app.activate_selected_form_control(&egui::Context::default());
+        app.activate_selected_form_control(&mut shell, &egui::Context::default());
 
         assert!(matches!(app.mode, GuiMode::PathPicker(_)));
+    }
+
+    #[test]
+    fn form_controller_cancel_requests_shell_exit() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+
+        let consumed = app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::Cancel],
+        );
+
+        assert!(consumed);
+        assert!(shell.exit_requested);
+    }
+
+    #[test]
+    fn form_controller_copy_result_uses_shell_clipboard() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+        app.result = Some(GuiImportResult::Success {
+            cfg_text: "fallback=1\n".to_owned(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            output_path: None,
+        });
+        app.selected_form_control = FormControl::CopyResult;
+
+        app.activate_selected_form_control(&mut shell, &egui::Context::default());
+
+        assert_eq!(shell.copied_text.as_deref(), Some("fallback=1\n"));
     }
 
     #[test]
@@ -1817,10 +1924,14 @@ mod tests {
     #[test]
     fn form_controller_consumes_action_that_opens_picker() {
         let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
         app.selected_form_control = FormControl::ExplicitSearchPath;
 
-        let consumed =
-            app.handle_controller_actions(&egui::Context::default(), &[ControllerAction::Accept]);
+        let consumed = app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::Accept],
+        );
 
         assert!(consumed);
         assert!(matches!(app.mode, GuiMode::PathPicker(_)));
@@ -1917,6 +2028,7 @@ mod tests {
     #[test]
     fn right_stick_scrolls_generated_cfg_preview() {
         let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
         app.result = Some(GuiImportResult::Success {
             cfg_text: "fallback=1\n".to_owned(),
             warnings: Vec::new(),
@@ -1926,6 +2038,7 @@ mod tests {
         app.selected_result_panel = ResultPanel::GeneratedCfg;
 
         app.handle_controller_actions(
+            &mut shell,
             &egui::Context::default(),
             &[
                 ControllerAction::ScrollPreviewDown,
@@ -1946,6 +2059,7 @@ mod tests {
     #[test]
     fn right_stick_ignores_non_generated_result_panels() {
         let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
         app.result = Some(GuiImportResult::Success {
             cfg_text: "fallback=1\n".to_owned(),
             warnings: Vec::new(),
@@ -1955,6 +2069,7 @@ mod tests {
         app.selected_result_panel = ResultPanel::Warnings;
 
         app.handle_controller_actions(
+            &mut shell,
             &egui::Context::default(),
             &[ControllerAction::ScrollPreviewDown],
         );
@@ -1965,6 +2080,7 @@ mod tests {
     #[test]
     fn shoulder_buttons_page_generated_cfg_preview() {
         let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
         app.result = Some(GuiImportResult::Success {
             cfg_text: "fallback=1\n".to_owned(),
             warnings: Vec::new(),
@@ -1974,6 +2090,7 @@ mod tests {
         app.selected_result_panel = ResultPanel::GeneratedCfg;
 
         app.handle_controller_actions(
+            &mut shell,
             &egui::Context::default(),
             &[ControllerAction::ToggleHiddenDirectories],
         );
@@ -1983,6 +2100,7 @@ mod tests {
         );
 
         app.handle_controller_actions(
+            &mut shell,
             &egui::Context::default(),
             &[ControllerAction::PagePreviewDown],
         );
@@ -1992,6 +2110,7 @@ mod tests {
     #[test]
     fn shoulder_buttons_ignore_non_generated_result_panels() {
         let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
         app.result = Some(GuiImportResult::Success {
             cfg_text: "fallback=1\n".to_owned(),
             warnings: Vec::new(),
@@ -2001,6 +2120,7 @@ mod tests {
         app.selected_result_panel = ResultPanel::Warnings;
 
         app.handle_controller_actions(
+            &mut shell,
             &egui::Context::default(),
             &[
                 ControllerAction::ToggleHiddenDirectories,
