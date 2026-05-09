@@ -68,6 +68,7 @@ struct GuiApp {
     state: ImportFormState,
     result: Option<GuiImportResult>,
     selected_result_panel: ResultPanel,
+    selected_form_control: FormControl,
     mode: GuiMode,
 }
 
@@ -85,6 +86,7 @@ impl GuiApp {
             state: ImportFormState::default(),
             result: None,
             selected_result_panel: ResultPanel::default(),
+            selected_form_control: FormControl::MorrowindIni,
             mode: GuiMode::ImportForm,
         }
     }
@@ -96,6 +98,7 @@ impl GuiApp {
             state: ImportFormState::default(),
             result: None,
             selected_result_panel: ResultPanel::default(),
+            selected_form_control: FormControl::MorrowindIni,
             mode: GuiMode::ImportForm,
         }
     }
@@ -104,6 +107,41 @@ impl GuiApp {
 enum GuiMode {
     ImportForm,
     PathPicker(PathPickerState),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormControl {
+    Language,
+    MorrowindIni,
+    ExistingCfg,
+    Encoding,
+    ImportFonts,
+    ImportArchives,
+    ImportContentFiles,
+    ExplicitSearchPath,
+    DataLocal,
+    Resources,
+    UserData,
+    OutputPreview,
+    OutputSaveAs,
+    OutputPath,
+    OutputUpdateExisting,
+    Import,
+    ResultTabs,
+    CopyResult,
+    ClearResult,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FormSelectionStep {
+    Previous,
+    Next,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FormAdjustment {
+    Previous,
+    Next,
 }
 
 impl eframe::App for GuiApp {
@@ -123,22 +161,26 @@ impl GuiApp {
             return;
         }
 
+        self.ensure_selected_form_control_visible();
+
         for action in actions {
             match action {
                 ControllerAction::Cancel => {
                     context.send_viewport_cmd(egui::ViewportCommand::Close);
                     return;
                 }
-                ControllerAction::Accept if self.state.disabled_import_reason().is_none() => {
-                    self.run_import();
+                ControllerAction::Up => self.move_form_selection(FormSelectionStep::Previous),
+                ControllerAction::Down => self.move_form_selection(FormSelectionStep::Next),
+                ControllerAction::Left => {
+                    self.adjust_selected_form_control(FormAdjustment::Previous);
                 }
-                ControllerAction::Accept
-                | ControllerAction::SelectCurrent
-                | ControllerAction::ToggleHiddenDirectories
-                | ControllerAction::Up
-                | ControllerAction::Down
-                | ControllerAction::Left
-                | ControllerAction::Right => {}
+                ControllerAction::Right => self.adjust_selected_form_control(FormAdjustment::Next),
+                ControllerAction::Accept => self.activate_selected_form_control(context),
+                ControllerAction::SelectCurrent => self.run_import_if_enabled(),
+                ControllerAction::ToggleHiddenDirectories => {}
+            }
+            if !matches!(self.mode, GuiMode::ImportForm) {
+                return;
             }
         }
     }
@@ -154,6 +196,210 @@ impl GuiApp {
             && self.state.disabled_import_reason().is_none()
         {
             self.run_import();
+        }
+    }
+
+    fn visible_form_controls(&self) -> Vec<FormControl> {
+        let mut controls = vec![
+            FormControl::Language,
+            FormControl::MorrowindIni,
+            FormControl::ExistingCfg,
+            FormControl::Encoding,
+            FormControl::ImportFonts,
+            FormControl::ImportArchives,
+            FormControl::ImportContentFiles,
+            FormControl::ExplicitSearchPath,
+            FormControl::DataLocal,
+            FormControl::Resources,
+            FormControl::UserData,
+            FormControl::OutputPreview,
+            FormControl::OutputSaveAs,
+        ];
+        if self.state.output_mode == GuiOutputMode::SaveAs {
+            controls.push(FormControl::OutputPath);
+        }
+        if optional_path(&self.state.existing_cfg).is_some() {
+            controls.push(FormControl::OutputUpdateExisting);
+        }
+        controls.push(FormControl::Import);
+        if self.result.is_some() {
+            controls.push(FormControl::ResultTabs);
+            if matches!(self.result, Some(GuiImportResult::Success { .. })) {
+                controls.push(FormControl::CopyResult);
+            }
+            controls.push(FormControl::ClearResult);
+        }
+        controls
+    }
+
+    fn ensure_selected_form_control_visible(&mut self) {
+        let controls = self.visible_form_controls();
+        if !controls.contains(&self.selected_form_control) {
+            self.selected_form_control = controls
+                .into_iter()
+                .next()
+                .unwrap_or(FormControl::MorrowindIni);
+        }
+    }
+
+    fn move_form_selection(&mut self, step: FormSelectionStep) {
+        let controls = self.visible_form_controls();
+        if controls.is_empty() {
+            return;
+        }
+        let current_index = controls
+            .iter()
+            .position(|control| *control == self.selected_form_control);
+        let next_index = match (step, current_index) {
+            (FormSelectionStep::Previous, Some(0) | None) => controls.len() - 1,
+            (FormSelectionStep::Previous, Some(index)) => index - 1,
+            (FormSelectionStep::Next, Some(index)) if index + 1 < controls.len() => index + 1,
+            (FormSelectionStep::Next, Some(_) | None) => 0,
+        };
+        self.selected_form_control = controls[next_index];
+    }
+
+    fn activate_selected_form_control(&mut self, context: &egui::Context) {
+        match self.selected_form_control {
+            FormControl::Language => self.cycle_language(FormAdjustment::Next),
+            FormControl::MorrowindIni => self.open_form_path_picker(PathTarget::MorrowindIni),
+            FormControl::ExistingCfg => self.open_form_path_picker(PathTarget::ExistingOpenmwCfg),
+            FormControl::Encoding => self.cycle_encoding(FormAdjustment::Next),
+            FormControl::ImportFonts => self.state.import_fonts = !self.state.import_fonts,
+            FormControl::ImportArchives => self.state.import_archives = !self.state.import_archives,
+            FormControl::ImportContentFiles => {
+                self.state.import_content_files = !self.state.import_content_files;
+            }
+            FormControl::ExplicitSearchPath => self.open_form_path_picker(PathTarget::GameDataDir),
+            FormControl::DataLocal => self.open_form_path_picker(PathTarget::DataLocalDir),
+            FormControl::Resources => self.open_form_path_picker(PathTarget::ResourcesDir),
+            FormControl::UserData => self.open_form_path_picker(PathTarget::UserDataDir),
+            FormControl::OutputPreview => self.state.output_mode = GuiOutputMode::PreviewOnly,
+            FormControl::OutputSaveAs => {
+                self.state.output_mode = GuiOutputMode::SaveAs;
+                self.selected_form_control = FormControl::OutputPath;
+            }
+            FormControl::OutputPath => self.open_form_path_picker(PathTarget::OutputCfg),
+            FormControl::OutputUpdateExisting => {
+                if optional_path(&self.state.existing_cfg).is_some() {
+                    self.state.output_mode = GuiOutputMode::UpdateExistingCfg;
+                }
+            }
+            FormControl::Import => self.run_import_if_enabled(),
+            FormControl::ResultTabs => self.cycle_result_panel(FormAdjustment::Next),
+            FormControl::CopyResult => self.copy_result_to_clipboard(context),
+            FormControl::ClearResult => self.result = None,
+        }
+    }
+
+    fn adjust_selected_form_control(&mut self, adjustment: FormAdjustment) {
+        match self.selected_form_control {
+            FormControl::Language => self.cycle_language(adjustment),
+            FormControl::Encoding => self.cycle_encoding(adjustment),
+            FormControl::ImportFonts => {
+                self.state.import_fonts = matches!(adjustment, FormAdjustment::Next);
+            }
+            FormControl::ImportArchives => {
+                self.state.import_archives = matches!(adjustment, FormAdjustment::Next);
+            }
+            FormControl::ImportContentFiles => {
+                self.state.import_content_files = matches!(adjustment, FormAdjustment::Next);
+            }
+            FormControl::OutputPreview
+            | FormControl::OutputSaveAs
+            | FormControl::OutputUpdateExisting => {
+                self.cycle_output_mode(adjustment);
+            }
+            FormControl::ResultTabs => self.cycle_result_panel(adjustment),
+            FormControl::MorrowindIni
+            | FormControl::ExistingCfg
+            | FormControl::ExplicitSearchPath
+            | FormControl::DataLocal
+            | FormControl::Resources
+            | FormControl::UserData
+            | FormControl::OutputPath => {
+                if matches!(adjustment, FormAdjustment::Next) {
+                    self.open_selected_path_picker();
+                }
+            }
+            FormControl::Import | FormControl::CopyResult | FormControl::ClearResult => {}
+        }
+    }
+
+    fn run_import_if_enabled(&mut self) {
+        if self.state.disabled_import_reason().is_none() {
+            self.run_import();
+        }
+    }
+
+    fn open_form_path_picker(&mut self, target: PathTarget) {
+        let current_value = match target {
+            PathTarget::MorrowindIni => &self.state.morrowind_ini,
+            PathTarget::ExistingOpenmwCfg => &self.state.existing_cfg,
+            PathTarget::OutputCfg => &self.state.output_path,
+            PathTarget::GameDataDir => &self.state.explicit_search_path,
+            PathTarget::DataLocalDir => &self.state.data_local,
+            PathTarget::ResourcesDir => &self.state.resources,
+            PathTarget::UserDataDir => &self.state.user_data,
+        }
+        .clone();
+        self.open_path_picker(target, &current_value);
+    }
+
+    fn open_selected_path_picker(&mut self) {
+        match self.selected_form_control {
+            FormControl::MorrowindIni => self.open_form_path_picker(PathTarget::MorrowindIni),
+            FormControl::ExistingCfg => self.open_form_path_picker(PathTarget::ExistingOpenmwCfg),
+            FormControl::ExplicitSearchPath => self.open_form_path_picker(PathTarget::GameDataDir),
+            FormControl::DataLocal => self.open_form_path_picker(PathTarget::DataLocalDir),
+            FormControl::Resources => self.open_form_path_picker(PathTarget::ResourcesDir),
+            FormControl::UserData => self.open_form_path_picker(PathTarget::UserDataDir),
+            FormControl::OutputPath => self.open_form_path_picker(PathTarget::OutputCfg),
+            FormControl::Language
+            | FormControl::Encoding
+            | FormControl::ImportFonts
+            | FormControl::ImportArchives
+            | FormControl::ImportContentFiles
+            | FormControl::OutputPreview
+            | FormControl::OutputSaveAs
+            | FormControl::OutputUpdateExisting
+            | FormControl::Import
+            | FormControl::ResultTabs
+            | FormControl::CopyResult
+            | FormControl::ClearResult => {}
+        }
+    }
+
+    fn cycle_language(&mut self, adjustment: FormAdjustment) {
+        let language = self.localizer.language();
+        self.localizer
+            .set_language(cycled_language(language, adjustment));
+    }
+
+    fn cycle_encoding(&mut self, adjustment: FormAdjustment) {
+        self.state.encoding = cycled_encoding(self.state.encoding, adjustment);
+    }
+
+    fn cycle_output_mode(&mut self, adjustment: FormAdjustment) {
+        self.state.output_mode = cycled_output_mode(
+            self.state.output_mode,
+            adjustment,
+            optional_path(&self.state.existing_cfg).is_some(),
+        );
+        self.selected_form_control = match self.state.output_mode {
+            GuiOutputMode::PreviewOnly => FormControl::OutputPreview,
+            GuiOutputMode::SaveAs => FormControl::OutputSaveAs,
+            GuiOutputMode::UpdateExistingCfg => FormControl::OutputUpdateExisting,
+        };
+    }
+
+    fn cycle_result_panel(&mut self, adjustment: FormAdjustment) {
+        self.selected_result_panel = cycled_result_panel(self.selected_result_panel, adjustment);
+    }
+
+    fn copy_result_to_clipboard(&self, context: &egui::Context) {
+        if let Some(GuiImportResult::Success { cfg_text, .. }) = &self.result {
+            context.copy_text(cfg_text.clone());
         }
     }
 
@@ -183,19 +429,32 @@ impl GuiApp {
 
         ui.separator();
         ui.heading(self.localizer.text(UiText::ImportOptions));
-        encoding_dropdown(ui, self.localizer, &mut self.state.encoding);
-        ui.checkbox(
-            &mut self.state.import_fonts,
+        let encoding_label =
+            self.form_label(FormControl::Encoding, self.localizer.text(UiText::Encoding));
+        encoding_dropdown(
+            ui,
+            self.localizer,
+            &encoding_label,
+            &mut self.state.encoding,
+        );
+        let import_fonts_label = self.form_label(
+            FormControl::ImportFonts,
             self.localizer.text(UiText::ImportFallbacks),
         );
-        ui.checkbox(
-            &mut self.state.import_archives,
+        ui.checkbox(&mut self.state.import_fonts, import_fonts_label);
+        let import_archives_label = self.form_label(
+            FormControl::ImportArchives,
             self.localizer.text(UiText::ImportArchives),
-        )
-        .on_hover_text(self.localizer.text(UiText::ImportArchivesTooltip));
+        );
+        ui.checkbox(&mut self.state.import_archives, import_archives_label)
+            .on_hover_text(self.localizer.text(UiText::ImportArchivesTooltip));
+        let import_content_files_label = self.form_label(
+            FormControl::ImportContentFiles,
+            self.localizer.text(UiText::ImportContentFiles),
+        );
         ui.checkbox(
             &mut self.state.import_content_files,
-            self.localizer.text(UiText::ImportContentFiles),
+            import_content_files_label,
         )
         .on_hover_text(self.localizer.text(UiText::ImportContentFilesTooltip));
 
@@ -209,7 +468,10 @@ impl GuiApp {
         let disabled_reason = self.state.disabled_import_reason();
         let import_button = ui.add_enabled(
             disabled_reason.is_none(),
-            egui::Button::new(self.localizer.text(UiText::ImportPreview)),
+            egui::Button::new(self.form_label(
+                FormControl::Import,
+                self.localizer.text(UiText::ImportPreview),
+            )),
         );
         if let Some(reason) = disabled_reason {
             ui.label(format!(
@@ -241,6 +503,32 @@ impl GuiApp {
         )
     }
 
+    fn form_label(&self, control: FormControl, label: &str) -> String {
+        format!(
+            "{}{}",
+            if self.selected_form_control == control {
+                "▶ "
+            } else {
+                "  "
+            },
+            label
+        )
+    }
+
+    fn result_tab_label(&self, panel: ResultPanel, label: &str) -> String {
+        format!(
+            "{}{}",
+            if self.selected_form_control == FormControl::ResultTabs
+                && self.selected_result_panel == panel
+            {
+                "▶ "
+            } else {
+                "  "
+            },
+            label
+        )
+    }
+
     fn path_label_width(&self, ui: &egui::Ui, existing_cfg_label: &str) -> f32 {
         path_label_width(
             ui,
@@ -253,25 +541,27 @@ impl GuiApp {
                 CFG_KEY_USERDATA,
                 self.localizer.text(UiText::OutputPath),
             ],
-        )
+        ) + controller_marker_width(ui)
     }
 
     fn show_source_paths(&mut self, ui: &mut egui::Ui, label_width: f32, existing_cfg_label: &str) {
         ui.heading(self.localizer.text(UiText::SourceSection));
+        let morrowind_label = self.form_label(FormControl::MorrowindIni, MORROWIND_INI_LABEL);
         if path_file_row(
             ui,
             label_width,
-            MORROWIND_INI_LABEL,
+            &morrowind_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.morrowind_ini,
         ) {
             let current_value = self.state.morrowind_ini.clone();
             self.open_path_picker(PathTarget::MorrowindIni, &current_value);
         }
+        let existing_cfg_label = self.form_label(FormControl::ExistingCfg, existing_cfg_label);
         if path_file_row(
             ui,
             label_width,
-            existing_cfg_label,
+            &existing_cfg_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.existing_cfg,
         ) {
@@ -282,10 +572,14 @@ impl GuiApp {
 
     fn show_override_paths(&mut self, ui: &mut egui::Ui, label_width: f32) {
         ui.heading(self.localizer.text(UiText::Overrides));
+        let explicit_search_label = self.form_label(
+            FormControl::ExplicitSearchPath,
+            self.localizer.text(UiText::ExplicitSearchPath),
+        );
         if path_folder_row(
             ui,
             label_width,
-            self.localizer.text(UiText::ExplicitSearchPath),
+            &explicit_search_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.explicit_search_path,
             Some(self.localizer.text(UiText::ExplicitSearchPathTooltip)),
@@ -293,10 +587,11 @@ impl GuiApp {
             let current_value = self.state.explicit_search_path.clone();
             self.open_path_picker(PathTarget::GameDataDir, &current_value);
         }
+        let data_local_label = self.form_label(FormControl::DataLocal, CFG_KEY_DATA_LOCAL);
         if path_folder_row(
             ui,
             label_width,
-            CFG_KEY_DATA_LOCAL,
+            &data_local_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.data_local,
             Some(self.localizer.text(UiText::DataLocalTooltip)),
@@ -304,10 +599,11 @@ impl GuiApp {
             let current_value = self.state.data_local.clone();
             self.open_path_picker(PathTarget::DataLocalDir, &current_value);
         }
+        let resources_label = self.form_label(FormControl::Resources, CFG_KEY_RESOURCES);
         if path_folder_row(
             ui,
             label_width,
-            CFG_KEY_RESOURCES,
+            &resources_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.resources,
             Some(self.localizer.text(UiText::ResourcesTooltip)),
@@ -315,10 +611,11 @@ impl GuiApp {
             let current_value = self.state.resources.clone();
             self.open_path_picker(PathTarget::ResourcesDir, &current_value);
         }
+        let user_data_label = self.form_label(FormControl::UserData, CFG_KEY_USERDATA);
         if path_folder_row(
             ui,
             label_width,
-            CFG_KEY_USERDATA,
+            &user_data_label,
             self.localizer.text(UiText::Browse),
             &mut self.state.user_data,
             Some(self.localizer.text(UiText::UserDataTooltip)),
@@ -330,7 +627,7 @@ impl GuiApp {
 
     fn show_language_selector(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(self.localizer.text(UiText::Language));
+            ui.label(self.form_label(FormControl::Language, self.localizer.text(UiText::Language)));
             let mut language = self.localizer.language();
             egui::ComboBox::from_id_salt("gui-language")
                 .selected_text(language_label(self.localizer, language))
@@ -385,44 +682,55 @@ impl GuiApp {
             Some(GuiImportResult::Success { cfg_text, .. }) => Some(cfg_text.clone()),
             Some(GuiImportResult::Error { .. }) | None => None,
         };
+        let errors_label =
+            self.result_tab_label(ResultPanel::Errors, self.localizer.text(UiText::Errors));
+        let warnings_label =
+            self.result_tab_label(ResultPanel::Warnings, self.localizer.text(UiText::Warnings));
+        let events_label =
+            self.result_tab_label(ResultPanel::Events, self.localizer.text(UiText::Events));
+        let generated_cfg_label = self.result_tab_label(
+            ResultPanel::GeneratedCfg,
+            self.localizer.text(UiText::GeneratedCfg),
+        );
+        let copy_label =
+            self.form_label(FormControl::CopyResult, self.localizer.text(UiText::Copy));
+        let clear_label =
+            self.form_label(FormControl::ClearResult, self.localizer.text(UiText::Clear));
         let mut clear_results = false;
         ui.horizontal(|ui| {
             result_tab(
                 ui,
                 &mut self.selected_result_panel,
                 ResultPanel::Errors,
-                self.localizer.text(UiText::Errors),
+                &errors_label,
             );
             result_tab(
                 ui,
                 &mut self.selected_result_panel,
                 ResultPanel::Warnings,
-                self.localizer.text(UiText::Warnings),
+                &warnings_label,
             );
             result_tab(
                 ui,
                 &mut self.selected_result_panel,
                 ResultPanel::Events,
-                self.localizer.text(UiText::Events),
+                &events_label,
             );
             result_tab(
                 ui,
                 &mut self.selected_result_panel,
                 ResultPanel::GeneratedCfg,
-                self.localizer.text(UiText::GeneratedCfg),
+                &generated_cfg_label,
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(
-                        copy_text.is_some(),
-                        egui::Button::new(self.localizer.text(UiText::Copy)),
-                    )
+                    .add_enabled(copy_text.is_some(), egui::Button::new(copy_label.as_str()))
                     .clicked()
                     && let Some(text) = &copy_text
                 {
                     ui.ctx().copy_text(text.clone());
                 }
-                if ui.button(self.localizer.text(UiText::Clear)).clicked() {
+                if ui.button(clear_label.as_str()).clicked() {
                     clear_results = true;
                 }
             });
@@ -445,21 +753,37 @@ impl GuiApp {
     }
 
     fn show_output_options(&mut self, ui: &mut egui::Ui, path_label_width: f32) {
+        let preview_label = self.form_label(
+            FormControl::OutputPreview,
+            self.localizer.text(UiText::PreviewOnly),
+        );
+        let save_as_label = self.form_label(
+            FormControl::OutputSaveAs,
+            self.localizer.text(UiText::SaveAs),
+        );
+        let output_path_label = self.form_label(
+            FormControl::OutputPath,
+            self.localizer.text(UiText::OutputPath),
+        );
+        let update_existing_label = self.form_label(
+            FormControl::OutputUpdateExisting,
+            self.localizer.text(UiText::UpdateExistingCfg),
+        );
         ui.radio_value(
             &mut self.state.output_mode,
             GuiOutputMode::PreviewOnly,
-            self.localizer.text(UiText::PreviewOnly),
+            preview_label,
         );
         ui.radio_value(
             &mut self.state.output_mode,
             GuiOutputMode::SaveAs,
-            self.localizer.text(UiText::SaveAs),
+            save_as_label,
         );
         ui.add_enabled_ui(self.state.output_mode == GuiOutputMode::SaveAs, |ui| {
             if path_save_file_row(
                 ui,
                 path_label_width,
-                self.localizer.text(UiText::OutputPath),
+                &output_path_label,
                 self.localizer.text(UiText::Browse),
                 &mut self.state.output_path,
             ) {
@@ -471,7 +795,7 @@ impl GuiApp {
             ui.radio_value(
                 &mut self.state.output_mode,
                 GuiOutputMode::UpdateExistingCfg,
-                self.localizer.text(UiText::UpdateExistingCfg),
+                &update_existing_label,
             );
         });
         if self.state.output_mode == GuiOutputMode::UpdateExistingCfg
@@ -508,6 +832,86 @@ fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
         UiLanguage::Russian => localizer.text(UiText::RussianLanguage),
         UiLanguage::Spanish => localizer.text(UiText::SpanishLanguage),
     }
+}
+
+fn cycled_language(language: UiLanguage, adjustment: FormAdjustment) -> UiLanguage {
+    cycle_item(
+        &[
+            UiLanguage::English,
+            UiLanguage::French,
+            UiLanguage::German,
+            UiLanguage::Russian,
+            UiLanguage::Spanish,
+        ],
+        language,
+        adjustment,
+    )
+}
+
+fn cycled_encoding(
+    encoding: Option<TextEncoding>,
+    adjustment: FormAdjustment,
+) -> Option<TextEncoding> {
+    cycle_item(
+        &[
+            None,
+            Some(TextEncoding::Win1250),
+            Some(TextEncoding::Win1251),
+            Some(TextEncoding::Win1252),
+        ],
+        encoding,
+        adjustment,
+    )
+}
+
+fn cycled_output_mode(
+    output_mode: GuiOutputMode,
+    adjustment: FormAdjustment,
+    has_existing_cfg: bool,
+) -> GuiOutputMode {
+    if has_existing_cfg {
+        cycle_item(
+            &[
+                GuiOutputMode::PreviewOnly,
+                GuiOutputMode::SaveAs,
+                GuiOutputMode::UpdateExistingCfg,
+            ],
+            output_mode,
+            adjustment,
+        )
+    } else {
+        cycle_item(
+            &[GuiOutputMode::PreviewOnly, GuiOutputMode::SaveAs],
+            output_mode,
+            adjustment,
+        )
+    }
+}
+
+fn cycled_result_panel(panel: ResultPanel, adjustment: FormAdjustment) -> ResultPanel {
+    cycle_item(
+        &[
+            ResultPanel::Errors,
+            ResultPanel::Warnings,
+            ResultPanel::Events,
+            ResultPanel::GeneratedCfg,
+        ],
+        panel,
+        adjustment,
+    )
+}
+
+fn cycle_item<T: Copy + PartialEq>(items: &[T], current: T, adjustment: FormAdjustment) -> T {
+    let Some(index) = items.iter().position(|item| *item == current) else {
+        return current;
+    };
+    let next_index = match adjustment {
+        FormAdjustment::Previous if index == 0 => items.len() - 1,
+        FormAdjustment::Previous => index - 1,
+        FormAdjustment::Next if index + 1 == items.len() => 0,
+        FormAdjustment::Next => index + 1,
+    };
+    items.get(next_index).copied().unwrap_or(current)
 }
 
 #[derive(Debug, Clone)]
@@ -796,9 +1200,14 @@ fn result_tab(ui: &mut egui::Ui, selected: &mut ResultPanel, panel: ResultPanel,
     }
 }
 
-fn encoding_dropdown(ui: &mut egui::Ui, localizer: Localizer, encoding: &mut Option<TextEncoding>) {
+fn encoding_dropdown(
+    ui: &mut egui::Ui,
+    localizer: Localizer,
+    label: &str,
+    encoding: &mut Option<TextEncoding>,
+) {
     ui.horizontal(|ui| {
-        ui.label(localizer.text(UiText::Encoding))
+        ui.label(label)
             .on_hover_text(localizer.text(UiText::EncodingTooltip));
         egui::ComboBox::from_id_salt("import-encoding")
             .selected_text(optional_encoding_label(localizer, *encoding))
@@ -1023,6 +1432,14 @@ fn path_label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
         .fold(0.0, f32::max)
 }
 
+fn controller_marker_width(ui: &egui::Ui) -> f32 {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap("▶ ".to_owned(), font_id, ui.visuals().text_color())
+        .size()
+        .x
+}
+
 fn optional_path(value: &str) -> Option<PathBuf> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
@@ -1064,6 +1481,88 @@ mod tests {
         assert_eq!(
             icon.rgba.len(),
             icon.width as usize * icon.height as usize * 4
+        );
+    }
+
+    #[test]
+    fn form_controller_selection_moves_through_visible_controls() {
+        let mut app = GuiApp::new_without_controller_worker();
+        assert_eq!(app.selected_form_control, FormControl::MorrowindIni);
+
+        app.move_form_selection(FormSelectionStep::Previous);
+        assert_eq!(app.selected_form_control, FormControl::Language);
+
+        app.move_form_selection(FormSelectionStep::Previous);
+        assert_eq!(app.selected_form_control, FormControl::Import);
+
+        app.move_form_selection(FormSelectionStep::Next);
+        assert_eq!(app.selected_form_control, FormControl::Language);
+    }
+
+    #[test]
+    fn form_controller_only_exposes_currently_usable_output_controls() {
+        let mut app = GuiApp::new_without_controller_worker();
+
+        assert!(
+            !app.visible_form_controls()
+                .contains(&FormControl::OutputPath)
+        );
+        assert!(
+            !app.visible_form_controls()
+                .contains(&FormControl::OutputUpdateExisting)
+        );
+
+        app.state.output_mode = GuiOutputMode::SaveAs;
+        assert!(
+            app.visible_form_controls()
+                .contains(&FormControl::OutputPath)
+        );
+
+        app.state.existing_cfg = "openmw.cfg".to_owned();
+        assert!(
+            app.visible_form_controls()
+                .contains(&FormControl::OutputUpdateExisting)
+        );
+    }
+
+    #[test]
+    fn form_controller_save_as_activation_selects_output_path() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.selected_form_control = FormControl::OutputSaveAs;
+
+        app.activate_selected_form_control(&egui::Context::default());
+
+        assert_eq!(app.state.output_mode, GuiOutputMode::SaveAs);
+        assert_eq!(app.selected_form_control, FormControl::OutputPath);
+    }
+
+    #[test]
+    fn form_controller_accept_opens_selected_path_picker() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.selected_form_control = FormControl::MorrowindIni;
+
+        app.activate_selected_form_control(&egui::Context::default());
+
+        assert!(matches!(app.mode, GuiMode::PathPicker(_)));
+    }
+
+    #[test]
+    fn controller_adjustments_cycle_multivalue_controls() {
+        assert_eq!(
+            cycled_language(UiLanguage::English, FormAdjustment::Previous),
+            UiLanguage::Spanish
+        );
+        assert_eq!(
+            cycled_encoding(None, FormAdjustment::Next),
+            Some(TextEncoding::Win1250)
+        );
+        assert_eq!(
+            cycled_output_mode(GuiOutputMode::SaveAs, FormAdjustment::Next, false),
+            GuiOutputMode::PreviewOnly
+        );
+        assert_eq!(
+            cycled_result_panel(ResultPanel::GeneratedCfg, FormAdjustment::Next),
+            ResultPanel::Errors
         );
     }
 
