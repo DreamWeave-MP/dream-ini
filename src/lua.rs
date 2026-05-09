@@ -131,7 +131,7 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
     if let Some(value) = table.get::<Option<String>>("resources")? {
         options.resources = Some(PathBuf::from(value));
     }
-    if let Some(value) = option_string_with_alias(&table, "user_data", "userdata")? {
+    if let Some(value) = table.get::<Option<String>>("user_data")? {
         options.user_data = Some(PathBuf::from(value));
     }
     if let Some(value) = table.get::<Option<String>>("cfg_dir")? {
@@ -147,16 +147,6 @@ fn effective_encoding(options: &ImportOptions) -> TextEncoding {
 
 fn option_string(table: Option<&Table>, key: &str) -> LuaResult<Option<String>> {
     table.map_or(Ok(None), |table| table.get(key))
-}
-
-fn option_string_with_alias(
-    table: &Table,
-    canonical_key: &str,
-    alias_key: &str,
-) -> LuaResult<Option<String>> {
-    table
-        .get::<Option<String>>(canonical_key)?
-        .map_or_else(|| table.get(alias_key), |value| Ok(Some(value)))
 }
 
 fn required_string(table: &Table, key: &str) -> LuaResult<String> {
@@ -449,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn lua_import_maps_accepts_legacy_userdata_alias() {
+    fn lua_import_maps_ignores_legacy_userdata_key() {
         let lua = Lua::new();
         register(&lua).unwrap();
 
@@ -461,8 +451,8 @@ mod tests {
                 archives = false,
                 userdata = "legacy-user-data",
             })
-            assert(result.cfg["user-data"][1] == "legacy-user-data")
-            assert(result.text:find("user%-data=legacy%-user%-data\n") ~= nil)
+            assert(result.cfg["user-data"] == nil)
+            assert(result.text:find("user%-data=legacy%-user%-data\n") == nil)
             "#,
         )
         .exec()
