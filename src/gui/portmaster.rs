@@ -31,9 +31,11 @@ const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 #[cfg(target_os = "linux")]
 const FRAME_DELAY: Duration = Duration::from_millis(33);
 #[cfg(target_os = "linux")]
-const AUTO_EXIT_AFTER: Duration = Duration::from_mins(2);
+const AUTO_EXIT_AFTER: Duration = Duration::from_secs(15);
 #[cfg(target_os = "linux")]
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
+#[cfg(target_os = "linux")]
+const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
 
 type SharedLog = Arc<Mutex<File>>;
 
@@ -56,6 +58,15 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
     let mut framebuffer = Framebuffer::open()?;
     framebuffer.log_info(log);
     framebuffer.validate_format()?;
+    let draw_enabled = framebuffer_draw_enabled();
+    write_log(
+        log,
+        format!(
+            "framebuffer drawing enabled={draw_enabled} env_{}={:?}",
+            DRAW_ENV_VAR,
+            env::var_os(DRAW_ENV_VAR)
+        ),
+    );
 
     let mut controller = Controller::new(egui::Context::default());
     write_log(log, "controller worker started");
@@ -64,7 +75,9 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
     let mut phase = 0_u32;
     let mut input_count = 0_u64;
     let mut frame_count = 0_u64;
-    loop {
+    let mut snapshots = Vec::new();
+    let mut probe_error = None;
+    let exit_reason = 'probe: loop {
         for event in controller.drain_events() {
             match event {
                 ControllerEvent::Action(action) => {
@@ -79,7 +92,7 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
                     );
                     if action == ControllerAction::Cancel {
                         write_log(log, "quit requested by cancel action");
-                        return Ok(());
+                        break 'probe "cancel";
                     }
                 }
                 ControllerEvent::Available(available) => {
@@ -95,15 +108,41 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
         }
 
         phase = phase.wrapping_add(1);
-        framebuffer.draw_pattern(phase, log)?;
+        if draw_enabled && let Err(error) = framebuffer.draw_pattern(phase, &mut snapshots, log) {
+            write_log(log, format!("draw failed: {error}"));
+            probe_error = Some(error);
+            break 'probe "draw-error";
+        }
         frame_count = frame_count.saturating_add(1);
 
         if start.elapsed() >= AUTO_EXIT_AFTER {
             write_log(log, format!("auto-exit after {frame_count} frames"));
-            return Ok(());
+            break 'probe "auto-exit";
         }
 
         thread::sleep(FRAME_DELAY);
+    };
+
+    write_log(
+        log,
+        format!("leaving framebuffer probe reason={exit_reason}"),
+    );
+    let restore_result = if draw_enabled {
+        framebuffer.restore_snapshots(&snapshots, log)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = &restore_result {
+        write_log(log, format!("framebuffer restore failed: {error}"));
+    }
+    write_log(log, "dropping controller worker");
+    drop(controller);
+    write_log(log, "controller worker dropped");
+    write_log(log, "framebuffer probe complete");
+    if let Some(error) = probe_error {
+        Err(error)
+    } else {
+        restore_result
     }
 }
 
@@ -245,7 +284,12 @@ impl Framebuffer {
         );
     }
 
-    fn draw_pattern(&mut self, phase: u32, log: Option<&SharedLog>) -> io::Result<()> {
+    fn draw_pattern(
+        &mut self,
+        phase: u32,
+        snapshots: &mut Vec<FramebufferSnapshot>,
+        log: Option<&SharedLog>,
+    ) -> io::Result<()> {
         self.var = get_var_info(&self.file).map_err(|error| {
             write_log(
                 log,
@@ -257,6 +301,7 @@ impl Framebuffer {
         let viewport = visible_viewport(&self.fix, &self.var)?;
         log_visible_viewport(log, &viewport);
         log_derived_page_info(log, &self.var);
+        self.capture_snapshot_if_needed(snapshots, &viewport, log)?;
 
         // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
         let pixels =
@@ -303,6 +348,127 @@ impl Framebuffer {
                     packed,
                 );
             }
+        }
+
+        Ok(())
+    }
+
+    fn capture_snapshot_if_needed(
+        &self,
+        snapshots: &mut Vec<FramebufferSnapshot>,
+        viewport: &VisibleViewport,
+        log: Option<&SharedLog>,
+    ) -> io::Result<()> {
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.viewport == *viewport)
+        {
+            return Ok(());
+        }
+
+        let snapshot = self.capture_snapshot(viewport)?;
+        write_log(
+            log,
+            format!(
+                "captured framebuffer snapshot base_offset={} width={} height={} bytes={}",
+                snapshot.viewport.base_offset,
+                snapshot.viewport.width,
+                snapshot.viewport.height,
+                snapshot.bytes.len()
+            ),
+        );
+        snapshots.push(snapshot);
+        Ok(())
+    }
+
+    fn capture_snapshot(&self, viewport: &VisibleViewport) -> io::Result<FramebufferSnapshot> {
+        // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
+        let pixels =
+            unsafe { std::slice::from_raw_parts(self.memory.as_ptr(), self.memory_len.get()) };
+        let row_bytes = viewport_row_bytes(viewport)?;
+        let total_bytes = row_bytes
+            .checked_mul(viewport.height)
+            .ok_or_else(|| io::Error::other("framebuffer snapshot size overflow"))?;
+        let mut bytes = Vec::with_capacity(total_bytes);
+        for y in 0..viewport.height {
+            let row_offset = viewport_row_offset(viewport, y)?;
+            let row_end = row_offset
+                .checked_add(row_bytes)
+                .ok_or_else(|| io::Error::other("framebuffer snapshot row end overflow"))?;
+            if row_end > pixels.len() {
+                return Err(io::Error::other("framebuffer snapshot exceeds mmap length"));
+            }
+            bytes.extend_from_slice(&pixels[row_offset..row_end]);
+        }
+
+        Ok(FramebufferSnapshot {
+            viewport: viewport.clone(),
+            bytes,
+        })
+    }
+
+    fn restore_snapshots(
+        &mut self,
+        snapshots: &[FramebufferSnapshot],
+        log: Option<&SharedLog>,
+    ) -> io::Result<()> {
+        if snapshots.is_empty() {
+            write_log(log, "no framebuffer snapshots to restore");
+            return Ok(());
+        }
+
+        write_log(
+            log,
+            format!("restoring {} framebuffer snapshot(s)", snapshots.len()),
+        );
+        for snapshot in snapshots.iter().rev() {
+            self.restore_snapshot(snapshot)?;
+            write_log(
+                log,
+                format!(
+                    "restored framebuffer snapshot base_offset={} width={} height={} bytes={}",
+                    snapshot.viewport.base_offset,
+                    snapshot.viewport.width,
+                    snapshot.viewport.height,
+                    snapshot.bytes.len()
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    fn restore_snapshot(&mut self, snapshot: &FramebufferSnapshot) -> io::Result<()> {
+        // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
+        let pixels =
+            unsafe { std::slice::from_raw_parts_mut(self.memory.as_ptr(), self.memory_len.get()) };
+        let row_bytes = viewport_row_bytes(&snapshot.viewport)?;
+        let expected_bytes = row_bytes
+            .checked_mul(snapshot.viewport.height)
+            .ok_or_else(|| io::Error::other("framebuffer restore size overflow"))?;
+        if snapshot.bytes.len() != expected_bytes {
+            return Err(io::Error::other(
+                "framebuffer snapshot size does not match viewport",
+            ));
+        }
+
+        for y in 0..snapshot.viewport.height {
+            let destination_offset = viewport_row_offset(&snapshot.viewport, y)?;
+            let destination_end = destination_offset
+                .checked_add(row_bytes)
+                .ok_or_else(|| io::Error::other("framebuffer restore row end overflow"))?;
+            let source_offset = y
+                .checked_mul(row_bytes)
+                .ok_or_else(|| io::Error::other("framebuffer restore source offset overflow"))?;
+            let source_end = source_offset
+                .checked_add(row_bytes)
+                .ok_or_else(|| io::Error::other("framebuffer restore source end overflow"))?;
+            if destination_end > pixels.len() || source_end > snapshot.bytes.len() {
+                return Err(io::Error::other(
+                    "framebuffer restore exceeds buffer length",
+                ));
+            }
+            pixels[destination_offset..destination_end]
+                .copy_from_slice(&snapshot.bytes[source_offset..source_end]);
         }
 
         Ok(())
@@ -448,7 +614,7 @@ fn bitfield_info(field: &FbBitfield) -> String {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct VisibleViewport {
     xoffset: u32,
     yoffset: u32,
@@ -458,6 +624,13 @@ struct VisibleViewport {
     bytes_per_pixel: usize,
     x_offset_bytes: usize,
     base_offset: usize,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct FramebufferSnapshot {
+    viewport: VisibleViewport,
+    bytes: Vec<u8>,
 }
 
 #[cfg(target_os = "linux")]
@@ -536,6 +709,31 @@ fn log_derived_page_info(log: Option<&SharedLog>, var: &FbVarScreeninfo) {
             ),
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+fn viewport_row_bytes(viewport: &VisibleViewport) -> io::Result<usize> {
+    viewport
+        .width
+        .checked_mul(viewport.bytes_per_pixel)
+        .ok_or_else(|| io::Error::other("framebuffer viewport row byte count overflow"))
+}
+
+#[cfg(target_os = "linux")]
+fn viewport_row_offset(viewport: &VisibleViewport, y: usize) -> io::Result<usize> {
+    y.checked_mul(viewport.line_length)
+        .and_then(|offset| viewport.base_offset.checked_add(offset))
+        .ok_or_else(|| io::Error::other("framebuffer viewport row offset overflow"))
+}
+
+#[cfg(target_os = "linux")]
+fn framebuffer_draw_enabled() -> bool {
+    env::var(DRAW_ENV_VAR).map_or(true, |value| {
+        !matches!(
+            value.as_str(),
+            "0" | "false" | "False" | "FALSE" | "off" | "Off" | "OFF"
+        )
+    })
 }
 
 #[cfg(target_os = "linux")]
