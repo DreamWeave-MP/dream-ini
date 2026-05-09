@@ -1133,20 +1133,20 @@ fn multiply_u8(a: u8, b: u8) -> u8 {
 
 #[cfg(target_os = "linux")]
 fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {
-    let alpha = u16::from(source[3]);
     let inverse_alpha = u16::from(u8::MAX - source[3]);
-    destination[0] = blend_channel(source[0], destination[0], alpha, inverse_alpha);
-    destination[1] = blend_channel(source[1], destination[1], alpha, inverse_alpha);
-    destination[2] = blend_channel(source[2], destination[2], alpha, inverse_alpha);
+    // egui::Color32 stores premultiplied-alpha sRGBA. Do not multiply the
+    // source channels by alpha again here unless darker fringes around every
+    // translucent primitive sound like entertainment.
+    destination[0] = blend_premultiplied_channel(source[0], destination[0], inverse_alpha);
+    destination[1] = blend_premultiplied_channel(source[1], destination[1], inverse_alpha);
+    destination[2] = blend_premultiplied_channel(source[2], destination[2], inverse_alpha);
     destination[3] = u8::MAX;
 }
 
 #[cfg(target_os = "linux")]
-fn blend_channel(source: u8, destination: u8, alpha: u16, inverse_alpha: u16) -> u8 {
-    u8::try_from(
-        ((u16::from(source) * alpha) + (u16::from(destination) * inverse_alpha) + 127) / 255,
-    )
-    .unwrap_or(u8::MAX)
+fn blend_premultiplied_channel(source: u8, destination: u8, inverse_alpha: u16) -> u8 {
+    u8::try_from(u16::from(source) + ((u16::from(destination) * inverse_alpha + 127) / 255))
+        .unwrap_or(u8::MAX)
 }
 
 #[cfg(target_os = "linux")]
@@ -1650,10 +1650,10 @@ mod tests {
     }
 
     #[test]
-    fn alpha_blend_places_straight_half_alpha_over_opaque_destination() {
+    fn alpha_blend_places_premultiplied_half_alpha_over_opaque_destination() {
         let mut destination = [0, 0, 255, 255];
 
-        alpha_blend(&mut destination, [255, 0, 0, 128]);
+        alpha_blend(&mut destination, [128, 0, 0, 128]);
 
         assert_eq!(destination, [128, 0, 127, 255]);
     }
