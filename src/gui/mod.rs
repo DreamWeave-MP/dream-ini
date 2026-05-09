@@ -1783,6 +1783,19 @@ mod tests {
     }
 
     #[test]
+    fn controller_purge_event_clears_actions_drained_in_same_frame() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let (controller, sender) = controller::Controller::with_test_sender();
+        app.controller = controller;
+
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::PurgeQueuedActions));
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Up)));
+
+        assert_eq!(app.drain_controller_actions(), vec![ControllerAction::Up]);
+    }
+
+    #[test]
     fn result_controls_select_clear_before_copy() {
         let mut app = GuiApp::new_without_controller_worker();
         app.state.morrowind_ini = "Morrowind.ini".to_owned();

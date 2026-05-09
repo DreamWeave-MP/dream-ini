@@ -119,6 +119,19 @@ impl Controller {
     pub(super) fn drain_events(&mut self) -> Vec<ControllerEvent> {
         self.queue.drain()
     }
+
+    #[cfg(test)]
+    pub(super) fn with_test_sender() -> (Self, ControllerEventSender) {
+        let queue = Arc::new(ControllerEventQueue::default());
+        let sender = ControllerEventSender::new(Arc::clone(&queue));
+        (
+            Self {
+                queue,
+                worker: None,
+            },
+            sender,
+        )
+    }
 }
 
 impl Default for Controller {
@@ -168,12 +181,7 @@ mod tests {
 
     #[test]
     fn purge_event_drops_queued_actions() {
-        let queue = Arc::new(ControllerEventQueue::default());
-        let sender = ControllerEventSender::new(Arc::clone(&queue));
-        let mut controller = Controller {
-            queue,
-            worker: None,
-        };
+        let (mut controller, sender) = Controller::with_test_sender();
 
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
         sender.purge_actions();
@@ -182,6 +190,56 @@ mod tests {
         assert_eq!(
             controller.drain_events(),
             vec![ControllerEvent::PurgeQueuedActions]
+        );
+    }
+
+    #[test]
+    fn action_queue_refuses_events_at_capacity() {
+        let (mut controller, sender) = Controller::with_test_sender();
+
+        for _ in 0..MAX_QUEUED_CONTROLLER_ACTIONS {
+            assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        }
+        assert!(!sender.send(ControllerEvent::Action(ControllerAction::Up)));
+
+        assert_eq!(
+            controller.drain_events().len(),
+            MAX_DRAINED_CONTROLLER_ACTIONS
+        );
+    }
+
+    #[test]
+    fn availability_events_coalesce_to_latest_state() {
+        let (mut controller, sender) = Controller::with_test_sender();
+
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::Available(true)));
+        assert!(sender.send(ControllerEvent::Available(false)));
+
+        assert_eq!(
+            controller.drain_events(),
+            vec![
+                ControllerEvent::Action(ControllerAction::Down),
+                ControllerEvent::Available(false),
+            ]
+        );
+    }
+
+    #[test]
+    fn purge_event_preserves_non_action_events() {
+        let (mut controller, sender) = Controller::with_test_sender();
+
+        assert!(sender.send(ControllerEvent::Available(true)));
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Up)));
+        assert!(sender.send(ControllerEvent::PurgeQueuedActions));
+
+        assert_eq!(
+            controller.drain_events(),
+            vec![
+                ControllerEvent::Available(true),
+                ControllerEvent::PurgeQueuedActions,
+            ]
         );
     }
 }
