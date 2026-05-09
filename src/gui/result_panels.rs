@@ -5,8 +5,9 @@
     allow(dead_code)
 )]
 
+use super::form_nav::FormAdjustment;
 use super::localization::{Localizer, UiText};
-use super::{FormAdjustment, GuiImportError, GuiImportResult};
+use super::{GuiImportError, GuiImportResult};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum ResultPanel {

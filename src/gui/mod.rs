@@ -19,6 +19,10 @@ use dream_ini::{
 
 use self::controller::{ControllerAction, ControllerEvent};
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
+use self::form_nav::{
+    ExistingCfgVisibility, FormAdjustment, FormControl, FormSelectionStep, ImportVisibility,
+    ResultVisibility, cycled_encoding, cycled_language, cycled_output_mode,
+};
 use self::localization::{Localizer, UiLanguage, UiText};
 use self::osk::{OskOutcome, OskState, show_osk_overlay};
 use self::path_helpers::{cfg_parent, optional_path, same_cfg_context};
@@ -40,6 +44,7 @@ use crate::desktop_entry::{APP_ID, APP_NAME};
 
 mod controller;
 mod file_picker;
+mod form_nav;
 mod localization;
 mod osk;
 mod path_helpers;
@@ -204,48 +209,6 @@ enum GuiMode {
     Osk(OskState),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FormControl {
-    Language,
-    MorrowindIni,
-    MorrowindIniBrowse,
-    ExistingCfg,
-    ExistingCfgBrowse,
-    Encoding,
-    ImportFonts,
-    ImportArchives,
-    ImportContentFiles,
-    ExplicitSearchPath,
-    ExplicitSearchPathBrowse,
-    DataLocal,
-    DataLocalBrowse,
-    Resources,
-    ResourcesBrowse,
-    UserData,
-    UserDataBrowse,
-    OutputPreview,
-    OutputSaveAs,
-    OutputPath,
-    OutputPathBrowse,
-    OutputUpdateExisting,
-    Import,
-    ResultTabs,
-    CopyResult,
-    ClearResult,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FormSelectionStep {
-    Previous,
-    Next,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum FormAdjustment {
-    Previous,
-    Next,
-}
-
 impl GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, shell: &mut impl GuiShell) {
         let context = ui.ctx().clone();
@@ -404,55 +367,30 @@ impl GuiApp {
     }
 
     fn visible_form_controls(&self) -> Vec<FormControl> {
-        let mut controls = vec![
-            FormControl::Language,
-            FormControl::MorrowindIni,
-            FormControl::MorrowindIniBrowse,
-            FormControl::ExistingCfg,
-            FormControl::ExistingCfgBrowse,
-            FormControl::Encoding,
-            FormControl::ImportFonts,
-            FormControl::ImportArchives,
-            FormControl::ImportContentFiles,
-            FormControl::ExplicitSearchPath,
-            FormControl::ExplicitSearchPathBrowse,
-            FormControl::DataLocal,
-            FormControl::DataLocalBrowse,
-            FormControl::Resources,
-            FormControl::ResourcesBrowse,
-            FormControl::UserData,
-            FormControl::UserDataBrowse,
-            FormControl::OutputPreview,
-            FormControl::OutputSaveAs,
-        ];
-        if self.state.output_mode == GuiOutputMode::SaveAs {
-            controls.push(FormControl::OutputPath);
-            controls.push(FormControl::OutputPathBrowse);
-        }
-        if optional_path(&self.state.existing_cfg).is_some() {
-            controls.push(FormControl::OutputUpdateExisting);
-        }
-        if self.state.disabled_import_reason().is_none() {
-            controls.push(FormControl::Import);
-        }
-        if self.result.is_some() {
-            controls.push(FormControl::ResultTabs);
-            controls.push(FormControl::ClearResult);
-            if matches!(self.result, Some(GuiImportResult::Success { .. })) {
-                controls.push(FormControl::CopyResult);
-            }
-        }
-        controls
+        form_nav::visible_form_controls(
+            self.state.output_mode,
+            if optional_path(&self.state.existing_cfg).is_some() {
+                ExistingCfgVisibility::Present
+            } else {
+                ExistingCfgVisibility::Missing
+            },
+            if self.state.disabled_import_reason().is_none() {
+                ImportVisibility::Enabled
+            } else {
+                ImportVisibility::Disabled
+            },
+            match self.result {
+                Some(GuiImportResult::Success { .. }) => ResultVisibility::Success,
+                Some(GuiImportResult::Error { .. }) => ResultVisibility::Error,
+                None => ResultVisibility::Hidden,
+            },
+        )
     }
 
     fn ensure_selected_form_control_available(&mut self) {
         let controls = self.visible_form_controls();
-        if !controls.contains(&self.selected_form_control) {
-            self.selected_form_control = controls
-                .into_iter()
-                .next()
-                .unwrap_or(FormControl::MorrowindIni);
-        }
+        self.selected_form_control =
+            form_nav::ensure_available_control(self.selected_form_control, &controls);
     }
 
     fn scroll_selected_form_control_into_view(&mut self, ui: &mut egui::Ui, control: FormControl) {
@@ -464,20 +402,12 @@ impl GuiApp {
 
     fn move_form_selection(&mut self, step: FormSelectionStep) {
         let controls = self.visible_form_controls();
-        if controls.is_empty() {
-            return;
+        if let Some(next_control) =
+            form_nav::move_form_selection(self.selected_form_control, &controls, step)
+        {
+            self.selected_form_control = next_control;
+            self.pending_form_scroll = Some(self.selected_form_control);
         }
-        let current_index = controls
-            .iter()
-            .position(|control| *control == self.selected_form_control);
-        let next_index = match (step, current_index) {
-            (FormSelectionStep::Previous, Some(0) | None) => controls.len() - 1,
-            (FormSelectionStep::Previous, Some(index)) => index - 1,
-            (FormSelectionStep::Next, Some(index)) if index + 1 < controls.len() => index + 1,
-            (FormSelectionStep::Next, Some(_) | None) => 0,
-        };
-        self.selected_form_control = controls[next_index];
-        self.pending_form_scroll = Some(self.selected_form_control);
     }
 
     fn activate_selected_form_control(
@@ -1258,74 +1188,6 @@ fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
         UiLanguage::Spanish => localizer.text(UiText::SpanishLanguage),
         UiLanguage::Swedish => localizer.text(UiText::SwedishLanguage),
     }
-}
-
-fn cycled_language(language: UiLanguage, adjustment: FormAdjustment) -> UiLanguage {
-    cycle_item(
-        &[
-            UiLanguage::English,
-            UiLanguage::French,
-            UiLanguage::German,
-            UiLanguage::Russian,
-            UiLanguage::Spanish,
-            UiLanguage::Swedish,
-        ],
-        language,
-        adjustment,
-    )
-}
-
-fn cycled_encoding(
-    encoding: Option<TextEncoding>,
-    adjustment: FormAdjustment,
-) -> Option<TextEncoding> {
-    cycle_item(
-        &[
-            None,
-            Some(TextEncoding::Win1250),
-            Some(TextEncoding::Win1251),
-            Some(TextEncoding::Win1252),
-        ],
-        encoding,
-        adjustment,
-    )
-}
-
-fn cycled_output_mode(
-    output_mode: GuiOutputMode,
-    adjustment: FormAdjustment,
-    has_existing_cfg: bool,
-) -> GuiOutputMode {
-    if has_existing_cfg {
-        cycle_item(
-            &[
-                GuiOutputMode::PreviewOnly,
-                GuiOutputMode::SaveAs,
-                GuiOutputMode::UpdateExistingCfg,
-            ],
-            output_mode,
-            adjustment,
-        )
-    } else {
-        cycle_item(
-            &[GuiOutputMode::PreviewOnly, GuiOutputMode::SaveAs],
-            output_mode,
-            adjustment,
-        )
-    }
-}
-
-fn cycle_item<T: Copy + PartialEq>(items: &[T], current: T, adjustment: FormAdjustment) -> T {
-    let Some(index) = items.iter().position(|item| *item == current) else {
-        return current;
-    };
-    let next_index = match adjustment {
-        FormAdjustment::Previous if index == 0 => items.len() - 1,
-        FormAdjustment::Previous => index - 1,
-        FormAdjustment::Next if index + 1 == items.len() => 0,
-        FormAdjustment::Next => index + 1,
-    };
-    items.get(next_index).copied().unwrap_or(current)
 }
 
 #[derive(Debug, Clone)]
