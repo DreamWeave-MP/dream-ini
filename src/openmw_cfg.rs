@@ -309,14 +309,16 @@ fn finish_atomic_write(
     bytes: &[u8],
 ) -> io::Result<()> {
     if let Ok(metadata) = fs::metadata(path) {
+        // Preserve the portable permission bits we can apply before replacement. This is not a
+        // promise to preserve ownership, ACLs, xattrs, or timestamps; atomic replacement creates a
+        // new file object, because of course it does.
         file.set_permissions(metadata.permissions())?;
     }
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
     replace_file(temp_path, path)?;
-    sync_parent_dir(parent);
-    Ok(())
+    sync_parent_dir(parent)
 }
 
 #[cfg(not(windows))]
@@ -374,14 +376,14 @@ fn temporary_path_for(path: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn sync_parent_dir(parent: &Path) {
-    if let Ok(directory) = fs::File::open(parent) {
-        let _ = directory.sync_all();
-    }
+fn sync_parent_dir(parent: &Path) -> io::Result<()> {
+    fs::File::open(parent)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_parent_dir(_parent: &Path) {}
+fn sync_parent_dir(_parent: &Path) -> io::Result<()> {
+    Ok(())
+}
 
 fn clear_preserved_key(config: &mut OpenMWConfiguration, key: &str) {
     let prefix = format!("{key}=");
