@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::test_support::{unique_test_dir, values};
 use crate::{
-    ImportError, ImportOptions, IniImporter, MultiMap, parse_cfg_str, parse_ini_str,
+    ImportError, ImportOptions, ImportWarning, IniImporter, MultiMap, parse_cfg_str, parse_ini_str,
     save_resolved_cfg_to_path, serialize_cfg, serialize_resolved_cfg,
 };
 
@@ -452,6 +452,108 @@ fn imports_fallback_values_with_legacy_shapes() {
     assert!(written.contains("fallback=Weather_Sun_Glare_Fader_Max,0.75"));
     assert!(written.contains("fallback=Weather_Clear_Sky_Day_Color,10,20,30"));
 
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn import_paths_surfaces_ini_parse_warnings() {
+    let dir = unique_test_dir("import-paths-ini-warnings");
+    fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&cfg, "encoding=win1252\n").unwrap();
+    fs::write(
+        &ini,
+        "[General]\nEmpty=\n[bad\n[Movies]\nNew Game=intro.bik\n",
+    )
+    .unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let result = importer.import_paths(&ini, &cfg).unwrap();
+
+    assert_eq!(
+        result.warnings,
+        vec![
+            ImportWarning::IgnoredEmptyValue {
+                key: "General:Empty".to_owned()
+            },
+            ImportWarning::MalformedIniLine {
+                line: "[bad".to_owned()
+            },
+        ]
+    );
+    assert_eq!(
+        values(&result.cfg, "fallback"),
+        &["Movies_New_Game,intro.bik".to_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn import_paths_accumulates_repeated_fallback_sections() {
+    let dir = unique_test_dir("import-paths-repeated-fallback-sections");
+    fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&cfg, "encoding=win1252\nfallback=Old_Setting,old\n").unwrap();
+    fs::write(
+        &ini,
+        concat!(
+            "[Movies]\n",
+            "New Game=intro.bik\n",
+            "[Weather]\n",
+            "Sunrise Time=6\n",
+            "[Movies]\n",
+            "New Game=outro.bik\n",
+        ),
+    )
+    .unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let result = importer.import_paths(&ini, &cfg).unwrap();
+
+    assert_eq!(
+        values(&result.cfg, "fallback"),
+        &[
+            "Movies_New_Game,intro.bik".to_owned(),
+            "Movies_New_Game,outro.bik".to_owned(),
+            "Weather_Sunrise_Time,6".to_owned(),
+        ]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn empty_fallback_values_warn_without_replacing_existing_cfg() {
+    let dir = unique_test_dir("import-paths-empty-fallback");
+    fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&cfg, "encoding=win1252\nfallback=Old_Setting,old\n").unwrap();
+    fs::write(&ini, "[Movies]\nNew Game=\n").unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let result = importer.import_paths(&ini, &cfg).unwrap();
+
+    assert_eq!(
+        result.warnings,
+        vec![ImportWarning::IgnoredEmptyValue {
+            key: "Movies:New Game".to_owned()
+        }]
+    );
+    assert_eq!(
+        values(&result.cfg, "fallback"),
+        &["Old_Setting,old".to_owned()]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
