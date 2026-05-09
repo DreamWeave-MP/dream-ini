@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use dream_ini::{
     ImportError, ImportEvent, ImportOptions, ImportResult, ImportWarning, IniImporter,
@@ -24,6 +25,7 @@ const CFG_KEY_RESOURCES: &str = "resources";
 const CFG_KEY_USERDATA: &str = "user-data";
 const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
 const OPENMW_CFG_LABEL: &str = "openmw.cfg";
+const CONTROLLER_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
@@ -91,6 +93,7 @@ enum GuiMode {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        context.request_repaint_after(CONTROLLER_POLL_INTERVAL);
         let controller_actions = self.controller.poll();
         self.handle_controller_actions(context, &controller_actions);
         self.handle_shortcuts(context);
