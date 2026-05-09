@@ -339,7 +339,9 @@ mod tests {
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
-        env::temp_dir().join(format!(
+        let temp_dir = env::temp_dir();
+        let temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
+        temp_dir.join(format!(
             "dream-ini-{name}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

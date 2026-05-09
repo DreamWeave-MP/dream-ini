@@ -1030,7 +1030,9 @@ mod tests {
     }
 
     fn unique_temp_dir() -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
+        let temp_dir = std::env::temp_dir();
+        let temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
+        let root = temp_dir.join(format!(
             "dream-ini-picker-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()

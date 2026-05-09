@@ -600,7 +600,9 @@ fn create_archive(dir: &Path, archive: &str) {
 }
 
 fn unique_test_dir(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
+    let temp_dir = std::env::temp_dir();
+    let temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
+    temp_dir.join(format!(
         "dream-ini-cli-{name}-{}",
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
