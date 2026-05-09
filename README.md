@@ -102,7 +102,6 @@ local result = dream_ini.import_paths({
   archives = true,
   fonts = false,
   data_dirs = { "/games/Morrowind/Data Files" },
-  cfg_dir = "/home/user/.config/openmw",
   user_data = "/home/user/.local/share/openmw",
   encoding = "win1252",
 })
@@ -119,6 +118,8 @@ for _, event in ipairs(result.events) do
   end
 end
 ```
+
+For `import_paths`, relative `data_dirs` are resolved from the `cfg` file's directory when `cfg` is supplied. `cfg_dir` is primarily for `import_maps`, where there is no cfg path to provide that context; for `import_paths` without `cfg`, `cfg_dir` supplies the cfg context.
 
 Available functions:
 

@@ -71,12 +71,13 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
             let ini_path = required_string(&options, "ini")?;
             let cfg_path = option_string(Some(&options), "cfg")?;
             let mut import_options = options_from_table(Some(options))?;
-            if !import_options.data_dirs.is_empty() && import_options.data_dir_base.is_none() {
+            if !import_options.data_dirs.is_empty() {
                 import_options.data_dir_base = cfg_path
                     .as_deref()
                     .map(Path::new)
                     .and_then(Path::parent)
-                    .map(Path::to_path_buf);
+                    .map(Path::to_path_buf)
+                    .or(import_options.data_dir_base);
             }
             let result = IniImporter::new(import_options)
                 .import_optional_cfg_path(Path::new(&ini_path), cfg_path.as_deref().map(Path::new))
@@ -367,6 +368,9 @@ mod tests {
         let options = lua.create_table().unwrap();
         options.set("ini", ini.to_string_lossy().as_ref()).unwrap();
         options.set("cfg", cfg.to_string_lossy().as_ref()).unwrap();
+        options
+            .set("cfg_dir", dir.join("wrong-base").to_string_lossy().as_ref())
+            .unwrap();
         options.set("game_files", true).unwrap();
         options.set("archives", false).unwrap();
         let data_dirs = lua.create_table().unwrap();

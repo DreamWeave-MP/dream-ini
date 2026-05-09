@@ -19,7 +19,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::ImportArchives => "Archive importieren",
         UiText::ImportContentFiles => "Inhaltsdateien / Ladereihenfolge importieren",
         UiText::Overrides => "Überschreibungen",
-        UiText::ExplicitSearchPath => "Installationspfad des Spiels",
+        UiText::ExplicitSearchPath => "Data-Files-Verzeichnis",
         UiText::Output => "Ausgabe",
         UiText::PreviewOnly => "Nur Vorschau",
         UiText::SaveAs => "Speichern unter",
@@ -42,10 +42,10 @@ pub(super) const fn text(key: UiText) -> &'static str {
             "Importiert GameFile-Einträge als Ladereihenfolge und löst referenzierte Plugins auf."
         }
         UiText::ExplicitSearchPathTooltip => {
-            "Optionaler Installations-/Data-Files-Suchpfad zum Auflösen von Inhalt und Archiven."
+            "Optionales Morrowind-Data-Files-Verzeichnis zum Auflösen importierter Inhalte und Archive."
         }
         UiText::DataLocalTooltip => {
-            "Überschreibt OpenMWs data-local-Pfad. Dieser Suchpfad hat Vorrang vor data-Pfaden."
+            "Schreibt OpenMWs runtime data-local-Einstellung. dream-ini durchsucht diesen Pfad beim Import nicht; dafür das Data-Files-Verzeichnis verwenden."
         }
         UiText::ResourcesTooltip => {
             "Überschreibt den Pfad für Engine-Ressourcen. Er sollte auf von OpenMW bereitgestellte Ressourcen zeigen; sorgfältig auswählen."
@@ -79,7 +79,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectMorrowindIni => "Morrowind.ini auswählen",
         UiText::SelectExistingOpenmwCfg => "Vorhandene openmw.cfg auswählen",
         UiText::SelectOutputCfg => "Ausgabe-openmw.cfg auswählen",
-        UiText::SelectGameDataDir => "Installationspfad des Spiels auswählen",
+        UiText::SelectGameDataDir => "Data-Files-Verzeichnis auswählen",
         UiText::SelectDataLocalDir => "data-local-Verzeichnis auswählen",
         UiText::SelectResourcesDir => "resources-Verzeichnis auswählen",
         UiText::SelectUserDataDir => "user-data-Verzeichnis auswählen",

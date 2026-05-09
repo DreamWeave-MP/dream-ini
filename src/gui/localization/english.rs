@@ -19,7 +19,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::ImportArchives => "Import archives",
         UiText::ImportContentFiles => "Import content files / load order",
         UiText::Overrides => "Overrides",
-        UiText::ExplicitSearchPath => "Game install path",
+        UiText::ExplicitSearchPath => "Data Files directory",
         UiText::Output => "Output",
         UiText::PreviewOnly => "Preview only",
         UiText::SaveAs => "Save as",
@@ -42,10 +42,10 @@ pub(super) const fn text(key: UiText) -> &'static str {
             "Import GameFile entries as content load order and resolve referenced plugins."
         }
         UiText::ExplicitSearchPathTooltip => {
-            "Optional Morrowind install/Data Files search root used to resolve content and archives."
+            "Optional Morrowind Data Files directory used to resolve imported content and archives."
         }
         UiText::DataLocalTooltip => {
-            "Override OpenMW's data-local path. This search path takes precedence over data paths."
+            "Write OpenMW's runtime data-local setting. dream-ini does not search this path during import; use the Data Files directory for that."
         }
         UiText::ResourcesTooltip => {
             "Override the engine resources path. This should point at OpenMW-provided resources; choose with care."
@@ -77,7 +77,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectMorrowindIni => "Select Morrowind.ini",
         UiText::SelectExistingOpenmwCfg => "Select existing openmw.cfg",
         UiText::SelectOutputCfg => "Select output openmw.cfg",
-        UiText::SelectGameDataDir => "Select game install path",
+        UiText::SelectGameDataDir => "Select Data Files directory",
         UiText::SelectDataLocalDir => "Select data-local directory",
         UiText::SelectResourcesDir => "Select resources directory",
         UiText::SelectUserDataDir => "Select user data directory",
