@@ -70,6 +70,7 @@ struct GuiApp {
     result: Option<GuiImportResult>,
     selected_result_panel: ResultPanel,
     selected_form_control: FormControl,
+    pending_form_scroll: Option<FormControl>,
     controller_navigation_visible: bool,
     generated_cfg_scroll_delta: egui::Vec2,
     mode: GuiMode,
@@ -90,6 +91,7 @@ impl GuiApp {
             result: None,
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
+            pending_form_scroll: None,
             controller_navigation_visible: false,
             generated_cfg_scroll_delta: egui::Vec2::ZERO,
             mode: GuiMode::ImportForm,
@@ -104,6 +106,7 @@ impl GuiApp {
             result: None,
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
+            pending_form_scroll: None,
             controller_navigation_visible: false,
             generated_cfg_scroll_delta: egui::Vec2::ZERO,
             mode: GuiMode::ImportForm,
@@ -324,9 +327,10 @@ impl GuiApp {
         }
     }
 
-    fn scroll_selected_form_control_into_view(&self, ui: &mut egui::Ui, control: FormControl) {
-        if self.controller_navigation_visible && self.selected_form_control == control {
+    fn scroll_selected_form_control_into_view(&mut self, ui: &mut egui::Ui, control: FormControl) {
+        if self.pending_form_scroll == Some(control) {
             ui.scroll_to_cursor(Some(egui::Align::Center));
+            self.pending_form_scroll = None;
         }
     }
 
@@ -345,6 +349,7 @@ impl GuiApp {
             (FormSelectionStep::Next, Some(_) | None) => 0,
         };
         self.selected_form_control = controls[next_index];
+        self.pending_form_scroll = Some(self.selected_form_control);
     }
 
     fn activate_selected_form_control(&mut self, context: &egui::Context) {
@@ -366,6 +371,7 @@ impl GuiApp {
             FormControl::OutputSaveAs => {
                 self.state.output_mode = GuiOutputMode::SaveAs;
                 self.selected_form_control = FormControl::OutputPath;
+                self.pending_form_scroll = Some(FormControl::OutputPath);
             }
             FormControl::OutputPath => self.open_form_path_picker(PathTarget::OutputCfg),
             FormControl::OutputUpdateExisting => {
@@ -483,6 +489,7 @@ impl GuiApp {
             GuiOutputMode::SaveAs => FormControl::OutputSaveAs,
             GuiOutputMode::UpdateExistingCfg => FormControl::OutputUpdateExisting,
         };
+        self.pending_form_scroll = Some(self.selected_form_control);
     }
 
     fn cycle_result_panel(&mut self, adjustment: FormAdjustment) {

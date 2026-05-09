@@ -35,6 +35,7 @@ pub(super) struct PathPickerState {
     output_file_name: String,
     current_dir_readable: bool,
     show_hidden_directories: bool,
+    scroll_selected_entry: bool,
 }
 
 impl PathPickerState {
@@ -67,6 +68,7 @@ impl PathPickerState {
             output_file_name,
             current_dir_readable: false,
             show_hidden_directories: false,
+            scroll_selected_entry: false,
         };
         state.refresh();
         state
@@ -194,11 +196,12 @@ impl PathPickerState {
         controller_actions: &[ControllerAction],
     ) -> EntryAction {
         let mut entry_action = self.input_entry_action(ui, controller_actions);
+        let scroll_selected_entry = std::mem::take(&mut self.scroll_selected_entry);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for entry in &self.entries {
-                    let row_action = self.entry_row(ui, entry);
+                    let row_action = self.entry_row(ui, entry, scroll_selected_entry);
                     if matches!(entry_action, EntryAction::None)
                         && !matches!(row_action, EntryAction::None)
                     {
@@ -260,7 +263,12 @@ impl PathPickerState {
         self.refresh();
     }
 
-    fn entry_row(&self, ui: &mut egui::Ui, entry: &PathEntry) -> EntryAction {
+    fn entry_row(
+        &self,
+        ui: &mut egui::Ui,
+        entry: &PathEntry,
+        scroll_selected_entry: bool,
+    ) -> EntryAction {
         let label = match entry.kind {
             EntryKind::Parent => format!("↑ {}", entry.name),
             EntryKind::Directory => format!("📁 {}", entry.name),
@@ -271,7 +279,7 @@ impl PathPickerState {
             .as_ref()
             .is_some_and(|path| path == &entry.path);
         let response = ui.selectable_label(selected, label);
-        if selected {
+        if selected && scroll_selected_entry {
             response.scroll_to_me(Some(egui::Align::Center));
         }
         if response.double_clicked() {
@@ -382,6 +390,7 @@ impl PathPickerState {
             (SelectionStep::Next, Some(_) | None) => 0,
         };
         self.selected = Some(self.entries[next_index].path.clone());
+        self.scroll_selected_entry = true;
     }
 
     fn selected_entry_index(&self) -> Option<usize> {
