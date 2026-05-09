@@ -19,6 +19,7 @@ pub(super) enum ControllerAction {
     Right,
     Accept,
     Cancel,
+    ClearCurrent,
     SelectCurrent,
     ToggleHiddenDirectories,
 }

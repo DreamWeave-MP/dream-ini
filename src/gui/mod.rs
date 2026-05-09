@@ -69,6 +69,7 @@ struct GuiApp {
     result: Option<GuiImportResult>,
     selected_result_panel: ResultPanel,
     selected_form_control: FormControl,
+    controller_navigation_visible: bool,
     mode: GuiMode,
 }
 
@@ -87,6 +88,7 @@ impl GuiApp {
             result: None,
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
+            controller_navigation_visible: false,
             mode: GuiMode::ImportForm,
         }
     }
@@ -99,6 +101,7 @@ impl GuiApp {
             result: None,
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
+            controller_navigation_visible: false,
             mode: GuiMode::ImportForm,
         }
     }
@@ -147,18 +150,34 @@ enum FormAdjustment {
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         let controller_actions = self.controller.drain_actions();
-        self.handle_controller_actions(context, &controller_actions);
+        if !controller_actions.is_empty() {
+            self.controller_navigation_visible = true;
+        }
+        let controller_actions_consumed =
+            self.handle_controller_actions(context, &controller_actions);
         self.handle_shortcuts(context);
+        let controller_actions_for_ui: &[ControllerAction] = if controller_actions_consumed {
+            &[]
+        } else {
+            &controller_actions
+        };
         egui::CentralPanel::default().show(context, |ui| {
-            self.show_current_mode(ui, &controller_actions);
+            self.show_current_mode(ui, controller_actions_for_ui);
         });
     }
 }
 
 impl GuiApp {
-    fn handle_controller_actions(&mut self, context: &egui::Context, actions: &[ControllerAction]) {
+    fn handle_controller_actions(
+        &mut self,
+        context: &egui::Context,
+        actions: &[ControllerAction],
+    ) -> bool {
         if !matches!(self.mode, GuiMode::ImportForm) {
-            return;
+            return false;
+        }
+        if actions.is_empty() {
+            return false;
         }
 
         self.ensure_selected_form_control_visible();
@@ -167,7 +186,7 @@ impl GuiApp {
             match action {
                 ControllerAction::Cancel => {
                     context.send_viewport_cmd(egui::ViewportCommand::Close);
-                    return;
+                    return true;
                 }
                 ControllerAction::Up => self.move_form_selection(FormSelectionStep::Previous),
                 ControllerAction::Down => self.move_form_selection(FormSelectionStep::Next),
@@ -176,13 +195,15 @@ impl GuiApp {
                 }
                 ControllerAction::Right => self.adjust_selected_form_control(FormAdjustment::Next),
                 ControllerAction::Accept => self.activate_selected_form_control(context),
+                ControllerAction::ClearCurrent => self.clear_selected_form_control(),
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
                 ControllerAction::ToggleHiddenDirectories => {}
             }
             if !matches!(self.mode, GuiMode::ImportForm) {
-                return;
+                return true;
             }
         }
+        true
     }
 
     fn handle_shortcuts(&mut self, context: &egui::Context) {
@@ -221,7 +242,9 @@ impl GuiApp {
         if optional_path(&self.state.existing_cfg).is_some() {
             controls.push(FormControl::OutputUpdateExisting);
         }
-        controls.push(FormControl::Import);
+        if self.state.disabled_import_reason().is_none() {
+            controls.push(FormControl::Import);
+        }
         if self.result.is_some() {
             controls.push(FormControl::ResultTabs);
             if matches!(self.result, Some(GuiImportResult::Success { .. })) {
@@ -317,13 +340,41 @@ impl GuiApp {
             | FormControl::DataLocal
             | FormControl::Resources
             | FormControl::UserData
-            | FormControl::OutputPath => {
-                if matches!(adjustment, FormAdjustment::Next) {
-                    self.open_selected_path_picker();
+            | FormControl::OutputPath
+            | FormControl::Import
+            | FormControl::CopyResult
+            | FormControl::ClearResult => {}
+        }
+    }
+
+    fn clear_selected_form_control(&mut self) {
+        match self.selected_form_control {
+            FormControl::MorrowindIni => self.state.morrowind_ini.clear(),
+            FormControl::ExistingCfg => {
+                self.state.existing_cfg.clear();
+                if self.state.output_mode == GuiOutputMode::UpdateExistingCfg {
+                    self.state.output_mode = GuiOutputMode::PreviewOnly;
                 }
             }
-            FormControl::Import | FormControl::CopyResult | FormControl::ClearResult => {}
+            FormControl::ExplicitSearchPath => self.state.explicit_search_path.clear(),
+            FormControl::DataLocal => self.state.data_local.clear(),
+            FormControl::Resources => self.state.resources.clear(),
+            FormControl::UserData => self.state.user_data.clear(),
+            FormControl::OutputPath => self.state.output_path.clear(),
+            FormControl::Language
+            | FormControl::Encoding
+            | FormControl::ImportFonts
+            | FormControl::ImportArchives
+            | FormControl::ImportContentFiles
+            | FormControl::OutputPreview
+            | FormControl::OutputSaveAs
+            | FormControl::OutputUpdateExisting
+            | FormControl::Import
+            | FormControl::ResultTabs
+            | FormControl::CopyResult
+            | FormControl::ClearResult => {}
         }
+        self.ensure_selected_form_control_visible();
     }
 
     fn run_import_if_enabled(&mut self) {
@@ -344,30 +395,6 @@ impl GuiApp {
         }
         .clone();
         self.open_path_picker(target, &current_value);
-    }
-
-    fn open_selected_path_picker(&mut self) {
-        match self.selected_form_control {
-            FormControl::MorrowindIni => self.open_form_path_picker(PathTarget::MorrowindIni),
-            FormControl::ExistingCfg => self.open_form_path_picker(PathTarget::ExistingOpenmwCfg),
-            FormControl::ExplicitSearchPath => self.open_form_path_picker(PathTarget::GameDataDir),
-            FormControl::DataLocal => self.open_form_path_picker(PathTarget::DataLocalDir),
-            FormControl::Resources => self.open_form_path_picker(PathTarget::ResourcesDir),
-            FormControl::UserData => self.open_form_path_picker(PathTarget::UserDataDir),
-            FormControl::OutputPath => self.open_form_path_picker(PathTarget::OutputCfg),
-            FormControl::Language
-            | FormControl::Encoding
-            | FormControl::ImportFonts
-            | FormControl::ImportArchives
-            | FormControl::ImportContentFiles
-            | FormControl::OutputPreview
-            | FormControl::OutputSaveAs
-            | FormControl::OutputUpdateExisting
-            | FormControl::Import
-            | FormControl::ResultTabs
-            | FormControl::CopyResult
-            | FormControl::ClearResult => {}
-        }
     }
 
     fn cycle_language(&mut self, adjustment: FormAdjustment) {
@@ -420,6 +447,7 @@ impl GuiApp {
     }
 
     fn show_form(&mut self, ui: &mut egui::Ui) {
+        self.ensure_selected_form_control_visible();
         self.show_language_selector(ui);
         ui.separator();
         let existing_cfg_label = self.existing_cfg_label();
@@ -504,6 +532,9 @@ impl GuiApp {
     }
 
     fn form_label(&self, control: FormControl, label: &str) -> String {
+        if !self.controller_navigation_visible {
+            return label.to_owned();
+        }
         format!(
             "{}{}",
             if self.selected_form_control == control {
@@ -516,6 +547,9 @@ impl GuiApp {
     }
 
     fn result_tab_label(&self, panel: ResultPanel, label: &str) -> String {
+        if !self.controller_navigation_visible {
+            return label.to_owned();
+        }
         format!(
             "{}{}",
             if self.selected_form_control == FormControl::ResultTabs
@@ -541,7 +575,11 @@ impl GuiApp {
                 CFG_KEY_USERDATA,
                 self.localizer.text(UiText::OutputPath),
             ],
-        ) + controller_marker_width(ui)
+        ) + if self.controller_navigation_visible {
+            controller_marker_width(ui)
+        } else {
+            0.0
+        }
     }
 
     fn show_source_paths(&mut self, ui: &mut egui::Ui, label_width: f32, existing_cfg_label: &str) {
@@ -1487,6 +1525,7 @@ mod tests {
     #[test]
     fn form_controller_selection_moves_through_visible_controls() {
         let mut app = GuiApp::new_without_controller_worker();
+        app.state.morrowind_ini = "Morrowind.ini".to_owned();
         assert_eq!(app.selected_form_control, FormControl::MorrowindIni);
 
         app.move_form_selection(FormSelectionStep::Previous);
@@ -1544,6 +1583,70 @@ mod tests {
         app.activate_selected_form_control(&egui::Context::default());
 
         assert!(matches!(app.mode, GuiMode::PathPicker(_)));
+    }
+
+    #[test]
+    fn form_controller_right_does_not_open_path_picker() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.selected_form_control = FormControl::MorrowindIni;
+
+        app.adjust_selected_form_control(FormAdjustment::Next);
+
+        assert!(matches!(app.mode, GuiMode::ImportForm));
+    }
+
+    #[test]
+    fn form_controller_consumes_action_that_opens_picker() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.selected_form_control = FormControl::ExplicitSearchPath;
+
+        let consumed =
+            app.handle_controller_actions(&egui::Context::default(), &[ControllerAction::Accept]);
+
+        assert!(consumed);
+        assert!(matches!(app.mode, GuiMode::PathPicker(_)));
+    }
+
+    #[test]
+    fn form_controller_clear_current_clears_selected_path() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.state.existing_cfg = "openmw.cfg".to_owned();
+        app.state.output_mode = GuiOutputMode::UpdateExistingCfg;
+        app.selected_form_control = FormControl::ExistingCfg;
+
+        app.clear_selected_form_control();
+
+        assert!(app.state.existing_cfg.is_empty());
+        assert_eq!(app.state.output_mode, GuiOutputMode::PreviewOnly);
+    }
+
+    #[test]
+    fn controller_selection_marker_requires_controller_input() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.selected_form_control = FormControl::MorrowindIni;
+
+        assert_eq!(
+            app.form_label(FormControl::MorrowindIni, "Morrowind.ini"),
+            "Morrowind.ini"
+        );
+
+        app.controller_navigation_visible = true;
+
+        assert_eq!(
+            app.form_label(FormControl::MorrowindIni, "Morrowind.ini"),
+            "▶ Morrowind.ini"
+        );
+    }
+
+    #[test]
+    fn disabled_import_button_is_not_controller_selectable() {
+        let mut app = GuiApp::new_without_controller_worker();
+
+        assert!(!app.visible_form_controls().contains(&FormControl::Import));
+
+        app.state.morrowind_ini = "Morrowind.ini".to_owned();
+
+        assert!(app.visible_form_controls().contains(&FormControl::Import));
     }
 
     #[test]

@@ -28,6 +28,7 @@ const ABS_MAX: u16 = 0x3f;
 
 const BTN_SOUTH: u16 = 0x130;
 const BTN_EAST: u16 = 0x131;
+const BTN_WEST: u16 = 0x133;
 const BTN_TL: u16 = 0x136;
 const BTN_SELECT: u16 = 0x13a;
 const BTN_START: u16 = 0x13b;
@@ -574,6 +575,7 @@ impl ActionRepeater {
             ControllerAction::Right => Some(&mut self.right),
             ControllerAction::Accept
             | ControllerAction::Cancel
+            | ControllerAction::ClearCurrent
             | ControllerAction::SelectCurrent
             | ControllerAction::ToggleHiddenDirectories => None,
         }
@@ -717,6 +719,7 @@ fn read_controller_capabilities(fd: RawFd) -> Option<DeviceCapabilities> {
     let has_controller_button = [
         BTN_SOUTH,
         BTN_EAST,
+        BTN_WEST,
         BTN_TL,
         BTN_SELECT,
         BTN_START,
@@ -797,6 +800,7 @@ fn key_actions(
             Some(
                 action @ (ControllerAction::Accept
                 | ControllerAction::Cancel
+                | ControllerAction::ClearCurrent
                 | ControllerAction::SelectCurrent
                 | ControllerAction::ToggleHiddenDirectories),
             ),
@@ -822,6 +826,7 @@ fn key_action(code: u16) -> Option<ControllerAction> {
     match code {
         BTN_SOUTH => Some(ControllerAction::Accept),
         BTN_EAST | BTN_SELECT => Some(ControllerAction::Cancel),
+        BTN_WEST => Some(ControllerAction::ClearCurrent),
         BTN_START => Some(ControllerAction::SelectCurrent),
         BTN_TL => Some(ControllerAction::ToggleHiddenDirectories),
         BTN_DPAD_UP => Some(ControllerAction::Up),
@@ -864,6 +869,7 @@ mod tests {
     fn key_events_map_to_controller_actions() {
         assert_eq!(key_action(BTN_SOUTH), Some(ControllerAction::Accept));
         assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Cancel));
+        assert_eq!(key_action(BTN_WEST), Some(ControllerAction::ClearCurrent));
         assert_eq!(key_action(BTN_SELECT), Some(ControllerAction::Cancel));
         assert_eq!(key_action(BTN_START), Some(ControllerAction::SelectCurrent));
         assert_eq!(

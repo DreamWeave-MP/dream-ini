@@ -307,6 +307,7 @@ impl PathPickerState {
                 ControllerAction::Up => self.move_selection(SelectionStep::Previous),
                 ControllerAction::Down => self.move_selection(SelectionStep::Next),
                 ControllerAction::Accept => return self.selected_entry_action(),
+                ControllerAction::ClearCurrent => {}
                 ControllerAction::SelectCurrent => return self.current_target_action(),
                 ControllerAction::Cancel => return EntryAction::Cancel,
                 ControllerAction::Left => return self.parent_entry_action(),
