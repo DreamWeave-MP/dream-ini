@@ -12,7 +12,7 @@ use clap_complete::Shell;
     disable_help_flag = true,
     disable_version_flag = true,
     override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
-    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to overwrite the base cfg. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
+    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to update the base cfg. Relative --data is resolved from the output cfg directory, from --cfg for stdout preview, or from the current directory and written absolute when stdout has no cfg context. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
 )]
 pub(crate) struct Cli {
     /// Verbose output
@@ -51,7 +51,7 @@ pub(crate) struct Cli {
     )]
     pub(crate) output: Option<PathBuf>,
 
-    /// Explicit Data Files directory to search and write to the imported cfg
+    /// Explicit Data Files directory to search
     #[arg(short = 'd', long = "data", value_name = "DIR", display_order = 2)]
     pub(crate) data_dir: Option<PathBuf>,
 
@@ -64,13 +64,13 @@ pub(crate) struct Cli {
     )]
     pub(crate) data_local: Option<PathBuf>,
 
-    /// Set resources in the imported cfg, replacing any existing value; must be a non-empty directory
+    /// Set resources in the imported cfg, replacing any existing value
     #[arg(short, long, value_name = "DIR", display_order = 11)]
     pub(crate) resources: Option<PathBuf>,
 
-    /// Set userdata in the imported cfg, replacing any existing value
-    #[arg(short, long, value_name = "DIR", display_order = 12)]
-    pub(crate) userdata: Option<PathBuf>,
+    /// Set user-data in the imported cfg, replacing any existing value
+    #[arg(short, long = "user-data", value_name = "DIR", display_order = 12)]
+    pub(crate) user_data: Option<PathBuf>,
 
     /// Write the imported result back to the --cfg file
     #[arg(
@@ -96,7 +96,7 @@ pub(crate) struct Cli {
             "data_dir",
             "data_local",
             "resources",
-            "userdata",
+            "user_data",
             "in_place",
             "game_files",
             "fonts",
@@ -120,7 +120,7 @@ pub(crate) struct Cli {
             "data_dir",
             "data_local",
             "resources",
-            "userdata",
+            "user_data",
             "in_place",
             "game_files",
             "fonts",
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(cli.data_dir, Some(PathBuf::from("Data Files")));
         assert_eq!(cli.data_local, Some(PathBuf::from("local-data")));
         assert_eq!(cli.resources, Some(PathBuf::from("resources")));
-        assert_eq!(cli.userdata, Some(PathBuf::from("user-data")));
+        assert_eq!(cli.user_data, Some(PathBuf::from("user-data")));
         assert_eq!(cli.encoding.as_deref(), Some("win1251"));
         assert_eq!(cli.output, Some(PathBuf::from("out.cfg")));
     }
@@ -305,7 +305,7 @@ mod tests {
         assert!(help.contains("--data"));
         assert!(help.contains("--data-local"));
         assert!(help.contains("--resources"));
-        assert!(help.contains("--userdata"));
+        assert!(help.contains("--user-data"));
         assert!(help.contains("--in-place"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
@@ -322,7 +322,7 @@ mod tests {
             "-n, --no-archives",
             "-o, --output",
             "-r, --resources",
-            "-u, --userdata",
+            "-u, --user-data",
             "-v, --verbose",
             "-w, --in-place",
             "-C, --generate-completion",
@@ -342,6 +342,20 @@ mod tests {
     #[test]
     fn rejects_old_no_archives_short_flag() {
         let error = Cli::try_parse_from(["dream-ini", "--ini", "Morrowind.ini", "-A"]).unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn rejects_legacy_userdata_flag() {
+        let error = Cli::try_parse_from([
+            "dream-ini",
+            "--ini",
+            "Morrowind.ini",
+            "--userdata",
+            "user-data",
+        ])
+        .unwrap_err();
 
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }

@@ -42,6 +42,7 @@ mod fallback_keys;
 mod importer;
 #[cfg(feature = "lua")]
 pub mod lua;
+mod openmw_cfg;
 mod parser;
 mod plugin;
 #[cfg(test)]
@@ -50,6 +51,12 @@ mod warnings;
 
 pub use events::ImportEvent;
 pub use importer::{ImportOptions, ImportReport, ImportResult, IniImporter};
+pub use openmw_cfg::{
+    PreservedCfgUpdate, apply_preserved_cfg_update, load_cfg_document, save_cfg_output_to_path,
+    save_preserved_cfg_document_to_path, save_resolved_cfg_to_path,
+    save_resolved_configuration_to_path, serialize_cfg_output, serialize_preserved_cfg_document,
+    serialize_resolved_cfg, serialize_resolved_configuration,
+};
 pub use parser::{
     ParsedIni, parse_cfg_str, parse_ini_bytes, parse_ini_bytes_with_warnings, parse_ini_str,
     parse_ini_str_with_warnings, serialize_cfg,
@@ -137,6 +144,7 @@ pub enum ImportError {
     },
     InvalidContentFileName(String),
     InvalidArchiveName(String),
+    OpenMwConfig(String),
 }
 
 impl fmt::Display for ImportError {
@@ -191,6 +199,7 @@ impl fmt::Display for ImportError {
                 f,
                 "invalid fallback archive name: {file}; archive entries must be BSA filenames, not paths"
             ),
+            Self::OpenMwConfig(message) => write!(f, "OpenMW config error: {message}"),
         }
     }
 }

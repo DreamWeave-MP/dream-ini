@@ -99,6 +99,119 @@ fn explicit_data_dir_imports_content_and_writes_data() {
 }
 
 #[test]
+fn relative_explicit_data_dir_is_written_as_supplied() {
+    let dir = unique_test_dir("relative-explicit-data-dir");
+    let work_dir = dir.join("work");
+    let data_dir = work_dir.join("relative-data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let ini = work_dir.join("Morrowind.ini");
+    let output_cfg = work_dir.join("openmw.cfg");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&work_dir)
+        .args(["--game-files", "--no-archives", "--data", "relative-data"])
+        .args(["--output", "openmw.cfg", "--ini", "Morrowind.ini"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("content=Base.esm\n"));
+    assert!(written.contains("data=relative-data\n"));
+    assert!(!written.contains(&format!("data={}\n", data_dir.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn relative_explicit_data_dir_searches_from_output_cfg_directory() {
+    let dir = unique_test_dir("relative-data-output-context");
+    let output_dir = dir.join("cfg-context");
+    let data_dir = output_dir.join("relative-data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let output_cfg = output_dir.join("openmw.cfg");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["--game-files", "--no-archives", "--data", "relative-data"])
+        .args(["--output"])
+        .arg(&output_cfg)
+        .args(["--ini"])
+        .arg(&ini)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("content=Base.esm\n"));
+    assert!(written.contains("data=relative-data\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn relative_explicit_data_dir_without_cfg_context_writes_absolute_path() {
+    let dir = unique_test_dir("relative-data-no-context");
+    let data_dir = dir.join("relative-data");
+    fs::create_dir_all(&data_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["--game-files", "--no-archives", "--data", "relative-data"])
+        .args(["--ini"])
+        .arg(&ini)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("content=Base.esm\n"));
+    assert!(stdout.contains(&format!("data={}\n", data_dir.display())));
+    assert!(!stdout.contains("data=relative-data\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn existing_cfg_with_game_files_preserves_comments_and_added_data_spelling() {
+    let dir = unique_test_dir("preserve-game-files-added-data");
+    let work_dir = dir.join("work");
+    let extra_data = work_dir.join("extra-data");
+    fs::create_dir_all(&extra_data).unwrap();
+    let ini = work_dir.join("Morrowind.ini");
+    let cfg = work_dir.join("openmw.cfg");
+    let output_cfg = work_dir.join("out.cfg");
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+    fs::write(extra_data.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(&cfg, "# existing data stays relative\ndata=mods\n").unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&work_dir)
+        .args(["--game-files", "--no-archives", "--data", "extra-data"])
+        .args(["--cfg", "openmw.cfg", "--output", "out.cfg"])
+        .args(["--ini", "Morrowind.ini"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("# existing data stays relative\ndata=mods\n"));
+    assert!(written.contains("data=extra-data\n"));
+    assert!(written.contains("content=Base.esm\n"));
+    assert!(!written.contains(&format!("data={}\n", extra_data.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn singleton_path_options_replace_existing_values() {
     let dir = unique_test_dir("singleton-path-options");
     let resources = dir.join("resources");
@@ -114,7 +227,7 @@ fn singleton_path_options_replace_existing_values() {
             "data-local=old-local\n",
             "data-local=other-local\n",
             "resources=old-resources\n",
-            "userdata=old-userdata\n",
+            "user-data=old-user-data\n",
         ),
     )
     .unwrap();
@@ -126,7 +239,7 @@ fn singleton_path_options_replace_existing_values() {
         .arg(&cfg)
         .args(["--output"])
         .arg(&output_cfg)
-        .args(["-l", "new-local", "-r", "resources", "-u", "new-userdata"])
+        .args(["-l", "new-local", "-r", "resources", "-u", "new-user-data"])
         .output()
         .unwrap();
 
@@ -134,43 +247,11 @@ fn singleton_path_options_replace_existing_values() {
     let written = fs::read_to_string(output_cfg).unwrap();
     assert_eq!(written.matches("data-local=").count(), 1);
     assert_eq!(written.matches("resources=").count(), 1);
-    assert_eq!(written.matches("userdata=").count(), 1);
+    assert_eq!(written.matches("user-data=").count(), 1);
     assert!(written.contains("data-local=new-local\n"));
     assert!(written.contains("resources=resources\n"));
-    assert!(written.contains("userdata=new-userdata\n"));
+    assert!(written.contains("user-data=new-user-data\n"));
 
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn resources_rejects_files_and_empty_directories() {
-    let dir = unique_test_dir("bad-resources");
-    fs::create_dir_all(&dir).unwrap();
-    let ini = dir.join("Morrowind.ini");
-    let output_cfg = dir.join("openmw.cfg");
-    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
-    fs::write(dir.join("resources-file"), "not a directory").unwrap();
-    fs::create_dir_all(dir.join("empty-resources")).unwrap();
-
-    for resources in ["resources-file", "empty-resources"] {
-        let output = Command::new(BIN)
-            .args(["--no-archives", "--ini"])
-            .arg(&ini)
-            .args(["--output"])
-            .arg(&output_cfg)
-            .args(["--resources", resources])
-            .output()
-            .unwrap();
-
-        assert!(!output.status.success());
-        assert!(
-            String::from_utf8(output.stderr)
-                .unwrap()
-                .contains("--resources")
-        );
-    }
-
-    assert!(!output_cfg.exists());
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -220,6 +301,327 @@ fn cfg_without_in_place_prints_without_writing_cfg() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("encoding=win1252\n"));
     assert!(stdout.contains("no-sound=1\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn existing_cfg_output_preserves_comments_and_relative_paths() {
+    let dir = unique_test_dir("preserve-cfg-output");
+    fs::create_dir_all(dir.join("mods")).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    let output_cfg = dir.join("out.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!(
+            "# keep this data comment\n",
+            "data=mods\n",
+            "\n",
+            "# keep this resources comment\n",
+            "resources=resources\n",
+            "user-data=?userdata?\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["--no-archives", "--ini"])
+        .arg("Morrowind.ini")
+        .args(["--cfg"])
+        .arg("openmw.cfg")
+        .args(["--output"])
+        .arg("out.cfg")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("# keep this data comment\n"));
+    assert!(written.contains("data=mods\n"));
+    assert!(written.contains("# keep this resources comment\n"));
+    assert!(written.contains("resources=resources\n"));
+    assert!(written.contains("user-data=?userdata?\n"));
+    assert!(written.contains("no-sound=1\n"));
+    assert!(!written.contains(&format!("data={}\n", dir.join("mods").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn same_context_existing_cfg_output_does_not_flatten_config_chain() {
+    let dir = unique_test_dir("same-context-config-chain");
+    let base_dir = dir.join("base");
+    fs::create_dir_all(&base_dir).unwrap();
+    fs::create_dir_all(dir.join("resources")).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    let output_cfg = dir.join("out.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(base_dir.join("openmw.cfg"), "data=base-data\nno-sound=0\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!(
+            "# keep the chain, not the composed base settings\n",
+            "config=base\n",
+            "resources=resources\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["--no-archives", "--ini"])
+        .arg("Morrowind.ini")
+        .args(["--cfg"])
+        .arg("openmw.cfg")
+        .args(["--output"])
+        .arg("out.cfg")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("config=base\n"));
+    assert!(written.contains("resources=resources\n"));
+    assert!(written.contains("no-sound=1\n"));
+    assert!(!written.contains("data=base-data\n"));
+    assert!(!written.contains("no-sound=0\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn same_context_existing_cfg_output_preserves_absolute_symlink_cfg_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = unique_test_dir("same-context-symlink-cfg");
+    let real_dir = dir.join("real");
+    let link_dir = dir.join("link");
+    fs::create_dir_all(&real_dir).unwrap();
+    fs::create_dir_all(&link_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = real_dir.join("openmw.cfg");
+    let symlink_cfg = link_dir.join("openmw.cfg");
+    let output_cfg = link_dir.join("out.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "# preserved through symlink spelling\ndata=mods\n").unwrap();
+    symlink(&cfg, &symlink_cfg).unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&symlink_cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("# preserved through symlink spelling\n"));
+    assert!(written.contains("data=mods\n"));
+    assert!(written.contains("no-sound=1\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn relocated_existing_cfg_output_uses_resolved_paths() {
+    let dir = unique_test_dir("relocated-existing-cfg");
+    let source_dir = dir.join("source");
+    let output_dir = dir.join("output");
+    fs::create_dir_all(source_dir.join("mods")).unwrap();
+    fs::create_dir_all(&output_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = source_dir.join("openmw.cfg");
+    let output_cfg = output_dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "# preserved only in source context\ndata=mods\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains(&format!("data={}\n", source_dir.join("mods").display())));
+    assert!(!written.contains("data=mods\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn relocated_existing_cfg_output_does_not_persist_composed_resource_vfs_data_dir() {
+    let dir = unique_test_dir("relocated-resource-vfs");
+    let source_dir = dir.join("source");
+    let output_dir = dir.join("output");
+    let resources = source_dir.join("resources");
+    fs::create_dir_all(resources.join("vfs")).unwrap();
+    fs::create_dir_all(&output_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = source_dir.join("openmw.cfg");
+    let output_cfg = output_dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "resources=resources\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains(&format!("resources={}\n", resources.display())));
+    assert!(!written.contains(&format!("data={}\n", resources.join("vfs").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn existing_cfg_preview_does_not_rewrite_unimported_singletons() {
+    let dir = unique_test_dir("preserve-unimported-singletons");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!(
+            "# keep encoding comment\n",
+            "encoding=win1252\n",
+            "# keep no-sound comment\n",
+            "no-sound=0\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("# keep encoding comment\nencoding=win1252\n"));
+    assert!(stdout.contains("# keep no-sound comment\nno-sound=0\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn existing_cfg_preview_does_not_rewrite_unimported_fallbacks() {
+    let dir = unique_test_dir("preserve-unimported-fallbacks");
+    fs::create_dir_all(&dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!("# keep fallback comment\n", "fallback=Old_Setting,old\n",),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("# keep fallback comment\nfallback=Old_Setting,old\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn in_place_preserves_existing_cfg_comments_and_relative_paths() {
+    let dir = unique_test_dir("preserve-in-place");
+    fs::create_dir_all(dir.join("mods")).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "# data stays authored\ndata=mods\n").unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--in-place", "--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(cfg).unwrap();
+    assert!(written.contains("# data stays authored\n"));
+    assert!(written.contains("data=mods\n"));
+    assert!(written.contains("no-sound=1\n"));
+    assert!(!written.contains(&format!("data={}\n", dir.join("mods").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn in_place_follows_symlinked_cfg_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = unique_test_dir("in-place-symlink");
+    let real_dir = dir.join("real");
+    let link_dir = dir.join("link");
+    fs::create_dir_all(&real_dir).unwrap();
+    fs::create_dir_all(&link_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let real_cfg = real_dir.join("openmw.cfg");
+    let link_cfg = link_dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(
+        &real_cfg,
+        "# update the target, not the link\nencoding=win1252\n",
+    )
+    .unwrap();
+    symlink(&real_cfg, &link_cfg).unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--in-place", "--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&link_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        fs::symlink_metadata(&link_cfg)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let written = fs::read_to_string(&real_cfg).unwrap();
+    assert!(written.contains("# update the target, not the link\n"));
+    assert!(written.contains("encoding=win1252\n"));
+    assert!(written.contains("no-sound=1\n"));
 
     fs::remove_dir_all(dir).unwrap();
 }

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::test_support::{unique_test_dir, values};
 use crate::{
-    ImportError, ImportOptions, IniImporter, MultiMap, parse_cfg_str, parse_ini_str, serialize_cfg,
+    ImportError, ImportOptions, IniImporter, MultiMap, parse_cfg_str, parse_ini_str,
+    save_resolved_cfg_to_path, serialize_cfg, serialize_resolved_cfg,
 };
 
 #[test]
@@ -34,6 +35,95 @@ fn imports_merge_fallback_and_archives() {
     );
     assert!(result.warnings.is_empty());
     assert_eq!(result.events.len(), 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn resolved_cfg_serialization_resolves_singleton_directories() {
+    let dir = unique_test_dir("resolved-singletons");
+    fs::create_dir_all(&dir).unwrap();
+    let cfg = parse_cfg_str("data-local=local\nresources=resources\nuser-data=user\n");
+
+    let written = serialize_resolved_cfg(&cfg, &dir).unwrap();
+
+    assert!(written.contains(&format!("data-local={}\n", dir.join("local").display())));
+    assert!(written.contains(&format!("resources={}\n", dir.join("resources").display())));
+    assert!(written.contains(&format!("user-data={}\n", dir.join("user").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn resolved_cfg_serialization_does_not_persist_composed_resource_vfs_data_dir() {
+    let dir = unique_test_dir("resolved-resource-vfs");
+    let resources = dir.join("resources");
+    fs::create_dir_all(resources.join("vfs")).unwrap();
+    let cfg = parse_cfg_str(&format!("resources={}\n", resources.display()));
+
+    let written = serialize_resolved_cfg(&cfg, &dir).unwrap();
+
+    assert!(written.contains(&format!("resources={}\n", resources.display())));
+    assert!(!written.contains(&format!("data={}\n", resources.join("vfs").display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn resolved_cfg_serialization_does_not_persist_composed_data_local_data_dir() {
+    let dir = unique_test_dir("resolved-data-local");
+    let local = dir.join("local");
+    fs::create_dir_all(&local).unwrap();
+    let cfg = parse_cfg_str(&format!("data-local={}\n", local.display()));
+
+    let written = serialize_resolved_cfg(&cfg, &dir).unwrap();
+
+    assert!(written.contains(&format!("data-local={}\n", local.display())));
+    assert!(!written.contains(&format!("data={}\n", local.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn save_resolved_cfg_replaces_existing_file_and_cleans_temp_file() {
+    let dir = unique_test_dir("atomic-resolved-save");
+    let resources = dir.join("resources");
+    fs::create_dir_all(resources.join("vfs")).unwrap();
+    let output = dir.join("openmw.cfg");
+    fs::write(&output, "stale=true\n").unwrap();
+    let cfg = parse_cfg_str(&format!("resources={}\n", resources.display()));
+
+    save_resolved_cfg_to_path(&cfg, &output).unwrap();
+
+    let written = fs::read_to_string(&output).unwrap();
+    assert!(!written.contains("stale=true\n"));
+    assert!(written.contains(&format!("resources={}\n", resources.display())));
+    assert!(!written.contains(&format!("data={}\n", resources.join("vfs").display())));
+    let temp_entries = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".dream-ini-"))
+        .count();
+    assert_eq!(temp_entries, 0);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn save_resolved_cfg_preserves_existing_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_test_dir("atomic-resolved-save-permissions");
+    fs::create_dir_all(&dir).unwrap();
+    let output = dir.join("openmw.cfg");
+    fs::write(&output, "stale=true\n").unwrap();
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o600)).unwrap();
+    let cfg = parse_cfg_str("encoding=win1252\n");
+
+    save_resolved_cfg_to_path(&cfg, &output).unwrap();
+
+    let mode = fs::metadata(&output).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -205,10 +295,59 @@ fn import_paths_writes_exact_golden_output() {
                 "fallback-archive=Morrowind.bsa\n",
                 "fallback-archive=Tribunal.bsa\n",
                 "no-sound=1\n",
-                "resources=resources\n",
+                "resources={}\n",
             ),
-            dir.join("Data Files").display()
+            dir.join("Data Files").display(),
+            dir.join("resources").display()
         )
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn import_paths_absolutizes_existing_cfg_directory_paths() {
+    let dir = unique_test_dir("absolutize-cfg-directories");
+    fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(
+        &cfg,
+        concat!(
+            "data=Data Files\n",
+            "data=\"Extra Data\"\n",
+            "data-local=Local Data\n",
+            "resources=resources\n",
+            "user-data=user-data\n",
+        ),
+    )
+    .unwrap();
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let result = importer.import_paths(&ini, &cfg).unwrap();
+
+    assert_eq!(
+        values(&result.cfg, "data"),
+        &[
+            dir.join("Data Files").display().to_string(),
+            dir.join("Extra Data").display().to_string(),
+        ]
+    );
+    assert_eq!(
+        values(&result.cfg, "data-local"),
+        &[dir.join("Local Data").display().to_string()]
+    );
+    assert_eq!(
+        values(&result.cfg, "resources"),
+        &[dir.join("resources").display().to_string()]
+    );
+    assert_eq!(
+        values(&result.cfg, "user-data"),
+        &[dir.join("user-data").display().to_string()]
     );
 
     fs::remove_dir_all(dir).unwrap();
@@ -226,7 +365,7 @@ fn import_options_set_singleton_paths() {
             "data-local=old-local\n",
             "data-local=other-local\n",
             "resources=old-resources\n",
-            "userdata=old-userdata\n",
+            "user-data=old-user-data\n",
         ),
     )
     .unwrap();
@@ -235,7 +374,7 @@ fn import_options_set_singleton_paths() {
     let importer = IniImporter::new(ImportOptions {
         data_local: Some(PathBuf::from("new-local")),
         resources: Some(PathBuf::from("new-resources")),
-        userdata: Some(PathBuf::from("new-userdata")),
+        user_data: Some(PathBuf::from("new-user-data")),
         import_archives: false,
         ..ImportOptions::default()
     });
@@ -247,8 +386,8 @@ fn import_options_set_singleton_paths() {
         &["new-resources".to_owned()]
     );
     assert_eq!(
-        values(&result.cfg, "userdata"),
-        &["new-userdata".to_owned()]
+        values(&result.cfg, "user-data"),
+        &["new-user-data".to_owned()]
     );
 
     fs::remove_dir_all(dir).unwrap();

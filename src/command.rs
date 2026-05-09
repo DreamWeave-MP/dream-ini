@@ -1,11 +1,12 @@
-use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use dream_ini::{
-    ImportError, ImportOptions, ImportResult, IniImporter, MultiMap, TextEncoding, serialize_cfg,
+    ImportOptions, ImportResult, IniImporter, PreservedCfgUpdate, TextEncoding,
+    apply_preserved_cfg_update, load_cfg_document, save_cfg_output_to_path,
+    save_preserved_cfg_document_to_path, save_resolved_configuration_to_path, serialize_cfg_output,
+    serialize_preserved_cfg_document,
 };
 
 use crate::cli::Cli;
@@ -59,13 +60,17 @@ fn run_with_writers(
         .output
         .clone()
         .or_else(|| cli.in_place.then(|| cfg_path.clone()).flatten());
+    let data_dir_base = cfg_output_context_dir(output_path.as_deref(), cfg_path.as_deref());
+    let write_resolved_data_dirs = cfg_path
+        .as_deref()
+        .zip(output_path.as_deref())
+        .is_some_and(|(cfg_path, output_path)| !same_cfg_context(cfg_path, output_path));
     let cfg_reference_path = output_path.as_deref().or(cfg_path.as_deref());
+    let cfg_reference_path = cfg_reference_path.map(Path::to_owned);
 
     if !ini_path.exists() {
         return Err(CliError::MissingIni);
     }
-    validate_resources_path(cli.resources.as_deref(), cfg_reference_path)?;
-
     if let Some(cfg_path) = &cfg_path
         && !cfg_path.exists()
     {
@@ -77,14 +82,23 @@ fn run_with_writers(
         .as_deref()
         .map(TextEncoding::parse)
         .transpose()?;
+    let update = PreservedCfgUpdate {
+        import_game_files: cli.game_files,
+        import_archives: !cli.no_archives,
+        data_local: cli.data_local.clone(),
+        resources: cli.resources.clone(),
+        user_data: cli.user_data.clone(),
+    };
     let options = ImportOptions {
         import_game_files: cli.game_files,
         import_fonts: cli.fonts,
         import_archives: !cli.no_archives,
-        data_dirs: cli.data_dir.into_iter().collect(),
-        data_local: cli.data_local,
-        resources: cli.resources,
-        userdata: cli.userdata,
+        data_dirs: cli.data_dir.clone().into_iter().collect(),
+        data_dir_base,
+        write_resolved_data_dirs,
+        data_local: cli.data_local.clone(),
+        resources: cli.resources.clone(),
+        user_data: cli.user_data.clone(),
         encoding,
         verbose: cli.verbose,
         ..ImportOptions::default()
@@ -115,7 +129,17 @@ fn run_with_writers(
         writeln!(stderr, "Warning: {warning}")?;
     }
 
-    write_result_output(&result, OutputMode { output_path }, stdout, stderr)?;
+    write_result_output(
+        &result,
+        OutputMode {
+            output_path,
+            cfg_reference_path,
+            cfg_path,
+            update,
+        },
+        stdout,
+        stderr,
+    )?;
 
     Ok(())
 }
@@ -146,64 +170,12 @@ fn validate_import_usage(cli: &Cli) -> Result<(), CliError> {
     Ok(())
 }
 
-fn validate_resources_path(
-    resources: Option<&Path>,
-    cfg_reference_path: Option<&Path>,
-) -> Result<(), CliError> {
-    let Some(resources) = resources else {
-        return Ok(());
-    };
-    let resolved = resolve_cfg_relative_path(resources, cfg_reference_path);
-    let metadata = fs::metadata(&resolved).map_err(|source| {
-        CliError::InvalidUsage(format!(
-            "--resources must resolve to an installed, non-empty directory: {} ({source})",
-            resources.display()
-        ))
-    })?;
-    if !metadata.is_dir() {
-        return Err(CliError::InvalidUsage(format!(
-            "--resources must be a directory, not a file: {}",
-            resources.display()
-        )));
-    }
-    let mut entries = fs::read_dir(&resolved).map_err(|source| {
-        CliError::InvalidUsage(format!(
-            "--resources directory cannot be read: {} ({source})",
-            resources.display()
-        ))
-    })?;
-    if entries
-        .next()
-        .transpose()
-        .map_err(|source| {
-            CliError::InvalidUsage(format!(
-                "--resources directory cannot be read: {} ({source})",
-                resources.display()
-            ))
-        })?
-        .is_none()
-    {
-        return Err(CliError::InvalidUsage(format!(
-            "--resources must not be an empty directory: {}",
-            resources.display()
-        )));
-    }
-    Ok(())
-}
-
-fn resolve_cfg_relative_path(path: &Path, cfg_reference_path: Option<&Path>) -> PathBuf {
-    if path.is_absolute() {
-        return path.to_owned();
-    }
-    cfg_reference_path
-        .and_then(Path::parent)
-        .unwrap_or_else(|| Path::new(""))
-        .join(path)
-}
-
 #[derive(Debug)]
 struct OutputMode {
     output_path: Option<PathBuf>,
+    cfg_reference_path: Option<PathBuf>,
+    cfg_path: Option<PathBuf>,
+    update: PreservedCfgUpdate,
 }
 
 fn write_result_output(
@@ -219,71 +191,80 @@ fn write_result_output(
             stderr,
             format_args!("write to: {}", output_path.display()),
         )?;
-        save_config_output(&output_path, &result.cfg)?;
+        if let Some(cfg_path) = &mode.cfg_path {
+            let mut config = load_cfg_document(cfg_path)?;
+            apply_preserved_cfg_update(
+                &mut config,
+                &result.cfg,
+                &mode.update,
+                &result.changed_keys,
+            )?;
+            if same_cfg_context(cfg_path, &output_path) {
+                save_preserved_cfg_document_to_path(
+                    &config,
+                    cfg_path,
+                    &output_path,
+                    &mode.update,
+                    &result.changed_keys,
+                )?;
+            } else {
+                save_resolved_configuration_to_path(&config, &output_path)?;
+            }
+        } else {
+            save_cfg_output_to_path(&result.cfg, &output_path)?;
+        }
     } else {
-        write!(stdout, "{}", serialize_cfg(&result.cfg))?;
+        let user_config_dir = mode
+            .cfg_reference_path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| Path::new(""));
+        write!(
+            stdout,
+            "{}",
+            if let Some(cfg_path) = &mode.cfg_path {
+                let mut config = load_cfg_document(cfg_path)?;
+                apply_preserved_cfg_update(
+                    &mut config,
+                    &result.cfg,
+                    &mode.update,
+                    &result.changed_keys,
+                )?;
+                serialize_preserved_cfg_document(
+                    &config,
+                    cfg_path,
+                    &mode.update,
+                    &result.changed_keys,
+                )
+            } else {
+                serialize_cfg_output(&result.cfg, user_config_dir)?
+            }
+        )?;
     }
 
     Ok(())
 }
 
-fn save_config_output(output_path: &Path, cfg: &MultiMap) -> Result<(), ImportError> {
-    save_config_text(output_path, &serialize_cfg(cfg))
+fn same_cfg_context(left: &Path, right: &Path) -> bool {
+    equivalent_dirs(cfg_parent(left), cfg_parent(right))
 }
 
-pub(crate) fn save_config_text(output_path: &Path, cfg_text: &str) -> Result<(), ImportError> {
-    write_atomic(output_path, cfg_text.as_bytes())
+fn cfg_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
-fn write_atomic(output_path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
-    let temp_path = temporary_output_path(output_path);
-    let result = write_atomic_inner(output_path, &temp_path, bytes);
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    result
-}
-
-fn write_atomic_inner(
-    output_path: &Path,
-    temp_path: &Path,
-    bytes: &[u8],
-) -> Result<(), ImportError> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temp_path)
-        .map_err(|source| io_error(temp_path, source))?;
-    file.write_all(bytes)
-        .map_err(|source| io_error(temp_path, source))?;
-    file.sync_all()
-        .map_err(|source| io_error(temp_path, source))?;
-    drop(file);
-
-    fs::rename(temp_path, output_path).map_err(|source| io_error(output_path, source))
-}
-
-fn temporary_output_path(output_path: &Path) -> PathBuf {
-    let file_name = output_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("openmw.cfg");
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temp_name = format!(".{file_name}.dream-ini-{}-{unique}.tmp", std::process::id());
+fn cfg_output_context_dir(output_path: Option<&Path>, cfg_path: Option<&Path>) -> Option<PathBuf> {
     output_path
-        .parent()
-        .unwrap_or_else(|| Path::new(""))
-        .join(temp_name)
+        .or(cfg_path)
+        .map(|path| cfg_parent(path).to_owned())
 }
 
-fn io_error(path: &Path, source: io::Error) -> ImportError {
-    ImportError::Io {
-        path: path.to_owned(),
-        source,
-    }
+fn equivalent_dirs(left: &Path, right: &Path) -> bool {
+    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_owned());
+    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_owned());
+    left == right
 }
 
 fn diagnostic(
