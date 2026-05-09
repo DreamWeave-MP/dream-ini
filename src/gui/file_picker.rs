@@ -92,7 +92,7 @@ impl PathPickerState {
         });
         ui.separator();
         if show_controller_help {
-            ui.small("Controller: D-pad/left stick moves • A/Enter opens or chooses • B cancels • Left goes parent • Right enters • Start chooses the current path • LB toggles hidden directories");
+            ui.small(localizer.text(UiText::PickerControllerHelp));
         }
 
         ui.label(localizer.text(UiText::CurrentDirectory));

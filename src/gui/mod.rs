@@ -608,7 +608,7 @@ impl GuiApp {
         if !self.controller_navigation_visible {
             return;
         }
-        ui.small("Controller: D-pad/left stick moves • A toggles/chooses • B exits • X clears selected path • Start imports • left/right adjusts options • right stick scrolls generated cfg");
+        ui.small(self.localizer.text(UiText::ControllerHelp));
     }
 
     fn existing_cfg_label(&self) -> String {

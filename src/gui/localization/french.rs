@@ -86,6 +86,12 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectDataLocalDir => "Sélectionner le répertoire data-local",
         UiText::SelectResourcesDir => "Sélectionner le répertoire resources",
         UiText::SelectUserDataDir => "Sélectionner le répertoire user-data",
+        UiText::ControllerHelp => {
+            "Manette : croix/stick gauche pour naviguer • A active/choisit • B quitte • X efface le chemin sélectionné • Start importe • gauche/droite ajuste les options • stick droit fait défiler le cfg généré"
+        }
+        UiText::PickerControllerHelp => {
+            "Manette : croix/stick gauche pour naviguer • A/Entrée ouvre ou choisit • B annule • Gauche va au parent • Droite entre • Start choisit le chemin actuel • LB affiche les répertoires cachés"
+        }
     }
 }
 

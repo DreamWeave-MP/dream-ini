@@ -80,6 +80,8 @@ pub(super) enum UiText {
     SelectDataLocalDir,
     SelectResourcesDir,
     SelectUserDataDir,
+    ControllerHelp,
+    PickerControllerHelp,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
