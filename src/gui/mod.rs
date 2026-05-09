@@ -1729,6 +1729,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "gui")]
     fn embedded_window_icon_is_valid_rgba() {
         let icon = window_icon();
 
