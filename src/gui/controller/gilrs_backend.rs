@@ -59,7 +59,7 @@ impl Drop for ControllerWorker {
 
 struct WorkerState {
     gilrs: Option<Gilrs>,
-    gamepads: BTreeMap<GamepadId, GamepadInputState>,
+    gamepads: BTreeMap<usize, GamepadInputState>,
 }
 
 impl WorkerState {
@@ -112,7 +112,7 @@ impl WorkerState {
             }
             EventType::Connected => InputActions::default(),
             EventType::Disconnected => {
-                self.gamepads.remove(&event.id);
+                self.gamepads.remove(&gamepad_key(event.id));
                 InputActions::released()
             }
             EventType::ButtonReleased(button, _) => {
@@ -166,7 +166,7 @@ impl WorkerState {
     }
 
     fn gamepad_state(&mut self, id: GamepadId) -> &mut GamepadInputState {
-        self.gamepads.entry(id).or_default()
+        self.gamepads.entry(gamepad_key(id)).or_default()
     }
 
     fn sleep_duration(&self) -> Duration {
@@ -178,6 +178,10 @@ impl WorkerState {
             .unwrap_or(GILRS_POLL_INTERVAL)
             .min(GILRS_POLL_INTERVAL)
     }
+}
+
+fn gamepad_key(id: GamepadId) -> usize {
+    usize::from(id)
 }
 
 #[derive(Debug, Default)]

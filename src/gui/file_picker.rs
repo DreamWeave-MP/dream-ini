@@ -350,6 +350,9 @@ impl PathPickerState {
         let entry = &self.entries[index];
         match entry.kind {
             EntryKind::Directory => EntryAction::Navigate(entry.path.clone()),
+            EntryKind::File if self.target == PathTarget::OutputCfg => self
+                .chosen_path()
+                .map_or(EntryAction::None, EntryAction::Choose),
             EntryKind::File => EntryAction::Choose(entry.path.clone()),
             EntryKind::Parent => EntryAction::None,
         }
