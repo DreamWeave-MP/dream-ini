@@ -283,7 +283,7 @@ impl OskState {
             ControllerAction::ClearCurrent => {
                 self.buffer.pop();
             }
-            ControllerAction::Shift => self.toggle_shift(),
+            ControllerAction::Secondary => self.toggle_shift(),
             ControllerAction::Space => self.push_char(' '),
             ControllerAction::SelectCurrent => {
                 return OskOutcome::Commit {
@@ -543,7 +543,7 @@ impl GuiApp {
                 ControllerAction::Right => self.adjust_selected_form_control(FormAdjustment::Next),
                 ControllerAction::Accept => self.activate_selected_form_control(shell, context),
                 ControllerAction::ClearCurrent => self.clear_selected_form_control(),
-                ControllerAction::Shift | ControllerAction::Space => {}
+                ControllerAction::Secondary | ControllerAction::Space => {}
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
                 ControllerAction::ToggleHiddenDirectories => {
                     self.page_generated_cfg_preview(PreviewPageScroll::Up);
@@ -1574,7 +1574,7 @@ fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
                 | ControllerAction::Accept
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
-                | ControllerAction::Shift
+                | ControllerAction::Secondary
                 | ControllerAction::Space
                 | ControllerAction::PagePreviewDown
                 | ControllerAction::SelectCurrent
@@ -2599,7 +2599,7 @@ mod tests {
         select_osk_key(&mut osk, OskKey::Char('m'));
 
         assert_eq!(
-            osk.handle_controller_action(ControllerAction::Shift),
+            osk.handle_controller_action(ControllerAction::Secondary),
             OskOutcome::None
         );
         assert_eq!(
@@ -2642,7 +2642,7 @@ mod tests {
             OskOutcome::None
         );
         assert_eq!(
-            osk.handle_controller_action(ControllerAction::Shift),
+            osk.handle_controller_action(ControllerAction::Secondary),
             OskOutcome::None
         );
         assert_eq!(

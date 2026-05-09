@@ -87,10 +87,10 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectResourcesDir => "Välj resources-katalog",
         UiText::SelectUserDataDir => "Välj user-data-katalog",
         UiText::ControllerHelp => {
-            "Handkontroll: styrkors/vänster spak flyttar • A växlar/väljer • B avslutar • X rensar vald sökväg • Start importerar när det går • vänster/höger justerar alternativ • höger spak rullar genererad cfg • LB/RB bläddrar i genererad cfg"
+            "Handkontroll: styrkors/vänster spak flyttar • A växlar/väljer • X rensar vald sökväg • Start importerar när det går • Select avslutar • vänster/höger justerar alternativ • höger spak rullar genererad cfg • LB/RB bläddrar i genererad cfg"
         }
         UiText::PickerControllerHelp => {
-            "Handkontroll: styrkors/vänster spak flyttar • A/Enter öppnar eller väljer • B avbryter • Vänster går till överordnad katalog • Höger öppnar • Start väljer aktuell/förväntad sökväg • LB växlar dolda kataloger"
+            "Handkontroll: styrkors/vänster spak flyttar • A/Enter öppnar eller väljer • B/Vänster går till överordnad katalog • Höger öppnar • Start väljer aktuell/förväntad sökväg • Select avbryter • LB växlar dolda kataloger"
         }
         UiText::OskTitle => "Sökvägstangentbord",
         UiText::OskControllerHelp => {

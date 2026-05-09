@@ -166,7 +166,7 @@ impl ActionRepeater {
             ControllerAction::Accept
             | ControllerAction::Cancel
             | ControllerAction::ClearCurrent
-            | ControllerAction::Shift
+            | ControllerAction::Secondary
             | ControllerAction::Space
             | ControllerAction::SelectCurrent
             | ControllerAction::PagePreviewDown

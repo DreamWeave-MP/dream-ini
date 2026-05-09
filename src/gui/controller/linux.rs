@@ -794,7 +794,7 @@ fn key_actions(
                 action @ (ControllerAction::Accept
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
-                | ControllerAction::Shift
+                | ControllerAction::Secondary
                 | ControllerAction::Space
                 | ControllerAction::SelectCurrent
                 | ControllerAction::PagePreviewDown
@@ -842,7 +842,7 @@ fn key_action(code: u16) -> Option<ControllerAction> {
 const fn default_key_action(code: u16) -> Option<ControllerAction> {
     match code {
         BTN_SOUTH => Some(ControllerAction::Accept),
-        BTN_EAST => Some(ControllerAction::Shift),
+        BTN_EAST => Some(ControllerAction::Secondary),
         BTN_SELECT => Some(ControllerAction::Cancel),
         BTN_WEST => Some(ControllerAction::ClearCurrent),
         BTN_NORTH => Some(ControllerAction::Space),
@@ -939,7 +939,7 @@ mod tests {
     #[test]
     fn key_events_map_to_controller_actions() {
         assert_eq!(key_action(BTN_SOUTH), Some(ControllerAction::Accept));
-        assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Shift));
+        assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Secondary));
         assert_eq!(key_action(BTN_WEST), Some(ControllerAction::ClearCurrent));
         assert_eq!(key_action(BTN_NORTH), Some(ControllerAction::Space));
         #[cfg(not(all(feature = "portmaster-gui", not(feature = "gui"))))]
@@ -973,7 +973,10 @@ mod tests {
 
     #[test]
     fn default_key_events_map_to_controller_actions() {
-        assert_eq!(default_key_action(BTN_EAST), Some(ControllerAction::Shift));
+        assert_eq!(
+            default_key_action(BTN_EAST),
+            Some(ControllerAction::Secondary)
+        );
         assert_eq!(default_key_action(BTN_NORTH), Some(ControllerAction::Space));
         assert_eq!(
             default_key_action(BTN_SELECT),

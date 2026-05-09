@@ -266,7 +266,7 @@ fn remove_held_button(held_buttons: &mut Vec<Button>, button: Button) -> bool {
 fn immediate_button_action(button: Button) -> Option<ControllerAction> {
     match button {
         Button::South => Some(ControllerAction::Accept),
-        Button::East => Some(ControllerAction::Shift),
+        Button::East => Some(ControllerAction::Secondary),
         Button::West => Some(ControllerAction::ClearCurrent),
         Button::North => Some(ControllerAction::Space),
         Button::Select => Some(ControllerAction::Cancel),
