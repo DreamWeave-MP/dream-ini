@@ -259,7 +259,10 @@ fn set_encoding(config: &mut OpenMWConfiguration, encoding: &str) -> Result<(), 
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let temp_path = temporary_path_for(path);
     let write_result = (|| {
         let mut file = OpenOptions::new()
