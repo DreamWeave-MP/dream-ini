@@ -301,7 +301,9 @@ impl PathPickerState {
 
     fn selected_entry_index(&self) -> Option<usize> {
         let selected = self.selected.as_ref()?;
-        self.entries.iter().position(|entry| &entry.path == selected)
+        self.entries
+            .iter()
+            .position(|entry| &entry.path == selected)
     }
 
     fn selected_entry_action(&self) -> EntryAction {

@@ -129,7 +129,9 @@ struct AxisState {
 impl AxisState {
     fn update(&mut self, code: u16, value: i32) -> Option<ControllerAction> {
         match code {
-            ABS_X => self.left_x.update(stick_direction(value), horizontal_action),
+            ABS_X => self
+                .left_x
+                .update(stick_direction(value), horizontal_action),
             ABS_Y => self.left_y.update(stick_direction(value), vertical_action),
             ABS_HAT0X => self.hat_x.update(hat_direction(value), horizontal_action),
             ABS_HAT0Y => self.hat_y.update(hat_direction(value), vertical_action),
@@ -203,9 +205,9 @@ fn event_device_paths(directory: &Path) -> Vec<PathBuf> {
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| {
-                    name
-                        .strip_prefix("event")
-                        .is_some_and(|suffix| suffix.chars().all(|character| character.is_ascii_digit()))
+                    name.strip_prefix("event").is_some_and(|suffix| {
+                        suffix.chars().all(|character| character.is_ascii_digit())
+                    })
                 })
         })
         .collect()
@@ -316,10 +318,16 @@ mod tests {
     fn stick_axes_are_edge_triggered() {
         let mut axes = AxisState::default();
 
-        assert_eq!(axes.update(ABS_X, STICK_DEADZONE + 1), Some(ControllerAction::Right));
+        assert_eq!(
+            axes.update(ABS_X, STICK_DEADZONE + 1),
+            Some(ControllerAction::Right)
+        );
         assert_eq!(axes.update(ABS_X, STICK_DEADZONE + 2), None);
         assert_eq!(axes.update(ABS_X, 0), None);
-        assert_eq!(axes.update(ABS_X, -STICK_DEADZONE - 1), Some(ControllerAction::Left));
+        assert_eq!(
+            axes.update(ABS_X, -STICK_DEADZONE - 1),
+            Some(ControllerAction::Left)
+        );
     }
 
     #[test]

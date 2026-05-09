@@ -54,9 +54,9 @@ impl AxisState {
     fn handle_event(&mut self, event: EventType) -> Option<ControllerAction> {
         match event {
             EventType::ButtonPressed(button, _) => button_action(button),
-            EventType::AxisChanged(Axis::LeftStickX, value, _) => {
-                self.left_x.update(stick_direction(value), horizontal_action)
-            }
+            EventType::AxisChanged(Axis::LeftStickX, value, _) => self
+                .left_x
+                .update(stick_direction(value), horizontal_action),
             EventType::AxisChanged(Axis::LeftStickY, value, _) => {
                 self.left_y.update(stick_direction(value), vertical_action)
             }
