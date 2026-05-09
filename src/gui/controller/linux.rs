@@ -122,7 +122,11 @@ impl WorkerState {
                 true
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
-            Err(_) => false,
+            Err(_) => {
+                device.repeater.clear();
+                input.released = true;
+                false
+            }
         });
         input
     }
@@ -621,6 +625,10 @@ impl ActionRepeater {
         if let Some(held) = self.held_mut(action) {
             held.stop();
         }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
     }
 
     fn poll(&mut self, now: Instant) -> Vec<ControllerAction> {
@@ -1184,6 +1192,18 @@ mod tests {
 
         repeater.start(ControllerAction::Down, now);
         repeater.stop(ControllerAction::Down);
+
+        assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
+    }
+
+    #[test]
+    fn clearing_repeater_stops_all_held_actions() {
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
+
+        repeater.start(ControllerAction::Down, now);
+        repeater.start(ControllerAction::ScrollPreviewRight, now);
+        repeater.clear();
 
         assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
     }

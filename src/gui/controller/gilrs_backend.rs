@@ -105,7 +105,11 @@ impl WorkerState {
         match event {
             EventType::ButtonPressed(button, _) => button_pressed(button, &mut self.repeater, now),
             EventType::Connected => InputActions::default(),
-            EventType::Disconnected => InputActions::released(),
+            EventType::Disconnected => {
+                self.axes = AxisState::default();
+                self.repeater.clear();
+                InputActions::released()
+            }
             EventType::ButtonReleased(button, _) => {
                 if let Some(action) = repeatable_button_action(button) {
                     self.repeater.stop(action);
@@ -279,6 +283,10 @@ impl ActionRepeater {
         if let Some(held) = self.held_mut(action) {
             held.stop();
         }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
     }
 
     fn poll(&mut self, now: Instant) -> Vec<ControllerAction> {

@@ -44,10 +44,10 @@ Controller navigation is available in the GUI:
 - X / West: clear the selected path field.
 - Start: import from the main form, or choose the current/expected picker path.
 - Left / Right: adjust options; in the picker, Left enters the parent directory and Right enters the selected directory or chooses the selected file.
-- LB / left trigger: toggle hidden directories in the picker. This is useful for OpenMW paths under `~/.config/openmw` or `~/.local/share/openmw`.
+- LB / left shoulder: toggle hidden directories in the picker. This is useful for OpenMW paths under `~/.config/openmw` or `~/.local/share/openmw`.
 - Right stick: scroll the generated cfg preview vertically and horizontally.
 
-Path reminder: `Data Files directory` is the Morrowind content/archive search path used during import. `data-local`, `resources`, and `user-data` are OpenMW cfg singleton outputs; they are not used as importer search paths.
+Path reminder: `Data Files directory` is the Morrowind content/archive search path used during import. Classic Morrowind usually points at one `Data Files` folder; OpenMW can later use many `data=` directories. `data-local`, `resources`, and `user-data` are OpenMW cfg singleton outputs; they are not used as importer search paths.
 
 ## Options
 
