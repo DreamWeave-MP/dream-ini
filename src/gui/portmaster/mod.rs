@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 #[cfg(target_os = "linux")]
 use std::num::NonZeroUsize;
 #[cfg(target_os = "linux")]
@@ -20,12 +20,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+mod log;
 
 #[cfg(target_os = "linux")]
 use super::{GuiApp, GuiShell};
+use log::{SharedLog, install_panic_hook, log_startup, open_log, write_log};
 
-const LOG_FILE_NAME: &str = "dream-ini-portmaster.log";
 #[cfg(target_os = "linux")]
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 #[cfg(target_os = "linux")]
@@ -52,7 +53,6 @@ const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RENDER_PIXELS: usize = 1024 * 768;
 #[cfg(target_os = "linux")]
 const MAX_TEXTURE_BYTES: usize = 8 * 1024 * 1024;
-type SharedLog = Arc<Mutex<File>>;
 
 pub(crate) fn run() -> ExitCode {
     let log = open_log().map(Mutex::new).map(Arc::new);
@@ -1531,69 +1531,6 @@ fn pack_channel(value: u8, field: &FbBitfield) -> u32 {
 fn write_pixel(pixel: &mut [u8], bytes_per_pixel: usize, packed: u32) {
     let bytes = packed.to_ne_bytes();
     pixel[..bytes_per_pixel].copy_from_slice(&bytes[..bytes_per_pixel]);
-}
-
-fn open_log() -> Option<File> {
-    let paths = log_paths();
-    for path in paths {
-        match OpenOptions::new().create(true).append(true).open(&path) {
-            Ok(file) => return Some(file),
-            Err(error) => eprintln!(
-                "failed to open PortMaster log at {}: {error}",
-                path.display()
-            ),
-        }
-    }
-    None
-}
-
-fn log_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(exe) = env::current_exe()
-        && let Some(parent) = exe.parent()
-    {
-        paths.push(parent.join(LOG_FILE_NAME));
-    }
-    if let Ok(cwd) = env::current_dir() {
-        paths.push(cwd.join(LOG_FILE_NAME));
-    }
-    paths.push(PathBuf::from(LOG_FILE_NAME));
-    paths
-}
-
-fn install_panic_hook(log: Option<SharedLog>) {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        write_log(log.as_ref(), format!("panic: {panic_info}"));
-        previous(panic_info);
-    }));
-}
-
-fn log_startup(log: Option<&SharedLog>) {
-    write_log(log, "startup compile_feature=portmaster-gui");
-    write_log(
-        log,
-        format!("argv={:?}", env::args_os().collect::<Vec<_>>()),
-    );
-    write_log(log, format!("cwd={:?}", env::current_dir()));
-    write_log(log, format!("current_exe={:?}", env::current_exe()));
-    write_log(log, format!("unix_timestamp={}", unix_timestamp()));
-}
-
-fn write_log(log: Option<&SharedLog>, message: impl AsRef<str>) {
-    let Some(log) = log else {
-        return;
-    };
-    if let Ok(mut file) = log.lock() {
-        let _ = writeln!(file, "{} {}", unix_timestamp(), message.as_ref());
-        let _ = file.flush();
-    }
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
 }
 
 #[cfg(all(test, target_os = "linux"))]
