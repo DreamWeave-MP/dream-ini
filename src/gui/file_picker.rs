@@ -384,11 +384,34 @@ impl PathPickerState {
             .position(|entry| &entry.path == selected)
     }
 
+    fn selected_entry(&self) -> Option<&PathEntry> {
+        self.selected_entry_index()
+            .and_then(|index| self.entries.get(index))
+    }
+
     fn selected_entry_action(&self) -> EntryAction {
         if self.target == PathTarget::OutputCfg {
-            return self
-                .chosen_path()
-                .map_or(EntryAction::None, EntryAction::Choose);
+            if self
+                .selected
+                .as_ref()
+                .is_some_and(|path| path == &self.current_dir)
+            {
+                return self
+                    .chosen_path()
+                    .map_or(EntryAction::None, EntryAction::Choose);
+            }
+
+            let Some(entry) = self.selected_entry() else {
+                return EntryAction::None;
+            };
+            return match entry.kind {
+                EntryKind::Parent | EntryKind::Directory => {
+                    EntryAction::Navigate(entry.path.clone())
+                }
+                EntryKind::File => self
+                    .chosen_path()
+                    .map_or(EntryAction::None, EntryAction::Choose),
+            };
         }
         if self.target.is_directory_target()
             && self
@@ -413,7 +436,7 @@ impl PathPickerState {
             if let Some(file_name) = path.file_name().and_then(OsStr::to_str) {
                 file_name.clone_into(&mut self.output_file_name);
             }
-            self.selected = path.parent().map(Path::to_path_buf);
+            self.selected = Some(path);
         } else {
             self.selected = Some(path);
         }
@@ -425,10 +448,25 @@ impl PathPickerState {
             if !self.current_dir_readable || !valid_output_file_name(file_name) {
                 return None;
             }
-            let directory = self.selected.as_deref().unwrap_or(&self.current_dir);
+            let directory = self.output_directory()?;
             return Some(directory.join(file_name));
         }
         self.selected.clone()
+    }
+
+    fn output_directory(&self) -> Option<&Path> {
+        let Some(selected) = self.selected.as_deref() else {
+            return Some(&self.current_dir);
+        };
+        if selected == self.current_dir {
+            return Some(&self.current_dir);
+        }
+
+        let entry = self.selected_entry()?;
+        match entry.kind {
+            EntryKind::Parent | EntryKind::Directory => Some(entry.path.as_path()),
+            EntryKind::File => entry.path.parent(),
+        }
     }
 
     fn revalidate_selection(&mut self) {
@@ -451,7 +489,9 @@ impl PathPickerState {
             }
             PickKind::OutputCfg => {
                 if self.selected.as_ref().is_none_or(|path| {
-                    path != &self.current_dir && !self.entry_exists(path, EntryKind::Directory)
+                    path != &self.current_dir
+                        && !self.entry_exists(path, EntryKind::Directory)
+                        && !self.entry_exists(path, EntryKind::File)
                 }) {
                     self.selected = Some(self.current_dir.clone());
                 }
@@ -775,6 +815,50 @@ mod tests {
             | EntryAction::SelectFile(_)
             | EntryAction::Choose(_) => {
                 panic!("selected directory should navigate")
+            }
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn output_cfg_accept_navigates_selected_directory() {
+        let root = unique_temp_dir();
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        let mut picker =
+            PathPickerState::new(PathTarget::OutputCfg, Some(&root.join("openmw.cfg")));
+        picker.selected = Some(child.clone());
+
+        match picker.selected_entry_action() {
+            EntryAction::Navigate(path) => assert_eq!(path, child),
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::SelectFile(_)
+            | EntryAction::Choose(_) => {
+                panic!("selected output directory should navigate")
+            }
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn output_cfg_accept_chooses_selected_file_without_double_appending_name() {
+        let root = unique_temp_dir();
+        let cfg = root.join("openmw.cfg");
+        File::create(&cfg).unwrap();
+        let mut picker = PathPickerState::new(PathTarget::OutputCfg, Some(&cfg));
+        picker.selected = Some(cfg.clone());
+
+        assert_eq!(picker.chosen_path().as_deref(), Some(cfg.as_path()));
+        match picker.selected_entry_action() {
+            EntryAction::Choose(path) => assert_eq!(path, cfg),
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::Navigate(_)
+            | EntryAction::SelectFile(_) => {
+                panic!("selected output file should choose the file path")
             }
         }
 
