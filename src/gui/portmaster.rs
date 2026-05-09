@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use std::thread;
 #[cfg(target_os = "linux")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "linux")]
@@ -31,7 +31,17 @@ const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 #[cfg(target_os = "linux")]
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 #[cfg(target_os = "linux")]
-const PORTMASTER_FRAME_DELAY: Duration = Duration::from_millis(33);
+const REFRESH_ENV_VAR: &str = "DREAM_INI_PORTMASTER_REFRESH_HZ";
+#[cfg(target_os = "linux")]
+const DEFAULT_REFRESH_HZ: u32 = 60;
+#[cfg(target_os = "linux")]
+const MIN_REFRESH_HZ: u32 = 15;
+#[cfg(target_os = "linux")]
+const MAX_REFRESH_HZ: u32 = 120;
+#[cfg(target_os = "linux")]
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
+#[cfg(target_os = "linux")]
+const PICOS_PER_SECOND: u128 = 1_000_000_000_000;
 #[cfg(target_os = "linux")]
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 #[cfg(target_os = "linux")]
@@ -79,6 +89,23 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
         );
         return Ok(());
     }
+    let refresh_env_raw = env::var_os(REFRESH_ENV_VAR);
+    let selected_refresh = select_refresh_rate(
+        refresh_env_raw.as_deref().and_then(std::ffi::OsStr::to_str),
+        &framebuffer.var,
+    );
+    let frame_interval = selected_refresh.frame_interval();
+    write_log(
+        log,
+        format!(
+            "framebuffer refresh env_{}={:?} source={} hz={} interval={:?}",
+            REFRESH_ENV_VAR,
+            refresh_env_raw,
+            selected_refresh.source.as_str(),
+            selected_refresh.hz,
+            frame_interval
+        ),
+    );
 
     let egui_context = egui::Context::default();
     let mut app = GuiApp::new(egui_context.clone());
@@ -89,6 +116,7 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
     let mut snapshots = Vec::new();
     let mut renderer = SoftwareRenderer::default();
     let mut gui_error = None;
+    let mut next_frame_at = Instant::now();
     let exit_reason = 'gui: loop {
         let log_frame = frame_count == 0 || frame_count.is_multiple_of(30);
         let mut frame = GuiFrame {
@@ -111,7 +139,7 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
             break 'gui "exit-requested";
         }
 
-        thread::sleep(PORTMASTER_FRAME_DELAY);
+        next_frame_at = sleep_after_frame(Instant::now(), next_frame_at, frame_interval);
     };
 
     write_log(
@@ -181,6 +209,125 @@ struct GuiFrame<'a, S: GuiShell> {
     snapshots: &'a mut Vec<FramebufferSnapshot>,
     log: Option<&'a SharedLog>,
     log_frame: bool,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectedRefreshRate {
+    hz: u32,
+    source: RefreshRateSource,
+}
+
+#[cfg(target_os = "linux")]
+impl SelectedRefreshRate {
+    fn frame_interval(self) -> Duration {
+        Duration::from_nanos(NANOS_PER_SECOND / u64::from(self.hz))
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefreshRateSource {
+    Environment,
+    Framebuffer,
+    Default,
+}
+
+#[cfg(target_os = "linux")]
+impl RefreshRateSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::Framebuffer => "framebuffer",
+            Self::Default => "default",
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn select_refresh_rate(env_value: Option<&str>, var: &FbVarScreeninfo) -> SelectedRefreshRate {
+    if let Some(hz) = parse_refresh_env_value(env_value) {
+        return SelectedRefreshRate {
+            hz,
+            source: RefreshRateSource::Environment,
+        };
+    }
+    if let Some(hz) = framebuffer_refresh_hz(var) {
+        return SelectedRefreshRate {
+            hz,
+            source: RefreshRateSource::Framebuffer,
+        };
+    }
+    SelectedRefreshRate {
+        hz: DEFAULT_REFRESH_HZ,
+        source: RefreshRateSource::Default,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_refresh_env_value(value: Option<&str>) -> Option<u32> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let parsed = value.parse::<u32>().ok()?;
+    Some(parsed.clamp(MIN_REFRESH_HZ, MAX_REFRESH_HZ))
+}
+
+#[cfg(target_os = "linux")]
+fn framebuffer_refresh_hz(var: &FbVarScreeninfo) -> Option<u32> {
+    if var.pixclock == 0 {
+        return None;
+    }
+    let htotal =
+        checked_timing_total(var.xres, [var.left_margin, var.right_margin, var.hsync_len])?;
+    let vtotal = checked_timing_total(
+        var.yres,
+        [var.upper_margin, var.lower_margin, var.vsync_len],
+    )?;
+
+    let frame_picos = u128::from(var.pixclock)
+        .checked_mul(u128::from(htotal))?
+        .checked_mul(u128::from(vtotal))?;
+    let rounded = PICOS_PER_SECOND
+        .checked_add(frame_picos / 2)?
+        .checked_div(frame_picos)?;
+    let hz = u32::try_from(rounded).ok()?;
+    (MIN_REFRESH_HZ..=MAX_REFRESH_HZ)
+        .contains(&hz)
+        .then_some(hz)
+}
+
+#[cfg(target_os = "linux")]
+fn checked_timing_total(required: u32, optional: [u32; 3]) -> Option<u32> {
+    if required == 0 {
+        return None;
+    }
+    let total = optional.into_iter().try_fold(required, u32::checked_add)?;
+    (total != 0).then_some(total)
+}
+
+#[cfg(target_os = "linux")]
+fn frame_pacing_after_frame(
+    now: Instant,
+    previous_deadline: Instant,
+    interval: Duration,
+) -> (Instant, Option<Duration>) {
+    let deadline = previous_deadline.checked_add(interval).unwrap_or(now);
+    if deadline > now {
+        (deadline, Some(deadline.duration_since(now)))
+    } else {
+        (now, None)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn sleep_after_frame(now: Instant, previous_deadline: Instant, interval: Duration) -> Instant {
+    let (next_deadline, sleep_for) = frame_pacing_after_frame(now, previous_deadline, interval);
+    if let Some(sleep_for) = sleep_for {
+        thread::sleep(sleep_for);
+    }
+    next_deadline
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1455,6 +1602,116 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn refresh_env_parser_accepts_clamps_and_ignores_invalid_values() {
+        assert_eq!(parse_refresh_env_value(Some("75")), Some(75));
+        assert_eq!(parse_refresh_env_value(Some("1")), Some(MIN_REFRESH_HZ));
+        assert_eq!(parse_refresh_env_value(Some("240")), Some(MAX_REFRESH_HZ));
+        assert_eq!(parse_refresh_env_value(Some("-1")), None);
+        assert_eq!(parse_refresh_env_value(Some("fast")), None);
+        assert_eq!(parse_refresh_env_value(Some("")), None);
+    }
+
+    #[test]
+    fn framebuffer_refresh_calculation_rounds_representative_timing_to_60_hz() {
+        let var = refresh_test_var(39_721);
+
+        assert_eq!(framebuffer_refresh_hz(&var), Some(60));
+    }
+
+    #[test]
+    fn framebuffer_refresh_calculation_accepts_zero_margin_and_sync_lengths() {
+        let var = FbVarScreeninfo {
+            pixclock: 54_253,
+            xres: 640,
+            yres: 480,
+            ..Default::default()
+        };
+
+        assert_eq!(framebuffer_refresh_hz(&var), Some(60));
+    }
+
+    #[test]
+    fn framebuffer_refresh_calculation_ignores_unusable_values() {
+        let zero_pixclock = refresh_test_var(0);
+        let out_of_range = refresh_test_var(1);
+
+        assert_eq!(framebuffer_refresh_hz(&zero_pixclock), None);
+        assert_eq!(
+            framebuffer_refresh_hz(&FbVarScreeninfo {
+                xres: 0,
+                ..refresh_test_var(39_721)
+            }),
+            None
+        );
+        assert_eq!(
+            framebuffer_refresh_hz(&FbVarScreeninfo {
+                yres: 0,
+                ..refresh_test_var(39_721)
+            }),
+            None
+        );
+        assert_eq!(framebuffer_refresh_hz(&out_of_range), None);
+    }
+
+    #[test]
+    fn refresh_selection_priority_uses_env_framebuffer_then_default() {
+        let framebuffer_var = refresh_test_var(39_721);
+        let unusable_var = FbVarScreeninfo::default();
+
+        assert_eq!(
+            select_refresh_rate(Some("30"), &framebuffer_var),
+            SelectedRefreshRate {
+                hz: 30,
+                source: RefreshRateSource::Environment,
+            }
+        );
+        assert_eq!(
+            select_refresh_rate(Some("fast"), &framebuffer_var),
+            SelectedRefreshRate {
+                hz: 60,
+                source: RefreshRateSource::Framebuffer,
+            }
+        );
+        assert_eq!(
+            select_refresh_rate(None, &unusable_var),
+            SelectedRefreshRate {
+                hz: DEFAULT_REFRESH_HZ,
+                source: RefreshRateSource::Default,
+            }
+        );
+    }
+
+    #[test]
+    fn refresh_frame_interval_for_60_hz_uses_integer_nanoseconds() {
+        let selected = SelectedRefreshRate {
+            hz: 60,
+            source: RefreshRateSource::Default,
+        };
+
+        assert_eq!(selected.frame_interval(), Duration::from_nanos(16_666_666));
+    }
+
+    #[test]
+    fn frame_pacing_sleeps_when_ahead_and_resets_when_late() {
+        let previous_deadline = Instant::now();
+        let interval = Duration::from_millis(16);
+        let ahead_now = previous_deadline + Duration::from_millis(10);
+
+        let (next_deadline, sleep_for) =
+            frame_pacing_after_frame(ahead_now, previous_deadline, interval);
+
+        assert_eq!(next_deadline, previous_deadline + interval);
+        assert_eq!(sleep_for, Some(Duration::from_millis(6)));
+
+        let late_now = previous_deadline + Duration::from_millis(20);
+        let (next_deadline, sleep_for) =
+            frame_pacing_after_frame(late_now, previous_deadline, interval);
+
+        assert_eq!(next_deadline, late_now);
+        assert_eq!(sleep_for, None);
+    }
+
+    #[test]
     fn visible_viewport_uses_panned_page_base_offset() {
         let fix = FbFixScreeninfo {
             line_length: 2_560,
@@ -1720,6 +1977,21 @@ mod tests {
             bytes_per_pixel: 4,
             x_offset_bytes: 0,
             base_offset,
+        }
+    }
+
+    fn refresh_test_var(pixclock: u32) -> FbVarScreeninfo {
+        FbVarScreeninfo {
+            pixclock,
+            xres: 640,
+            left_margin: 48,
+            right_margin: 16,
+            hsync_len: 96,
+            yres: 480,
+            upper_margin: 10,
+            lower_margin: 33,
+            vsync_len: 2,
+            ..Default::default()
         }
     }
 
