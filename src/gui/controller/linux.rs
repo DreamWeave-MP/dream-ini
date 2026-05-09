@@ -783,11 +783,25 @@ const fn input_event_size() -> usize {
 
 fn read_controller_capabilities(fd: RawFd) -> Option<DeviceCapabilities> {
     let event_bits = ioctl_bitset(fd, 0, 1).unwrap_or_default();
-    if !test_bit(&event_bits, EV_KEY) {
+    let key_bits = ioctl_bitset(fd, EV_KEY, KEY_MAX).unwrap_or_default();
+    let abs_bits = if test_bit(&event_bits, EV_ABS) {
+        ioctl_bitset(fd, EV_ABS, ABS_MAX).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    controller_capabilities_from_bits(&event_bits, &key_bits, &abs_bits)
+}
+
+fn controller_capabilities_from_bits(
+    event_bits: &[u8],
+    key_bits: &[u8],
+    abs_bits: &[u8],
+) -> Option<DeviceCapabilities> {
+    if !test_bit(event_bits, EV_KEY) {
         return None;
     }
 
-    let key_bits = ioctl_bitset(fd, EV_KEY, KEY_MAX).unwrap_or_default();
     let has_controller_button = [
         BTN_SOUTH,
         BTN_EAST,
@@ -801,17 +815,16 @@ fn read_controller_capabilities(fd: RawFd) -> Option<DeviceCapabilities> {
         BTN_DPAD_RIGHT,
     ]
     .into_iter()
-    .any(|code| test_bit(&key_bits, code));
-    let abs_bits = if test_bit(&event_bits, EV_ABS) {
-        ioctl_bitset(fd, EV_ABS, ABS_MAX).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    let has_stick_axes = test_bit(&abs_bits, ABS_X) && test_bit(&abs_bits, ABS_Y);
-    let has_hat_axes = test_bit(&abs_bits, ABS_HAT0X) && test_bit(&abs_bits, ABS_HAT0Y);
+    .any(|code| test_bit(key_bits, code));
+    let has_dpad_buttons = [BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_LEFT, BTN_DPAD_RIGHT]
+        .into_iter()
+        .any(|code| test_bit(key_bits, code));
+    let has_abs = test_bit(event_bits, EV_ABS);
+    let has_stick_axes = has_abs && test_bit(abs_bits, ABS_X) && test_bit(abs_bits, ABS_Y);
+    let has_hat_axes = has_abs && test_bit(abs_bits, ABS_HAT0X) && test_bit(abs_bits, ABS_HAT0Y);
+    let has_navigation = has_stick_axes || has_hat_axes || has_dpad_buttons;
 
-    (has_controller_button || has_stick_axes || has_hat_axes)
-        .then_some(DeviceCapabilities { has_hat_axes })
+    (has_controller_button && has_navigation).then_some(DeviceCapabilities { has_hat_axes })
 }
 
 fn ioctl_bitset(fd: RawFd, event_type: u16, max_bit: u16) -> io::Result<Vec<u8>> {
@@ -983,6 +996,33 @@ mod tests {
     }
 
     #[test]
+    fn capability_filter_rejects_absolute_pointer_without_controller_buttons() {
+        let event_bits = bitset(&[EV_KEY, EV_ABS], EV_ABS);
+        let key_bits = bitset(&[], KEY_MAX);
+        let abs_bits = bitset(&[ABS_X, ABS_Y], ABS_MAX);
+
+        assert!(controller_capabilities_from_bits(&event_bits, &key_bits, &abs_bits).is_none());
+    }
+
+    #[test]
+    fn capability_filter_accepts_buttons_with_navigation_source() {
+        let event_bits = bitset(&[EV_KEY, EV_ABS], EV_ABS);
+        let key_bits = bitset(&[BTN_SOUTH], KEY_MAX);
+        let abs_bits = bitset(&[ABS_X, ABS_Y], ABS_MAX);
+
+        assert!(controller_capabilities_from_bits(&event_bits, &key_bits, &abs_bits).is_some());
+    }
+
+    #[test]
+    fn capability_filter_rejects_button_without_navigation_source() {
+        let event_bits = bitset(&[EV_KEY], EV_ABS);
+        let key_bits = bitset(&[BTN_SOUTH], KEY_MAX);
+        let abs_bits = bitset(&[], ABS_MAX);
+
+        assert!(controller_capabilities_from_bits(&event_bits, &key_bits, &abs_bits).is_none());
+    }
+
+    #[test]
     fn stick_axes_are_edge_triggered() {
         let mut axes = AxisState::default();
         let mut repeater = ActionRepeater::default();
@@ -1095,5 +1135,14 @@ mod tests {
         repeater.stop(ControllerAction::Down);
 
         assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
+    }
+
+    fn bitset(bits: &[u16], max_bit: u16) -> Vec<u8> {
+        let mut values = vec![0_u8; usize::from(max_bit / 8 + 1)];
+        for bit in bits {
+            let byte = usize::from(bit / 8);
+            values[byte] |= 1_u8 << (bit % 8);
+        }
+        values
     }
 }
