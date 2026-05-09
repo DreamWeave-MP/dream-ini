@@ -87,7 +87,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectResourcesDir => "Select resources directory",
         UiText::SelectUserDataDir => "Select user data directory",
         UiText::ControllerHelp => {
-            "Controller: D-pad/left stick moves • A toggles/chooses • B exits • X clears selected path • Start imports when ready • left/right adjusts options • right stick scrolls generated cfg"
+            "Controller: D-pad/left stick moves • A toggles/chooses • B exits • X clears selected path • Start imports when ready • left/right adjusts options • right stick scrolls generated cfg • LB/RB pages generated cfg"
         }
         UiText::PickerControllerHelp => {
             "Controller: D-pad/left stick moves • A/Enter opens or chooses • B cancels • Left goes parent • Right enters • Start chooses the current/expected path • LB toggles hidden directories"

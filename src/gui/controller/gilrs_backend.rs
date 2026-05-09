@@ -271,6 +271,7 @@ fn immediate_button_action(button: Button) -> Option<ControllerAction> {
         Button::Select => Some(ControllerAction::Cancel),
         Button::Start => Some(ControllerAction::SelectCurrent),
         Button::LeftTrigger => Some(ControllerAction::ToggleHiddenDirectories),
+        Button::RightTrigger => Some(ControllerAction::PagePreviewDown),
         _ => None,
     }
 }

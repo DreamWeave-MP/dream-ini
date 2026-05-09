@@ -31,6 +31,7 @@ const BTN_SOUTH: u16 = 0x130;
 const BTN_EAST: u16 = 0x131;
 const BTN_WEST: u16 = 0x133;
 const BTN_TL: u16 = 0x136;
+const BTN_TR: u16 = 0x137;
 const BTN_SELECT: u16 = 0x13a;
 const BTN_START: u16 = 0x13b;
 const BTN_DPAD_UP: u16 = 0x220;
@@ -669,6 +670,7 @@ fn controller_capabilities_from_bits(
         BTN_EAST,
         BTN_WEST,
         BTN_TL,
+        BTN_TR,
         BTN_SELECT,
         BTN_START,
         BTN_DPAD_UP,
@@ -750,6 +752,7 @@ fn key_actions(
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
                 | ControllerAction::SelectCurrent
+                | ControllerAction::PagePreviewDown
                 | ControllerAction::ToggleHiddenDirectories),
             ),
             1,
@@ -788,6 +791,7 @@ fn key_action(code: u16) -> Option<ControllerAction> {
         BTN_WEST => Some(ControllerAction::ClearCurrent),
         BTN_START => Some(ControllerAction::SelectCurrent),
         BTN_TL => Some(ControllerAction::ToggleHiddenDirectories),
+        BTN_TR => Some(ControllerAction::PagePreviewDown),
         BTN_DPAD_UP => Some(ControllerAction::Up),
         BTN_DPAD_DOWN => Some(ControllerAction::Down),
         BTN_DPAD_LEFT => Some(ControllerAction::Left),
@@ -852,6 +856,7 @@ mod tests {
             key_action(BTN_TL),
             Some(ControllerAction::ToggleHiddenDirectories)
         );
+        assert_eq!(key_action(BTN_TR), Some(ControllerAction::PagePreviewDown));
         assert_eq!(key_action(BTN_DPAD_UP), Some(ControllerAction::Up));
         assert_eq!(key_action(BTN_DPAD_DOWN), Some(ControllerAction::Down));
         assert_eq!(key_action(BTN_DPAD_LEFT), Some(ControllerAction::Left));

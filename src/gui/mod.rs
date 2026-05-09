@@ -27,6 +27,7 @@ const CFG_KEY_USERDATA: &str = "user-data";
 const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
 const OPENMW_CFG_LABEL: &str = "openmw.cfg";
 const CONTROLLER_PREVIEW_SCROLL_PIXELS: f32 = 72.0;
+const CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS: f32 = 480.0;
 
 pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
@@ -165,6 +166,12 @@ enum PreviewScroll {
     Down,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PreviewPageScroll {
+    Up,
+    Down,
+}
+
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         let controller_actions = self.drain_controller_actions();
@@ -243,7 +250,12 @@ impl GuiApp {
                 ControllerAction::Accept => self.activate_selected_form_control(context),
                 ControllerAction::ClearCurrent => self.clear_selected_form_control(),
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
-                ControllerAction::ToggleHiddenDirectories => {}
+                ControllerAction::ToggleHiddenDirectories => {
+                    self.page_generated_cfg_preview(PreviewPageScroll::Up);
+                }
+                ControllerAction::PagePreviewDown => {
+                    self.page_generated_cfg_preview(PreviewPageScroll::Down);
+                }
                 ControllerAction::ScrollPreviewLeft => {
                     self.scroll_generated_cfg_preview(PreviewScroll::Left);
                 }
@@ -285,6 +297,15 @@ impl GuiApp {
             return;
         }
         self.generated_cfg_scroll_delta += generated_cfg_scroll_delta(direction);
+    }
+
+    fn page_generated_cfg_preview(&mut self, direction: PreviewPageScroll) {
+        if self.selected_result_panel != ResultPanel::GeneratedCfg
+            || !matches!(self.result, Some(GuiImportResult::Success { .. }))
+        {
+            return;
+        }
+        self.generated_cfg_scroll_delta += generated_cfg_page_scroll_delta(direction);
     }
 
     fn visible_form_controls(&self) -> Vec<FormControl> {
@@ -1079,6 +1100,13 @@ fn generated_cfg_scroll_delta(direction: PreviewScroll) -> egui::Vec2 {
     }
 }
 
+fn generated_cfg_page_scroll_delta(direction: PreviewPageScroll) -> egui::Vec2 {
+    match direction {
+        PreviewPageScroll::Up => egui::vec2(0.0, CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS),
+        PreviewPageScroll::Down => egui::vec2(0.0, -CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS),
+    }
+}
+
 fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
     actions.iter().fold(egui::Vec2::ZERO, |delta, action| {
         delta
@@ -1098,6 +1126,7 @@ fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
                 | ControllerAction::Accept
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
+                | ControllerAction::PagePreviewDown
                 | ControllerAction::SelectCurrent
                 | ControllerAction::ToggleHiddenDirectories => egui::Vec2::ZERO,
             }
@@ -1917,6 +1946,55 @@ mod tests {
     }
 
     #[test]
+    fn shoulder_buttons_page_generated_cfg_preview() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.result = Some(GuiImportResult::Success {
+            cfg_text: "fallback=1\n".to_owned(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            output_path: None,
+        });
+        app.selected_result_panel = ResultPanel::GeneratedCfg;
+
+        app.handle_controller_actions(
+            &egui::Context::default(),
+            &[ControllerAction::ToggleHiddenDirectories],
+        );
+        assert!(
+            (app.generated_cfg_scroll_delta.y - CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS).abs()
+                < f32::EPSILON
+        );
+
+        app.handle_controller_actions(
+            &egui::Context::default(),
+            &[ControllerAction::PagePreviewDown],
+        );
+        assert!(app.generated_cfg_scroll_delta.y.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn shoulder_buttons_ignore_non_generated_result_panels() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.result = Some(GuiImportResult::Success {
+            cfg_text: "fallback=1\n".to_owned(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            output_path: None,
+        });
+        app.selected_result_panel = ResultPanel::Warnings;
+
+        app.handle_controller_actions(
+            &egui::Context::default(),
+            &[
+                ControllerAction::ToggleHiddenDirectories,
+                ControllerAction::PagePreviewDown,
+            ],
+        );
+
+        assert!(app.generated_cfg_scroll_delta.length_sq() < f32::EPSILON);
+    }
+
+    #[test]
     fn path_picker_scroll_delta_uses_only_vertical_preview_scroll_actions() {
         let delta = path_picker_scroll_delta(&[
             ControllerAction::ScrollPreviewDown,
@@ -1924,6 +2002,7 @@ mod tests {
             ControllerAction::Down,
             ControllerAction::ScrollPreviewUp,
             ControllerAction::ScrollPreviewUp,
+            ControllerAction::PagePreviewDown,
             ControllerAction::ToggleHiddenDirectories,
         ]);
 

@@ -89,7 +89,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectResourcesDir => "Seleccionar directorio resources",
         UiText::SelectUserDataDir => "Seleccionar directorio user-data",
         UiText::ControllerHelp => {
-            "Mando: cruceta/stick izquierdo mueve • A alterna/elige • B sale • X borra la ruta seleccionada • Start importa cuando esté listo • izquierda/derecha ajusta opciones • stick derecho desplaza el cfg generado"
+            "Mando: cruceta/stick izquierdo mueve • A alterna/elige • B sale • X borra la ruta seleccionada • Start importa cuando esté listo • izquierda/derecha ajusta opciones • stick derecho desplaza el cfg generado • LB/RB pagina el cfg generado"
         }
         UiText::PickerControllerHelp => {
             "Mando: cruceta/stick izquierdo mueve • A/Enter abre o elige • B cancela • Izquierda va al directorio superior • Derecha entra • Start elige la ruta actual/esperada • LB alterna directorios ocultos"

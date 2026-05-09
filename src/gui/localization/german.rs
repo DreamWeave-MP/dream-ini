@@ -89,7 +89,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectResourcesDir => "resources-Verzeichnis auswählen",
         UiText::SelectUserDataDir => "user-data-Verzeichnis auswählen",
         UiText::ControllerHelp => {
-            "Controller: Steuerkreuz/linker Stick bewegt • A schaltet/wählt • B beendet • X leert ausgewählten Pfad • Start importiert, wenn bereit • links/rechts passt Optionen an • rechter Stick scrollt die generierte cfg"
+            "Controller: Steuerkreuz/linker Stick bewegt • A schaltet/wählt • B beendet • X leert ausgewählten Pfad • Start importiert, wenn bereit • links/rechts passt Optionen an • rechter Stick scrollt die generierte cfg • LB/RB blättert durch generierte cfg"
         }
         UiText::PickerControllerHelp => {
             "Controller: Steuerkreuz/linker Stick bewegt • A/Enter öffnet oder wählt • B bricht ab • Links geht zum übergeordneten Verzeichnis • Rechts öffnet • Start wählt den aktuellen/erwarteten Pfad • LB schaltet versteckte Verzeichnisse um"
