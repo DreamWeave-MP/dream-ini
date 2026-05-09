@@ -124,6 +124,12 @@ impl WorkerState {
                 &mut self.repeater,
                 now,
             ),
+            EventType::AxisChanged(Axis::RightStickY, value, _) => self.axes.right_y.update(
+                stick_direction(value),
+                preview_scroll_action,
+                &mut self.repeater,
+                now,
+            ),
             _ => Vec::new(),
         }
     }
@@ -177,6 +183,7 @@ fn send_event(sender: &SyncSender<ControllerEvent>, event: ControllerEvent) -> b
 struct AxisState {
     left_x: AxisDirection,
     left_y: AxisDirection,
+    right_y: AxisDirection,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +219,8 @@ struct ActionRepeater {
     down: HeldAction,
     left: HeldAction,
     right: HeldAction,
+    scroll_preview_up: HeldAction,
+    scroll_preview_down: HeldAction,
 }
 
 impl ActionRepeater {
@@ -235,6 +244,14 @@ impl ActionRepeater {
             (ControllerAction::Down, &mut self.down),
             (ControllerAction::Left, &mut self.left),
             (ControllerAction::Right, &mut self.right),
+            (
+                ControllerAction::ScrollPreviewUp,
+                &mut self.scroll_preview_up,
+            ),
+            (
+                ControllerAction::ScrollPreviewDown,
+                &mut self.scroll_preview_down,
+            ),
         ]
         .into_iter()
         .filter_map(|(action, held)| held.poll(now).then_some(action))
@@ -242,10 +259,17 @@ impl ActionRepeater {
     }
 
     fn next_repeat(&self) -> Option<Instant> {
-        [&self.up, &self.down, &self.left, &self.right]
-            .into_iter()
-            .filter_map(HeldAction::next_repeat)
-            .min()
+        [
+            &self.up,
+            &self.down,
+            &self.left,
+            &self.right,
+            &self.scroll_preview_up,
+            &self.scroll_preview_down,
+        ]
+        .into_iter()
+        .filter_map(HeldAction::next_repeat)
+        .min()
     }
 
     fn held_mut(&mut self, action: ControllerAction) -> Option<&mut HeldAction> {
@@ -254,6 +278,8 @@ impl ActionRepeater {
             ControllerAction::Down => Some(&mut self.down),
             ControllerAction::Left => Some(&mut self.left),
             ControllerAction::Right => Some(&mut self.right),
+            ControllerAction::ScrollPreviewUp => Some(&mut self.scroll_preview_up),
+            ControllerAction::ScrollPreviewDown => Some(&mut self.scroll_preview_down),
             ControllerAction::Accept
             | ControllerAction::Cancel
             | ControllerAction::ClearCurrent
@@ -354,5 +380,13 @@ fn vertical_action(direction: AxisDirection) -> Option<ControllerAction> {
         AxisDirection::Negative => Some(ControllerAction::Down),
         AxisDirection::Neutral => None,
         AxisDirection::Positive => Some(ControllerAction::Up),
+    }
+}
+
+fn preview_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
+    match direction {
+        AxisDirection::Negative => Some(ControllerAction::ScrollPreviewDown),
+        AxisDirection::Neutral => None,
+        AxisDirection::Positive => Some(ControllerAction::ScrollPreviewUp),
     }
 }

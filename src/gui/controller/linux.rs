@@ -39,6 +39,7 @@ const BTN_DPAD_RIGHT: u16 = 0x223;
 
 const ABS_X: u16 = 0x00;
 const ABS_Y: u16 = 0x01;
+const ABS_RY: u16 = 0x04;
 const ABS_HAT0X: u16 = 0x10;
 const ABS_HAT0Y: u16 = 0x11;
 
@@ -390,6 +391,7 @@ struct DeviceCapabilities {
 struct AxisState {
     left_x: AxisDirection,
     left_y: AxisDirection,
+    right_y: AxisDirection,
     hat_x: AxisDirection,
     hat_y: AxisDirection,
     calibration: AxisCalibration,
@@ -400,6 +402,7 @@ impl AxisState {
         Self {
             left_x: AxisDirection::Neutral,
             left_y: AxisDirection::Neutral,
+            right_y: AxisDirection::Neutral,
             hat_x: AxisDirection::Neutral,
             hat_y: AxisDirection::Neutral,
             calibration,
@@ -426,6 +429,12 @@ impl AxisState {
                 repeater,
                 now,
             ),
+            ABS_RY => self.right_y.update(
+                self.calibration.ry.direction(value),
+                preview_scroll_action,
+                repeater,
+                now,
+            ),
             ABS_HAT0X => self
                 .hat_x
                 .update(hat_direction(value), horizontal_action, repeater, now),
@@ -447,6 +456,7 @@ impl Default for AxisState {
 struct AxisCalibration {
     x: AxisInfo,
     y: AxisInfo,
+    ry: AxisInfo,
 }
 
 impl AxisCalibration {
@@ -454,6 +464,7 @@ impl AxisCalibration {
         Self {
             x: AxisInfo::read(fd, ABS_X),
             y: AxisInfo::read(fd, ABS_Y),
+            ry: AxisInfo::read(fd, ABS_RY),
         }
     }
 }
@@ -548,6 +559,8 @@ struct ActionRepeater {
     down: HeldAction,
     left: HeldAction,
     right: HeldAction,
+    scroll_preview_up: HeldAction,
+    scroll_preview_down: HeldAction,
 }
 
 impl ActionRepeater {
@@ -571,6 +584,14 @@ impl ActionRepeater {
             (ControllerAction::Down, &mut self.down),
             (ControllerAction::Left, &mut self.left),
             (ControllerAction::Right, &mut self.right),
+            (
+                ControllerAction::ScrollPreviewUp,
+                &mut self.scroll_preview_up,
+            ),
+            (
+                ControllerAction::ScrollPreviewDown,
+                &mut self.scroll_preview_down,
+            ),
         ]
         .into_iter()
         .filter_map(|(action, held)| held.poll(now).then_some(action))
@@ -578,10 +599,17 @@ impl ActionRepeater {
     }
 
     fn next_repeat(&self) -> Option<Instant> {
-        [&self.up, &self.down, &self.left, &self.right]
-            .into_iter()
-            .filter_map(HeldAction::next_repeat)
-            .min()
+        [
+            &self.up,
+            &self.down,
+            &self.left,
+            &self.right,
+            &self.scroll_preview_up,
+            &self.scroll_preview_down,
+        ]
+        .into_iter()
+        .filter_map(HeldAction::next_repeat)
+        .min()
     }
 
     fn held_mut(&mut self, action: ControllerAction) -> Option<&mut HeldAction> {
@@ -590,6 +618,8 @@ impl ActionRepeater {
             ControllerAction::Down => Some(&mut self.down),
             ControllerAction::Left => Some(&mut self.left),
             ControllerAction::Right => Some(&mut self.right),
+            ControllerAction::ScrollPreviewUp => Some(&mut self.scroll_preview_up),
+            ControllerAction::ScrollPreviewDown => Some(&mut self.scroll_preview_down),
             ControllerAction::Accept
             | ControllerAction::Cancel
             | ControllerAction::ClearCurrent
@@ -878,6 +908,14 @@ fn vertical_action(direction: AxisDirection) -> Option<ControllerAction> {
     }
 }
 
+fn preview_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
+    match direction {
+        AxisDirection::Negative => Some(ControllerAction::ScrollPreviewUp),
+        AxisDirection::Neutral => None,
+        AxisDirection::Positive => Some(ControllerAction::ScrollPreviewDown),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,6 +964,23 @@ mod tests {
         assert_eq!(
             axes.update(ABS_X, -20_000, &mut repeater, now),
             vec![ControllerAction::Left]
+        );
+    }
+
+    #[test]
+    fn right_stick_vertical_scrolls_preview() {
+        let mut axes = AxisState::default();
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            axes.update(ABS_RY, 20_000, &mut repeater, now),
+            vec![ControllerAction::ScrollPreviewDown]
+        );
+        assert_eq!(axes.update(ABS_RY, 0, &mut repeater, now), Vec::new());
+        assert_eq!(
+            axes.update(ABS_RY, -20_000, &mut repeater, now),
+            vec![ControllerAction::ScrollPreviewUp]
         );
     }
 

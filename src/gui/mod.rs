@@ -24,6 +24,7 @@ const CFG_KEY_RESOURCES: &str = "resources";
 const CFG_KEY_USERDATA: &str = "user-data";
 const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
 const OPENMW_CFG_LABEL: &str = "openmw.cfg";
+const CONTROLLER_PREVIEW_SCROLL_PIXELS: f32 = 72.0;
 
 pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
@@ -70,6 +71,7 @@ struct GuiApp {
     selected_result_panel: ResultPanel,
     selected_form_control: FormControl,
     controller_navigation_visible: bool,
+    generated_cfg_scroll_delta: f32,
     mode: GuiMode,
 }
 
@@ -89,6 +91,7 @@ impl GuiApp {
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
             controller_navigation_visible: false,
+            generated_cfg_scroll_delta: 0.0,
             mode: GuiMode::ImportForm,
         }
     }
@@ -102,6 +105,7 @@ impl GuiApp {
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
             controller_navigation_visible: false,
+            generated_cfg_scroll_delta: 0.0,
             mode: GuiMode::ImportForm,
         }
     }
@@ -145,6 +149,12 @@ enum FormSelectionStep {
 enum FormAdjustment {
     Previous,
     Next,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PreviewScroll {
+    Up,
+    Down,
 }
 
 impl eframe::App for GuiApp {
@@ -219,6 +229,12 @@ impl GuiApp {
                 ControllerAction::ClearCurrent => self.clear_selected_form_control(),
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
                 ControllerAction::ToggleHiddenDirectories => {}
+                ControllerAction::ScrollPreviewUp => {
+                    self.scroll_generated_cfg_preview(PreviewScroll::Up);
+                }
+                ControllerAction::ScrollPreviewDown => {
+                    self.scroll_generated_cfg_preview(PreviewScroll::Down);
+                }
             }
             if !matches!(self.mode, GuiMode::ImportForm) {
                 return true;
@@ -239,6 +255,15 @@ impl GuiApp {
         {
             self.run_import();
         }
+    }
+
+    fn scroll_generated_cfg_preview(&mut self, direction: PreviewScroll) {
+        if self.selected_result_panel != ResultPanel::GeneratedCfg
+            || !matches!(self.result, Some(GuiImportResult::Success { .. }))
+        {
+            return;
+        }
+        self.generated_cfg_scroll_delta += generated_cfg_scroll_delta(direction);
     }
 
     fn visible_form_controls(&self) -> Vec<FormControl> {
@@ -800,6 +825,12 @@ impl GuiApp {
         }
         ui.separator();
 
+        let generated_cfg_scroll_delta = if self.selected_result_panel == ResultPanel::GeneratedCfg
+        {
+            std::mem::take(&mut self.generated_cfg_scroll_delta)
+        } else {
+            0.0
+        };
         let Some(result) = &mut self.result else {
             return;
         };
@@ -807,7 +838,9 @@ impl GuiApp {
             ResultPanel::Errors => show_error_panel(ui, self.localizer, result),
             ResultPanel::Warnings => show_warning_panel(ui, self.localizer, result),
             ResultPanel::Events => show_event_panel(ui, self.localizer, result),
-            ResultPanel::GeneratedCfg => show_generated_cfg_panel(ui, self.localizer, result),
+            ResultPanel::GeneratedCfg => {
+                show_generated_cfg_panel(ui, self.localizer, result, generated_cfg_scroll_delta);
+            }
         }
     }
 
@@ -958,6 +991,13 @@ fn cycled_result_panel(panel: ResultPanel, adjustment: FormAdjustment) -> Result
         panel,
         adjustment,
     )
+}
+
+const fn generated_cfg_scroll_delta(direction: PreviewScroll) -> f32 {
+    match direction {
+        PreviewScroll::Up => CONTROLLER_PREVIEW_SCROLL_PIXELS,
+        PreviewScroll::Down => -CONTROLLER_PREVIEW_SCROLL_PIXELS,
+    }
 }
 
 fn cycle_item<T: Copy + PartialEq>(items: &[T], current: T, adjustment: FormAdjustment) -> T {
@@ -1346,7 +1386,12 @@ fn show_event_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportR
     });
 }
 
-fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mut GuiImportResult) {
+fn show_generated_cfg_panel(
+    ui: &mut egui::Ui,
+    localizer: Localizer,
+    result: &mut GuiImportResult,
+    controller_scroll_delta: f32,
+) {
     let GuiImportResult::Success { cfg_text, .. } = result else {
         ui.label(localizer.text(UiText::NoGeneratedCfg));
         return;
@@ -1356,6 +1401,9 @@ fn show_generated_cfg_panel(ui: &mut egui::Ui, localizer: Localizer, result: &mu
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if controller_scroll_delta != 0.0 {
+                    ui.scroll_with_delta(egui::vec2(0.0, controller_scroll_delta));
+                }
                 show_numbered_cfg(ui, cfg_text);
             });
     });
@@ -1697,6 +1745,47 @@ mod tests {
 
         app.move_form_selection(FormSelectionStep::Next);
         assert_eq!(app.selected_form_control, FormControl::Language);
+    }
+
+    #[test]
+    fn right_stick_scrolls_generated_cfg_preview() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.result = Some(GuiImportResult::Success {
+            cfg_text: "fallback=1\n".to_owned(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            output_path: None,
+        });
+        app.selected_result_panel = ResultPanel::GeneratedCfg;
+
+        app.handle_controller_actions(
+            &egui::Context::default(),
+            &[ControllerAction::ScrollPreviewDown],
+        );
+
+        assert!(
+            (app.generated_cfg_scroll_delta + CONTROLLER_PREVIEW_SCROLL_PIXELS).abs()
+                < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn right_stick_ignores_non_generated_result_panels() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.result = Some(GuiImportResult::Success {
+            cfg_text: "fallback=1\n".to_owned(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            output_path: None,
+        });
+        app.selected_result_panel = ResultPanel::Warnings;
+
+        app.handle_controller_actions(
+            &egui::Context::default(),
+            &[ControllerAction::ScrollPreviewDown],
+        );
+
+        assert!(app.generated_cfg_scroll_delta.abs() < f32::EPSILON);
     }
 
     #[test]
