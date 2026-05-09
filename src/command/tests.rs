@@ -70,6 +70,9 @@ fn run_with_generation_options_do_not_require_ini() {
     let manpage = String::from_utf8(stdout).unwrap();
     assert!(manpage.contains("dream-ini"));
     assert!(manpage.contains("Import Morrowind.ini settings"));
+    assert!(
+        manpage.contains("Positional Morrowind.ini/openmw.cfg paths are intentionally unsupported")
+    );
     assert!(stderr.is_empty());
 }
 

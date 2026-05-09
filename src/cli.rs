@@ -14,7 +14,7 @@ use clap_complete::Shell;
     disable_help_flag = true,
     disable_version_flag = true,
     override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage\n       dream-ini install-launcher",
-    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to update the base cfg. Relative --data is resolved from the output cfg directory, from --cfg for stdout preview, or from the current directory and written absolute when stdout has no cfg context. Non-import modes (--help, --version, --generate-completion, --generate-manpage, and install-launcher) do not require --ini.",
+    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Positional Morrowind.ini/openmw.cfg paths are intentionally unsupported; use flags. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to update the base cfg. Relative --data is resolved from the output cfg directory, from --cfg for stdout preview, or from the current directory and written absolute when stdout has no cfg context. Non-import modes (--help, --version, --generate-completion, --generate-manpage, and install-launcher) do not require --ini.",
     args_conflicts_with_subcommands = true,
     subcommand_negates_reqs = true
 )]
@@ -327,6 +327,11 @@ mod tests {
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
         assert!(help.contains("install-launcher"));
+        assert!(
+            help.contains(
+                "Positional Morrowind.ini/openmw.cfg paths are intentionally unsupported"
+            )
+        );
 
         let ordered_options = [
             "-c, --cfg",

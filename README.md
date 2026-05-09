@@ -4,9 +4,21 @@
 
 ## Build
 
+Desktop builds use the default feature set, which includes the native GUI and the CLI:
+
 ```bash
 cargo build --release
 ```
+
+Release platform support is intentionally split by build shape:
+
+| Platform | Release build shape | Availability |
+| --- | --- | --- |
+| Linux x64, Windows x64, macOS x64/ARM64 | default features | Desktop GUI and CLI |
+| PortMaster ARM64 | `--no-default-features --features portmaster-gui` | Framebuffer GUI and CLI |
+| Android ARM64 | `--no-default-features` | CLI/importer only |
+
+Other targets may build the library or CLI, but GUI, launcher installation, and controller support are only promised for the platform rows above.
 
 ## Usage
 
@@ -15,6 +27,8 @@ dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]
 ```
 
 `--ini` is required for imports. By default, the imported cfg text is written to stdout and diagnostics go to stderr, so shell redirection is safe. Use `--output` to write a separate cfg file or `--in-place` with `--cfg` to update the base cfg. If `--cfg` is provided, it is read first and intentionally imported keys are replaced. In-place and same-directory output preserve unrelated comments, entries, chain controls, and relative/token path spelling through `openmw-config`'s preservation-oriented serializer. Relocated `--cfg` + `--output` writes a resolved export so relative paths do not silently change meaning. If `--cfg` is omitted, import starts from an empty config.
+
+Import paths are flag-based. Positional `Morrowind.ini` or `openmw.cfg` arguments are intentionally unsupported; use `--ini`, optional `--cfg`, and optional `--output` or `--in-place`.
 
 ```bash
 dream-ini --ini Morrowind.ini > openmw.cfg
@@ -34,9 +48,11 @@ dream-ini -M > dream-ini.1
 
 ## GUI
 
-When built with the default `gui` feature, running `dream-ini` with no arguments opens the graphical importer. The GUI uses the same explicit import model as the CLI: choose `Morrowind.ini`, optionally choose an existing `openmw.cfg`, pick import options, then either preview, save as a separate cfg, or update the existing cfg.
+When built with the default `gui` feature, running `dream-ini` with no arguments opens the desktop graphical importer in a native window. The GUI uses the same explicit import model as the CLI: choose `Morrowind.ini`, optionally choose an existing `openmw.cfg`, pick import options, then either preview, save as a separate cfg, or update the existing cfg.
 
-Controller navigation is available in the GUI on Linux, Windows, and macOS:
+PortMaster builds use the separate `portmaster-gui` feature with default features disabled. That build draws the same importer UI directly to the Linux framebuffer instead of using desktop windowing. Clipboard support is unavailable in the PortMaster shell. Diagnostic logs, when enabled by the launcher or environment, are written by the launcher/script beside the executable or to the configured log path.
+
+Controller navigation is available in the desktop GUI on Linux, Windows, and macOS, and in the PortMaster framebuffer GUI:
 
 - D-pad or left stick: move between fields, picker entries, and result tabs.
 - A / South: activate the selected field, toggle checkboxes, open directories, or choose files.
@@ -45,9 +61,10 @@ Controller navigation is available in the GUI on Linux, Windows, and macOS:
 - Start: import from the main form, or choose the current/expected picker path.
 - Left / Right: adjust options; in the picker, Left enters the parent directory and Right enters the selected directory or chooses the selected file.
 - LB / left shoulder: toggle hidden directories in the picker. This is useful for OpenMW paths under `~/.config/openmw` or `~/.local/share/openmw`.
+- RB / right shoulder: page down through the generated cfg preview.
 - Right stick: scroll the generated cfg preview vertically and horizontally.
 
-On Linux, controller support reads `/dev/input` event devices directly. If your desktop session does not grant read permission for those devices, the GUI will still run but controller navigation will not appear.
+On desktop Linux and PortMaster, controller support reads `/dev/input` event devices directly. If your desktop session does not grant read permission for those devices, the GUI will still run but controller navigation will not appear. Windows and macOS use `gilrs` for controller input. PortMaster uses the Linux controller backend with a handheld-specific menu/trigger remap for Anbernic-style evdev button codes; the on-screen help shows the behavior used by that build.
 
 Path reminder: `Data Files directory` is the Morrowind content/archive search path used during import. Classic Morrowind usually points at one `Data Files` folder; OpenMW can later use many `data=` directories. `data-local`, `resources`, and `user-data` are OpenMW cfg singleton outputs; they are not used as importer search paths.
 
@@ -73,7 +90,7 @@ Path reminder: `Data Files directory` is the Morrowind content/archive search pa
 
 ### Commands
 
-- `install-launcher`: install a desktop launcher and icon for the current user. On Linux this writes a `.desktop` file and hicolor PNG icon to `$XDG_DATA_HOME` when it is absolute, otherwise to `~/.local/share`. On Windows this writes a Start Menu shortcut and `.ico` icon under `%APPDATA%`.
+- `install-launcher`: install a desktop launcher and icon for the current user. This is intended for Linux and Windows desktop builds. On Linux this writes a `.desktop` file and hicolor PNG icon to `$XDG_DATA_HOME` when it is absolute, otherwise to `~/.local/share`. On Windows this writes a Start Menu shortcut and `.ico` icon under `%APPDATA%`. Non-Linux/non-Windows targets, including macOS and Android, return an unsupported-platform error. PortMaster is a Linux build, but launcher installation is not part of the supported PortMaster release flow.
 
 ## Behavior
 
@@ -107,7 +124,7 @@ Enable the optional Lua embedding API with the `lua` feature. It uses `mlua` wit
 cargo test --features lua
 ```
 
-The crate does not build a Lua `require` module. Embedders create or register the API table explicitly:
+The crate does not build a Lua `require` module or `cdylib`. Lua support is embedding-only; embedders create or register the API table explicitly:
 
 ```rust
 let lua = mlua::Lua::new();
@@ -138,6 +155,10 @@ for _, event in ipairs(result.events) do
     print(event.path, event.modified)
   elseif event.kind == "data_dir_added_for_content" then
     print(event.path)
+  elseif event.kind == "archive_resolved" then
+    print(event.path)
+  elseif event.kind == "data_dir_added_for_archive" then
+    print(event.path)
   end
 end
 ```
@@ -152,10 +173,14 @@ Available functions:
 - `import_maps(cfg, ini, opts)`: imports parsed multimap data and returns `{ cfg = multimap, text = string, warnings = { ... }, events = { ... } }`.
 - `import_paths(opts)`: imports from `opts.ini` and optional `opts.cfg`, returning the same result shape as `import_maps`.
 
+Warnings are returned in the `warnings` array. Hard failures such as missing required options, unsupported encodings, malformed multimap input, missing files, or failed imports are raised as Lua errors.
+
 Import events are structured tables. Current event kinds are:
 
 - `{ kind = "content_file_resolved", path = string, modified = unix_seconds }`
 - `{ kind = "data_dir_added_for_content", path = string }`
+- `{ kind = "archive_resolved", path = string }`
+- `{ kind = "data_dir_added_for_archive", path = string }`
 
 Import warnings are structured tables with a formatted `message`. Current warning kinds are:
 
