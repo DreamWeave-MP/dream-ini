@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+#![cfg_attr(
+    all(feature = "portmaster-gui", not(feature = "gui")),
+    allow(dead_code, unused_imports)
+)]
+
 use std::path::{Path, PathBuf};
+#[cfg(feature = "gui")]
 use std::process::ExitCode;
 
 use dream_ini::{
@@ -10,16 +16,19 @@ use dream_ini::{
     save_resolved_configuration_to_path, serialize_cfg_output, serialize_preserved_cfg_document,
     serialize_resolved_configuration,
 };
-use eframe::egui;
 
 use self::controller::{ControllerAction, ControllerEvent};
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
+#[cfg(feature = "gui")]
 use crate::desktop_entry::{APP_ID, APP_NAME};
 
 mod controller;
 mod file_picker;
 mod localization;
+#[cfg(feature = "portmaster-gui")]
+#[cfg_attr(feature = "gui", allow(dead_code))]
+mod portmaster;
 
 const CFG_KEY_DATA_LOCAL: &str = "data-local";
 const CFG_KEY_RESOURCES: &str = "resources";
@@ -29,6 +38,10 @@ const OPENMW_CFG_LABEL: &str = "openmw.cfg";
 const CONTROLLER_PREVIEW_SCROLL_PIXELS: f32 = 72.0;
 const CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS: f32 = 480.0;
 
+#[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
+pub(crate) use portmaster::run as run_portmaster_probe;
+
+#[cfg(feature = "gui")]
 pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -54,6 +67,7 @@ pub(crate) fn run() -> ExitCode {
     }
 }
 
+#[cfg(feature = "gui")]
 fn window_icon() -> egui::IconData {
     let image = image::load_from_memory(include_bytes!("../../assets/logo.png"))
         .expect("embedded DreamWeave logo must be a valid PNG")
@@ -172,6 +186,7 @@ enum PreviewPageScroll {
     Down,
 }
 
+#[cfg(feature = "gui")]
 impl eframe::App for GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();

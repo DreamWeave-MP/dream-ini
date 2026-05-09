@@ -9,13 +9,11 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use eframe::egui;
-
 const MAX_QUEUED_CONTROLLER_ACTIONS: usize = 64;
 const MAX_DRAINED_CONTROLLER_ACTIONS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum ControllerAction {
+pub(in crate::gui) enum ControllerAction {
     Up,
     Down,
     Left,
@@ -33,7 +31,7 @@ pub(super) enum ControllerAction {
 }
 
 impl ControllerAction {
-    pub(super) const fn is_repeatable(self) -> bool {
+    pub(in crate::gui) const fn is_repeatable(self) -> bool {
         matches!(
             self,
             Self::Up
@@ -49,7 +47,7 @@ impl ControllerAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ControllerEvent {
+pub(in crate::gui) enum ControllerEvent {
     Action(ControllerAction),
     Available(bool),
     PurgeQueuedActions,
@@ -129,13 +127,13 @@ impl ControllerEventQueue {
 }
 
 #[derive(Debug)]
-pub(super) struct Controller {
+pub(in crate::gui) struct Controller {
     queue: Arc<ControllerEventQueue>,
     worker: Option<backend::ControllerWorker>,
 }
 
 impl Controller {
-    pub(super) fn new(context: egui::Context) -> Self {
+    pub(in crate::gui) fn new(context: egui::Context) -> Self {
         let queue = Arc::new(ControllerEventQueue::default());
         let sender = ControllerEventSender::new(Arc::clone(&queue));
         Self {
@@ -144,7 +142,7 @@ impl Controller {
         }
     }
 
-    pub(super) fn drain_events(&mut self) -> Vec<ControllerEvent> {
+    pub(in crate::gui) fn drain_events(&mut self) -> Vec<ControllerEvent> {
         self.queue.drain()
     }
 

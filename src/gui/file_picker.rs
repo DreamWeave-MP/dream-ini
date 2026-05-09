@@ -4,8 +4,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use eframe::egui;
-
 use super::controller::ControllerAction;
 use super::localization::{Localizer, UiText};
 

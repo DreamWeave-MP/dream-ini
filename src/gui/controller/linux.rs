@@ -11,8 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use eframe::egui;
-
 use super::common::{ActionRepeater, AxisDirection, InputActions};
 use super::{ControllerAction, ControllerEvent, ControllerEventSender};
 

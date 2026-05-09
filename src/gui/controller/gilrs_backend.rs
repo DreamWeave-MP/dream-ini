@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use eframe::egui;
 use gilrs::{Axis, Button, Event, EventType, GamepadId, Gilrs};
 
 use super::common::{ActionRepeater, AxisDirection, InputActions};

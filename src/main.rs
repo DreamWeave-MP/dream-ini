@@ -8,13 +8,18 @@ mod cli;
 mod command;
 mod desktop_entry;
 mod generated;
-#[cfg(feature = "gui")]
+#[cfg(any(feature = "gui", feature = "portmaster-gui"))]
 mod gui;
 
 fn main() -> ExitCode {
     #[cfg(feature = "gui")]
     if std::env::args_os().len() == 1 {
         return gui::run();
+    }
+
+    #[cfg(all(not(feature = "gui"), feature = "portmaster-gui"))]
+    if std::env::args_os().len() == 1 {
+        return gui::run_portmaster_probe();
     }
 
     match command::run() {
