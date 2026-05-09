@@ -36,6 +36,8 @@ const AUTO_EXIT_AFTER: Duration = Duration::from_secs(15);
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 #[cfg(target_os = "linux")]
 const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
+#[cfg(target_os = "linux")]
+const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 type SharedLog = Arc<Mutex<File>>;
 
@@ -365,6 +367,20 @@ impl Framebuffer {
         {
             return Ok(());
         }
+        let snapshot_bytes = viewport_snapshot_bytes(viewport)?;
+        let used_bytes = snapshot_bytes_used(snapshots)?;
+        let new_total = used_bytes
+            .checked_add(snapshot_bytes)
+            .ok_or_else(|| io::Error::other("framebuffer snapshot budget overflow"))?;
+        if new_total > MAX_SNAPSHOT_BYTES {
+            write_log(
+                log,
+                format!(
+                    "refusing framebuffer snapshot bytes_used={used_bytes} new_snapshot_bytes={snapshot_bytes} budget={MAX_SNAPSHOT_BYTES}"
+                ),
+            );
+            return Err(io::Error::other("framebuffer snapshot budget exceeded"));
+        }
 
         let snapshot = self.capture_snapshot(viewport)?;
         write_log(
@@ -386,9 +402,7 @@ impl Framebuffer {
         let pixels =
             unsafe { std::slice::from_raw_parts(self.memory.as_ptr(), self.memory_len.get()) };
         let row_bytes = viewport_row_bytes(viewport)?;
-        let total_bytes = row_bytes
-            .checked_mul(viewport.height)
-            .ok_or_else(|| io::Error::other("framebuffer snapshot size overflow"))?;
+        let total_bytes = viewport_snapshot_bytes(viewport)?;
         let mut bytes = Vec::with_capacity(total_bytes);
         for y in 0..viewport.height {
             let row_offset = viewport_row_offset(viewport, y)?;
@@ -442,9 +456,7 @@ impl Framebuffer {
         let pixels =
             unsafe { std::slice::from_raw_parts_mut(self.memory.as_ptr(), self.memory_len.get()) };
         let row_bytes = viewport_row_bytes(&snapshot.viewport)?;
-        let expected_bytes = row_bytes
-            .checked_mul(snapshot.viewport.height)
-            .ok_or_else(|| io::Error::other("framebuffer restore size overflow"))?;
+        let expected_bytes = viewport_snapshot_bytes(&snapshot.viewport)?;
         if snapshot.bytes.len() != expected_bytes {
             return Err(io::Error::other(
                 "framebuffer snapshot size does not match viewport",
@@ -662,6 +674,17 @@ fn visible_viewport(fix: &FbFixScreeninfo, var: &FbVarScreeninfo) -> io::Result<
     let base_offset = y_offset_bytes
         .checked_add(x_offset_bytes)
         .ok_or_else(|| io::Error::other("framebuffer visible base offset overflow"))?;
+    let row_bytes = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(|| io::Error::other("framebuffer visible row byte count overflow"))?;
+    let row_end = x_offset_bytes
+        .checked_add(row_bytes)
+        .ok_or_else(|| io::Error::other("framebuffer visible row end overflow"))?;
+    if row_end > line_length {
+        return Err(io::Error::other(
+            "framebuffer visible viewport crosses scanline boundary",
+        ));
+    }
 
     Ok(VisibleViewport {
         xoffset: var.xoffset,
@@ -717,6 +740,22 @@ fn viewport_row_bytes(viewport: &VisibleViewport) -> io::Result<usize> {
         .width
         .checked_mul(viewport.bytes_per_pixel)
         .ok_or_else(|| io::Error::other("framebuffer viewport row byte count overflow"))
+}
+
+#[cfg(target_os = "linux")]
+fn viewport_snapshot_bytes(viewport: &VisibleViewport) -> io::Result<usize> {
+    viewport_row_bytes(viewport)?
+        .checked_mul(viewport.height)
+        .ok_or_else(|| io::Error::other("framebuffer snapshot byte count overflow"))
+}
+
+#[cfg(target_os = "linux")]
+fn snapshot_bytes_used(snapshots: &[FramebufferSnapshot]) -> io::Result<usize> {
+    snapshots.iter().try_fold(0_usize, |total, snapshot| {
+        total
+            .checked_add(snapshot.bytes.len())
+            .ok_or_else(|| io::Error::other("framebuffer snapshot bytes used overflow"))
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -936,5 +975,58 @@ mod tests {
         assert_eq!(viewport.height, 480);
         assert_eq!(viewport.x_offset_bytes, 800);
         assert_eq!(viewport.base_offset, 800);
+    }
+
+    #[test]
+    fn visible_viewport_rejects_scanline_crossing() {
+        let fix = FbFixScreeninfo {
+            line_length: 2_000,
+            ..Default::default()
+        };
+        let var = FbVarScreeninfo {
+            xres: 640,
+            yres: 480,
+            xres_virtual: 800,
+            yres_virtual: 480,
+            xoffset: 200,
+            bits_per_pixel: 32,
+            ..Default::default()
+        };
+
+        let error = visible_viewport(&fix, &var).expect_err("viewport crosses scanline");
+
+        assert_eq!(
+            error.to_string(),
+            "framebuffer visible viewport crosses scanline boundary"
+        );
+    }
+
+    #[test]
+    fn snapshot_bytes_used_sums_existing_snapshots() {
+        let snapshots = vec![
+            FramebufferSnapshot {
+                viewport: test_viewport(0),
+                bytes: vec![0; 16],
+            },
+            FramebufferSnapshot {
+                viewport: test_viewport(64),
+                bytes: vec![0; 24],
+            },
+        ];
+
+        assert_eq!(snapshot_bytes_used(&snapshots).expect("bytes used"), 40);
+    }
+
+    fn test_viewport(base_offset: usize) -> VisibleViewport {
+        VisibleViewport {
+            xoffset: 0,
+            yoffset: 0,
+            width: 4,
+            height: 4,
+            line_length: 16,
+            bytes_per_pixel: 4,
+            x_offset_bytes: 0,
+            base_offset,
+        }
     }
 }
