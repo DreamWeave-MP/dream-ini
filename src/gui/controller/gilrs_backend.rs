@@ -12,6 +12,8 @@ use super::ControllerAction;
 const GILRS_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const GILRS_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 const INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(350);
+const MAX_GILRS_EVENTS_PER_TICK: usize = 64;
+const MAX_WORKER_ACTIONS_PER_TICK: usize = 32;
 const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
 const STICK_DEADZONE: f32 = 0.5;
 
@@ -80,10 +82,17 @@ impl WorkerState {
 
         let now = Instant::now();
         let mut actions = Vec::new();
-        while let Some(event) = gilrs.next_event() {
+        for _ in 0..MAX_GILRS_EVENTS_PER_TICK {
+            let Some(event) = gilrs.next_event() else {
+                break;
+            };
             actions.extend(self.handle_event(event.event, now));
+            if actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
+                break;
+            }
         }
         actions.extend(self.repeater.poll(now));
+        actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
         actions
     }
 
@@ -131,7 +140,7 @@ fn run_worker(sender: &SyncSender<ControllerAction>, context: &egui::Context, st
         }
 
         let mut sent_action = false;
-        for action in deduplicate(actions) {
+        for action in actions {
             match sender.try_send(action) {
                 Ok(()) => sent_action = true,
                 Err(TrySendError::Full(_)) => {}
@@ -318,14 +327,4 @@ fn vertical_action(direction: AxisDirection) -> Option<ControllerAction> {
         AxisDirection::Neutral => None,
         AxisDirection::Positive => Some(ControllerAction::Down),
     }
-}
-
-fn deduplicate(actions: Vec<ControllerAction>) -> Vec<ControllerAction> {
-    let mut deduplicated = Vec::new();
-    for action in actions {
-        if !deduplicated.contains(&action) {
-            deduplicated.push(action);
-        }
-    }
-    deduplicated
 }

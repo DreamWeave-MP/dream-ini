@@ -17,6 +17,8 @@ use super::ControllerAction;
 const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 const INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(350);
+const MAX_DEVICE_READ_BATCHES: usize = 4;
+const MAX_WORKER_ACTIONS_PER_TICK: usize = 32;
 const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
 const STICK_DEADZONE: i32 = 16_384;
 
@@ -110,12 +112,13 @@ impl WorkerState {
         self.devices.retain_mut(|device| match device.poll() {
             Ok(device_actions) => {
                 actions.extend(device_actions);
+                actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
                 true
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
             Err(_) => false,
         });
-        deduplicate(actions)
+        actions
     }
 
     fn wait_for_input(&mut self) {
@@ -164,14 +167,19 @@ impl WorkerState {
         let known_paths = self
             .devices
             .iter()
-            .map(|device| device.path.clone())
+            .map(|device| device.identity.clone())
             .collect::<BTreeSet<_>>();
-        self.devices.extend(
-            candidate_device_paths()
-                .into_iter()
-                .filter(|path| !known_paths.contains(path))
-                .filter_map(|path| InputDevice::open(&path).ok()),
-        );
+        let mut seen_paths = known_paths;
+        for path in candidate_device_paths() {
+            let identity = device_identity(&path);
+            if seen_paths.contains(&identity) {
+                continue;
+            }
+            if let Ok(device) = InputDevice::open(&path) {
+                seen_paths.insert(device.identity.clone());
+                self.devices.push(device);
+            }
+        }
         self.last_scan = Instant::now();
     }
 }
@@ -272,7 +280,7 @@ impl Drop for WakeFd {
 
 #[derive(Debug)]
 struct InputDevice {
-    path: PathBuf,
+    identity: PathBuf,
     file: File,
     axes: AxisState,
     repeater: ActionRepeater,
@@ -285,7 +293,7 @@ impl InputDevice {
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)?;
         Ok(Self {
-            path: path.to_owned(),
+            identity: device_identity(path),
             file,
             axes: AxisState::default(),
             repeater: ActionRepeater::default(),
@@ -297,7 +305,7 @@ impl InputDevice {
         let mut actions = Vec::new();
         let now = Instant::now();
 
-        loop {
+        for _ in 0..MAX_DEVICE_READ_BATCHES {
             match self.file.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(bytes_read) => {
@@ -307,6 +315,9 @@ impl InputDevice {
                     if bytes_read < buffer.len() {
                         break;
                     }
+                    if actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
+                        break;
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(error) => return Err(error),
@@ -314,6 +325,7 @@ impl InputDevice {
         }
 
         actions.extend(self.repeater.poll(now));
+        actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
         Ok(actions)
     }
 
@@ -489,21 +501,29 @@ struct InputEvent {
 }
 
 fn open_devices() -> Vec<InputDevice> {
-    candidate_device_paths()
-        .into_iter()
-        .filter_map(|path| InputDevice::open(&path).ok())
-        .collect()
+    let mut seen = BTreeSet::new();
+    let mut devices = Vec::new();
+    for path in candidate_device_paths() {
+        let Ok(device) = InputDevice::open(&path) else {
+            continue;
+        };
+        if seen.insert(device.identity.clone()) {
+            devices.push(device);
+        }
+    }
+    devices
 }
 
 fn candidate_device_paths() -> Vec<PathBuf> {
     let mut by_id = joystick_event_paths(Path::new("/dev/input/by-id"));
-    if !by_id.is_empty() {
-        by_id.sort();
-        by_id.dedup();
-        return by_id;
-    }
+    by_id.extend(event_device_paths(Path::new("/dev/input")));
+    by_id.sort();
+    by_id.dedup();
+    by_id
+}
 
-    event_device_paths(Path::new("/dev/input"))
+fn device_identity(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_owned())
 }
 
 fn joystick_event_paths(directory: &Path) -> Vec<PathBuf> {
@@ -630,14 +650,6 @@ fn vertical_action(direction: AxisDirection) -> Option<ControllerAction> {
     }
 }
 
-fn deduplicate(actions: Vec<ControllerAction>) -> Vec<ControllerAction> {
-    let mut seen = BTreeSet::new();
-    actions
-        .into_iter()
-        .filter(|action| seen.insert(*action))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,17 +746,5 @@ mod tests {
         repeater.stop(ControllerAction::Down);
 
         assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
-    }
-
-    #[test]
-    fn duplicate_actions_are_removed_without_reordering() {
-        assert_eq!(
-            deduplicate(vec![
-                ControllerAction::Down,
-                ControllerAction::Down,
-                ControllerAction::Accept,
-            ]),
-            vec![ControllerAction::Down, ControllerAction::Accept]
-        );
     }
 }

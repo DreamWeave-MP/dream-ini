@@ -81,11 +81,6 @@ impl PathPickerState {
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             return PickOutcome::Cancelled;
         }
-        for action in controller_actions {
-            if *action == ControllerAction::Cancel {
-                return PickOutcome::Cancelled;
-            }
-        }
 
         let mut outcome = PickOutcome::None;
         ui.horizontal(|ui| {
@@ -134,6 +129,7 @@ impl PathPickerState {
         ui.separator();
         match self.show_entries(ui, controller_actions) {
             EntryAction::None => {}
+            EntryAction::Cancel => outcome = PickOutcome::Cancelled,
             EntryAction::Navigate(path) => self.enter_directory(path),
             EntryAction::SelectFile(path) => self.select_file(path),
             EntryAction::Choose(path) => {
@@ -162,8 +158,7 @@ impl PathPickerState {
 
         if !self.target.is_directory_target() {
             let choose_enabled = chosen_path.is_some();
-            let accept_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter))
-                || controller_actions.contains(&ControllerAction::Accept);
+            let accept_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
             if (ui
                 .add_enabled(
                     choose_enabled,
@@ -306,7 +301,8 @@ impl PathPickerState {
                 ControllerAction::Up => self.move_selection(SelectionStep::Previous),
                 ControllerAction::Down => self.move_selection(SelectionStep::Next),
                 ControllerAction::Accept => return self.selected_entry_action(),
-                ControllerAction::Cancel | ControllerAction::Left | ControllerAction::Right => {}
+                ControllerAction::Cancel => return EntryAction::Cancel,
+                ControllerAction::Left | ControllerAction::Right => {}
             }
         }
         EntryAction::None
@@ -336,6 +332,11 @@ impl PathPickerState {
     }
 
     fn selected_entry_action(&self) -> EntryAction {
+        if self.target == PathTarget::OutputCfg {
+            return self
+                .chosen_path()
+                .map_or(EntryAction::None, EntryAction::Choose);
+        }
         if self.target.is_directory_target()
             && self
                 .selected
@@ -447,6 +448,7 @@ enum EntryKind {
 
 enum EntryAction {
     None,
+    Cancel,
     Navigate(PathBuf),
     SelectFile(PathBuf),
     Choose(PathBuf),
@@ -715,7 +717,10 @@ mod tests {
 
         match picker.selected_entry_action() {
             EntryAction::Navigate(path) => assert_eq!(path, child),
-            EntryAction::None | EntryAction::SelectFile(_) | EntryAction::Choose(_) => {
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::SelectFile(_)
+            | EntryAction::Choose(_) => {
                 panic!("selected directory should navigate")
             }
         }
@@ -730,7 +735,10 @@ mod tests {
 
         match picker.selected_entry_action() {
             EntryAction::Choose(path) => assert_eq!(path, root),
-            EntryAction::None | EntryAction::Navigate(_) | EntryAction::SelectFile(_) => {
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::Navigate(_)
+            | EntryAction::SelectFile(_) => {
                 panic!("selected current directory should be chosen")
             }
         }
