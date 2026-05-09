@@ -2,10 +2,11 @@
 
 use std::fmt::Write;
 use std::fs;
+use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use dream_ini::{ImportOptions, IniImporter, serialize_cfg};
 
 fn round_trip(c: &mut Criterion) {

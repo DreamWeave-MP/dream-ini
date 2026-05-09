@@ -173,17 +173,18 @@ enum PreviewPageScroll {
 }
 
 impl eframe::App for GuiApp {
-    fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let context = ui.ctx().clone();
         let controller_actions = self.drain_controller_actions();
         let controller_actions_consumed =
-            self.handle_controller_actions(context, &controller_actions);
-        self.handle_shortcuts(context);
+            self.handle_controller_actions(&context, &controller_actions);
+        self.handle_shortcuts(&context);
         let controller_actions_for_ui: &[ControllerAction] = if controller_actions_consumed {
             &[]
         } else {
             &controller_actions
         };
-        egui::CentralPanel::default().show(context, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             self.show_current_mode(ui, controller_actions_for_ui);
         });
     }
