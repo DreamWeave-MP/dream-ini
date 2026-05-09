@@ -137,6 +137,9 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
     if let Some(value) = table.get::<Option<String>>("cfg_dir")? {
         options.cfg_dir = Some(PathBuf::from(value));
     }
+    if !options.data_dirs.is_empty() && options.data_dir_base.is_none() {
+        options.data_dir_base.clone_from(&options.cfg_dir);
+    }
 
     Ok(options)
 }
@@ -400,9 +403,6 @@ mod tests {
         register(&lua).unwrap();
         let module = lua.globals().get::<Table>("dream_ini").unwrap();
         let cfg = lua.create_table().unwrap();
-        let data_values = lua.create_table().unwrap();
-        data_values.set(1, "Data Files").unwrap();
-        cfg.set("data", data_values).unwrap();
         let data_local_values = lua.create_table().unwrap();
         data_local_values.set(1, "Local Data").unwrap();
         cfg.set("data-local", data_local_values).unwrap();
@@ -419,6 +419,9 @@ mod tests {
         let options = lua.create_table().unwrap();
         options.set("game_files", true).unwrap();
         options.set("archives", false).unwrap();
+        let option_data_dirs = lua.create_table().unwrap();
+        option_data_dirs.set(1, "Data Files").unwrap();
+        options.set("data_dirs", option_data_dirs).unwrap();
         options
             .set("cfg_dir", cfg_dir.to_string_lossy().as_ref())
             .unwrap();

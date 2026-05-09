@@ -4,7 +4,8 @@ use std::process::ExitCode;
 use dream_ini::{
     ImportError, ImportEvent, ImportOptions, ImportResult, ImportWarning, IniImporter,
     PreservedCfgUpdate, TextEncoding, apply_preserved_cfg_update, load_cfg_document,
-    save_cfg_output_to_path, save_resolved_configuration_to_path, serialize_cfg_output,
+    save_cfg_output_to_path, save_preserved_cfg_document_to_path,
+    save_resolved_configuration_to_path, serialize_cfg_output, serialize_preserved_cfg_document,
     serialize_resolved_configuration,
 };
 use eframe::egui;
@@ -535,7 +536,12 @@ impl ImportFormState {
             if self.relocated_existing_cfg_output() {
                 Ok(serialize_resolved_configuration(&config))
             } else {
-                Ok(config.to_string())
+                Ok(serialize_preserved_cfg_document(
+                    &config,
+                    &cfg_path,
+                    &self.preserved_update(),
+                    &result.changed_keys,
+                ))
             }
         } else {
             serialize_cfg_output(&result.cfg, &self.output_reference_dir())
@@ -560,9 +566,14 @@ impl ImportFormState {
                     )
                     .map_err(GuiImportError::Import)?;
                     if same_cfg_context(&cfg_path, &output_path) {
-                        config.save_to_path(&output_path).map_err(|error| {
-                            GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
-                        })?;
+                        save_preserved_cfg_document_to_path(
+                            &config,
+                            &cfg_path,
+                            &output_path,
+                            &self.preserved_update(),
+                            &result.changed_keys,
+                        )
+                        .map_err(GuiImportError::Import)?;
                     } else {
                         save_resolved_configuration_to_path(&config, &output_path)
                             .map_err(GuiImportError::Import)?;
@@ -585,9 +596,14 @@ impl ImportFormState {
                     &result.changed_keys,
                 )
                 .map_err(GuiImportError::Import)?;
-                config.save_to_path(&cfg_path).map_err(|error| {
-                    GuiImportError::Import(ImportError::OpenMwConfig(error.to_string()))
-                })?;
+                save_preserved_cfg_document_to_path(
+                    &config,
+                    &cfg_path,
+                    &cfg_path,
+                    &self.preserved_update(),
+                    &result.changed_keys,
+                )
+                .map_err(GuiImportError::Import)?;
                 Ok(Some(cfg_path))
             }
         }

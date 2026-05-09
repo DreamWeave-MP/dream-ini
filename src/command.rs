@@ -5,7 +5,8 @@ use clap::Parser;
 use dream_ini::{
     ImportOptions, ImportResult, IniImporter, PreservedCfgUpdate, TextEncoding,
     apply_preserved_cfg_update, load_cfg_document, save_cfg_output_to_path,
-    save_resolved_configuration_to_path, serialize_cfg_output,
+    save_preserved_cfg_document_to_path, save_resolved_configuration_to_path, serialize_cfg_output,
+    serialize_preserved_cfg_document,
 };
 
 use crate::cli::Cli;
@@ -199,7 +200,13 @@ fn write_result_output(
                 &result.changed_keys,
             )?;
             if same_cfg_context(cfg_path, &output_path) {
-                config.save_to_path(&output_path)?;
+                save_preserved_cfg_document_to_path(
+                    &config,
+                    cfg_path,
+                    &output_path,
+                    &mode.update,
+                    &result.changed_keys,
+                )?;
             } else {
                 save_resolved_configuration_to_path(&config, &output_path)?;
             }
@@ -223,7 +230,12 @@ fn write_result_output(
                     &mode.update,
                     &result.changed_keys,
                 )?;
-                config.to_string()
+                serialize_preserved_cfg_document(
+                    &config,
+                    cfg_path,
+                    &mode.update,
+                    &result.changed_keys,
+                )
             } else {
                 serialize_cfg_output(&result.cfg, user_config_dir)?
             }

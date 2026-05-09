@@ -52,6 +52,62 @@ pub fn save_resolved_configuration_to_path(
     Ok(())
 }
 
+/// Writes the cfg layer that was loaded from `source_path` without flattening inherited configs.
+///
+/// # Errors
+/// Returns [`ImportError`] if writing the destination fails.
+pub fn save_preserved_cfg_document_to_path(
+    config: &OpenMWConfiguration,
+    source_path: &Path,
+    output_path: &Path,
+    update: &PreservedCfgUpdate,
+    changed_keys: &BTreeSet<String>,
+) -> Result<(), ImportError> {
+    write_atomic(
+        output_path,
+        serialize_preserved_cfg_document(config, source_path, update, changed_keys).as_bytes(),
+    )?;
+    Ok(())
+}
+
+#[must_use]
+pub fn serialize_preserved_cfg_document(
+    config: &OpenMWConfiguration,
+    source_path: &Path,
+    update: &PreservedCfgUpdate,
+    changed_keys: &BTreeSet<String>,
+) -> String {
+    let mut write_keys = changed_keys.clone();
+    if update.data_local.is_some() {
+        write_keys.insert("data-local".to_owned());
+    }
+    if update.resources.is_some() {
+        write_keys.insert("resources".to_owned());
+    }
+    if update.user_data.is_some() {
+        write_keys.insert("user-data".to_owned());
+    }
+    let user_config_path = config.user_config_path().join("openmw.cfg");
+    let mut document = String::new();
+    for setting in config.settings_matching(|setting| {
+        let source = setting.meta().source_config();
+        source == source_path
+            || (source == user_config_path
+                && setting_key(setting).is_some_and(|key| write_keys.contains(&key)))
+    }) {
+        document.push_str(&setting.to_string());
+    }
+    document
+}
+
+fn setting_key(setting: &impl ToString) -> Option<String> {
+    let text = setting.to_string();
+    text.lines()
+        .last()?
+        .split_once('=')
+        .map(|(key, _)| key.to_owned())
+}
+
 /// Import changes that should be applied to a preserving `openmw.cfg` document.
 #[derive(Debug, Clone)]
 pub struct PreservedCfgUpdate {
@@ -85,9 +141,13 @@ pub fn serialize_cfg_output(cfg: &MultiMap, user_config_dir: &Path) -> Result<St
 /// if writing the destination fails.
 pub fn save_cfg_output_to_path(cfg: &MultiMap, output_path: &Path) -> Result<(), ImportError> {
     let user_config_dir = output_path.parent().unwrap_or_else(|| Path::new(""));
-    configuration_from_multimap_preserving(cfg, user_config_dir)?
-        .save_to_path(output_path)
-        .map_err(|error| config_error(&error))
+    write_atomic(
+        output_path,
+        configuration_from_multimap_preserving(cfg, user_config_dir)?
+            .to_string()
+            .as_bytes(),
+    )?;
+    Ok(())
 }
 
 /// Applies imported cfg values to an existing preserving `openmw-config` document.

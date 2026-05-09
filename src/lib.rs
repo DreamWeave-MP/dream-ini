@@ -53,7 +53,8 @@ pub use events::ImportEvent;
 pub use importer::{ImportOptions, ImportReport, ImportResult, IniImporter};
 pub use openmw_cfg::{
     PreservedCfgUpdate, apply_preserved_cfg_update, load_cfg_document, save_cfg_output_to_path,
-    save_resolved_cfg_to_path, save_resolved_configuration_to_path, serialize_cfg_output,
+    save_preserved_cfg_document_to_path, save_resolved_cfg_to_path,
+    save_resolved_configuration_to_path, serialize_cfg_output, serialize_preserved_cfg_document,
     serialize_resolved_cfg, serialize_resolved_configuration,
 };
 pub use parser::{

@@ -350,6 +350,48 @@ fn existing_cfg_output_preserves_comments_and_relative_paths() {
 }
 
 #[test]
+fn same_context_existing_cfg_output_does_not_flatten_config_chain() {
+    let dir = unique_test_dir("same-context-config-chain");
+    let base_dir = dir.join("base");
+    fs::create_dir_all(&base_dir).unwrap();
+    fs::create_dir_all(dir.join("resources")).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    let output_cfg = dir.join("out.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(base_dir.join("openmw.cfg"), "data=base-data\nno-sound=0\n").unwrap();
+    fs::write(
+        &cfg,
+        concat!(
+            "# keep the chain, not the composed base settings\n",
+            "config=base\n",
+            "resources=resources\n",
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("config=base\n"));
+    assert!(written.contains("resources=resources\n"));
+    assert!(written.contains("no-sound=1\n"));
+    assert!(!written.contains("data=base-data\n"));
+    assert!(!written.contains("no-sound=0\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn relocated_existing_cfg_output_uses_resolved_paths() {
     let dir = unique_test_dir("relocated-existing-cfg");
     let source_dir = dir.join("source");
