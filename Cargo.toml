@@ -16,7 +16,6 @@ encoding_rs = "0.8"
 eframe = { version = "0.34", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui = { version = "0.34", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
-miniquad = { version = "0.4.8", optional = true }
 mlua = { version = "0.11", optional = true, features = ["luajit52", "vendored"] }
 openmw-config = "1.0.5"
 
@@ -34,7 +33,7 @@ default = ["gui"]
 controller-support = ["dep:gilrs", "dep:libc"]
 gui = ["dep:eframe", "dep:egui", "dep:image", "controller-support"]
 lua = ["dep:mlua"]
-portmaster-gui = ["dep:egui", "dep:miniquad", "controller-support"]
+portmaster-gui = ["dep:egui", "controller-support"]
 
 [dev-dependencies]
 criterion = "0.8"
