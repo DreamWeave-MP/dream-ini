@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ impl std::fmt::Debug for ControllerWorker {
 }
 
 impl ControllerWorker {
-    pub(super) fn spawn(sender: Sender<ControllerAction>, context: egui::Context) -> Self {
+    pub(super) fn spawn(sender: SyncSender<ControllerAction>, context: egui::Context) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let handle = thread::Builder::new()
@@ -120,7 +120,7 @@ impl WorkerState {
     }
 }
 
-fn run_worker(sender: &Sender<ControllerAction>, context: &egui::Context, stop: &AtomicBool) {
+fn run_worker(sender: &SyncSender<ControllerAction>, context: &egui::Context, stop: &AtomicBool) {
     let mut state = WorkerState::new();
     while !stop.load(Ordering::Relaxed) {
         let actions = state.poll();
@@ -131,10 +131,11 @@ fn run_worker(sender: &Sender<ControllerAction>, context: &egui::Context, stop: 
 
         let mut sent_action = false;
         for action in deduplicate(actions) {
-            if sender.send(action).is_err() {
-                return;
+            match sender.try_send(action) {
+                Ok(()) => sent_action = true,
+                Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Disconnected(_)) => return,
             }
-            sent_action = true;
         }
         if sent_action {
             context.request_repaint();

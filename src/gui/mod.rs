@@ -108,7 +108,7 @@ enum GuiMode {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        let controller_actions = self.controller.poll();
+        let controller_actions = self.controller.drain_actions();
         self.handle_controller_actions(context, &controller_actions);
         self.handle_shortcuts(context);
         egui::CentralPanel::default().show(context, |ui| {
@@ -123,13 +123,21 @@ impl GuiApp {
             return;
         }
 
-        if actions.contains(&ControllerAction::Cancel) {
-            context.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        if actions.contains(&ControllerAction::Accept)
-            && self.state.disabled_import_reason().is_none()
-        {
-            self.run_import();
+        for action in actions {
+            match action {
+                ControllerAction::Cancel => {
+                    context.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+                ControllerAction::Accept if self.state.disabled_import_reason().is_none() => {
+                    self.run_import();
+                }
+                ControllerAction::Accept
+                | ControllerAction::Up
+                | ControllerAction::Down
+                | ControllerAction::Left
+                | ControllerAction::Right => {}
+            }
         }
     }
 

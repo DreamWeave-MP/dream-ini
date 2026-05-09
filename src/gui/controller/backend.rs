@@ -1,4 +1,4 @@
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 
 use eframe::egui;
 
@@ -8,7 +8,7 @@ use super::ControllerAction;
 pub(super) struct ControllerWorker;
 
 impl ControllerWorker {
-    pub(super) fn spawn(_sender: Sender<ControllerAction>, _context: egui::Context) -> Self {
+    pub(super) fn spawn(_sender: SyncSender<ControllerAction>, _context: egui::Context) -> Self {
         Self
     }
 }

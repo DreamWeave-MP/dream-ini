@@ -8,6 +8,9 @@ use std::sync::mpsc::{self, Receiver};
 
 use eframe::egui;
 
+const MAX_QUEUED_CONTROLLER_ACTIONS: usize = 64;
+const MAX_DRAINED_CONTROLLER_ACTIONS: usize = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum ControllerAction {
     Up,
@@ -21,20 +24,23 @@ pub(super) enum ControllerAction {
 #[derive(Debug)]
 pub(super) struct Controller {
     receiver: Receiver<ControllerAction>,
-    _worker: Option<backend::ControllerWorker>,
+    worker: Option<backend::ControllerWorker>,
 }
 
 impl Controller {
     pub(super) fn new(context: egui::Context) -> Self {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(MAX_QUEUED_CONTROLLER_ACTIONS);
         Self {
             receiver,
-            _worker: Some(backend::ControllerWorker::spawn(sender, context)),
+            worker: Some(backend::ControllerWorker::spawn(sender, context)),
         }
     }
 
-    pub(super) fn poll(&mut self) -> Vec<ControllerAction> {
-        self.receiver.try_iter().collect()
+    pub(super) fn drain_actions(&mut self) -> Vec<ControllerAction> {
+        self.receiver
+            .try_iter()
+            .take(MAX_DRAINED_CONTROLLER_ACTIONS)
+            .collect()
     }
 }
 
@@ -43,8 +49,14 @@ impl Default for Controller {
         let (_sender, receiver) = mpsc::channel();
         Self {
             receiver,
-            _worker: None,
+            worker: None,
         }
+    }
+}
+
+impl Drop for Controller {
+    fn drop(&mut self) {
+        drop(self.worker.take());
     }
 }
 
@@ -73,6 +85,6 @@ mod tests {
 
     #[test]
     fn default_controller_starts_quiet() {
-        assert!(Controller::default().poll().is_empty());
+        assert!(Controller::default().drain_actions().is_empty());
     }
 }

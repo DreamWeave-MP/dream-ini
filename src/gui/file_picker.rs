@@ -78,10 +78,13 @@ impl PathPickerState {
         localizer: Localizer,
         controller_actions: &[ControllerAction],
     ) -> PickOutcome {
-        if ui.input(|input| input.key_pressed(egui::Key::Escape))
-            || controller_actions.contains(&ControllerAction::Cancel)
-        {
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             return PickOutcome::Cancelled;
+        }
+        for action in controller_actions {
+            if *action == ControllerAction::Cancel {
+                return PickOutcome::Cancelled;
+            }
         }
 
         let mut outcome = PickOutcome::None;
@@ -287,21 +290,24 @@ impl PathPickerState {
         ui: &egui::Ui,
         controller_actions: &[ControllerAction],
     ) -> EntryAction {
-        if ui.input(|input| input.key_pressed(egui::Key::ArrowUp))
-            || controller_actions.contains(&ControllerAction::Up)
-        {
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
             self.move_selection(SelectionStep::Previous);
         }
-        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown))
-            || controller_actions.contains(&ControllerAction::Down)
-        {
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
             self.move_selection(SelectionStep::Next);
         }
 
-        if ui.input(|input| input.key_pressed(egui::Key::Enter))
-            || controller_actions.contains(&ControllerAction::Accept)
-        {
+        if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
             return self.selected_entry_action();
+        }
+
+        for action in controller_actions {
+            match action {
+                ControllerAction::Up => self.move_selection(SelectionStep::Previous),
+                ControllerAction::Down => self.move_selection(SelectionStep::Next),
+                ControllerAction::Accept => return self.selected_entry_action(),
+                ControllerAction::Cancel | ControllerAction::Left | ControllerAction::Right => {}
+            }
         }
         EntryAction::None
     }
@@ -330,6 +336,14 @@ impl PathPickerState {
     }
 
     fn selected_entry_action(&self) -> EntryAction {
+        if self.target.is_directory_target()
+            && self
+                .selected
+                .as_ref()
+                .is_some_and(|path| path == &self.current_dir)
+        {
+            return EntryAction::Choose(self.current_dir.clone());
+        }
         let Some(index) = self.selected_entry_index() else {
             return EntryAction::None;
         };
@@ -703,6 +717,21 @@ mod tests {
             EntryAction::Navigate(path) => assert_eq!(path, child),
             EntryAction::None | EntryAction::SelectFile(_) | EntryAction::Choose(_) => {
                 panic!("selected directory should navigate")
+            }
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn keyboard_accept_chooses_current_directory_for_directory_targets() {
+        let root = unique_temp_dir();
+        let picker = PathPickerState::new(PathTarget::UserDataDir, Some(&root));
+
+        match picker.selected_entry_action() {
+            EntryAction::Choose(path) => assert_eq!(path, root),
+            EntryAction::None | EntryAction::Navigate(_) | EntryAction::SelectFile(_) => {
+                panic!("selected current directory should be chosen")
             }
         }
 
