@@ -10,10 +10,12 @@ use dream_ini::{
 };
 use eframe::egui;
 
+use self::controller::ControllerAction;
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
 use crate::desktop_entry::{APP_ID, APP_NAME};
 
+mod controller;
 mod file_picker;
 mod localization;
 
@@ -61,6 +63,7 @@ fn window_icon() -> egui::IconData {
 }
 
 struct GuiApp {
+    controller: controller::Controller,
     localizer: Localizer,
     state: ImportFormState,
     result: Option<GuiImportResult>,
@@ -71,6 +74,7 @@ struct GuiApp {
 impl Default for GuiApp {
     fn default() -> Self {
         Self {
+            controller: controller::Controller::default(),
             localizer: Localizer::default(),
             state: ImportFormState::default(),
             result: None,
@@ -87,6 +91,7 @@ enum GuiMode {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_controller_input(context);
         self.handle_shortcuts(context);
         egui::CentralPanel::default().show(context, |ui| {
             self.show_current_mode(ui);
@@ -95,6 +100,25 @@ impl eframe::App for GuiApp {
 }
 
 impl GuiApp {
+    fn apply_controller_input(&mut self, context: &egui::Context) {
+        let actions = self.controller.poll();
+        if actions.is_empty() {
+            return;
+        }
+
+        context.input_mut(|input| {
+            for action in actions {
+                input.events.push(egui::Event::Key {
+                    key: controller_action_key(action),
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        });
+    }
+
     fn handle_shortcuts(&mut self, context: &egui::Context) {
         if !matches!(self.mode, GuiMode::ImportForm) {
             return;
@@ -447,6 +471,17 @@ impl GuiApp {
             PathTarget::ResourcesDir => self.state.resources = value,
             PathTarget::UserDataDir => self.state.user_data = value,
         }
+    }
+}
+
+fn controller_action_key(action: ControllerAction) -> egui::Key {
+    match action {
+        ControllerAction::Up => egui::Key::ArrowUp,
+        ControllerAction::Down => egui::Key::ArrowDown,
+        ControllerAction::Left => egui::Key::ArrowLeft,
+        ControllerAction::Right => egui::Key::ArrowRight,
+        ControllerAction::Accept => egui::Key::Enter,
+        ControllerAction::Cancel => egui::Key::Escape,
     }
 }
 
