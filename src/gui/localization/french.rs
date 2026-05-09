@@ -8,6 +8,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::EnglishLanguage => "Anglais",
         UiText::FrenchLanguage => "Français",
         UiText::GermanLanguage => "Allemand",
+        UiText::RussianLanguage => "Russe",
         UiText::SpanishLanguage => "Espagnol",
         UiText::SourceSection => "Fichiers d’entrée",
         UiText::Existing => "Existant",

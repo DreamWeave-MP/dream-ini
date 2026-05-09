@@ -286,6 +286,11 @@ impl GuiApp {
                     );
                     ui.selectable_value(
                         &mut language,
+                        UiLanguage::Russian,
+                        self.localizer.text(UiText::RussianLanguage),
+                    );
+                    ui.selectable_value(
+                        &mut language,
                         UiLanguage::Spanish,
                         self.localizer.text(UiText::SpanishLanguage),
                     );
@@ -434,6 +439,7 @@ fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
         UiLanguage::English => localizer.text(UiText::EnglishLanguage),
         UiLanguage::French => localizer.text(UiText::FrenchLanguage),
         UiLanguage::German => localizer.text(UiText::GermanLanguage),
+        UiLanguage::Russian => localizer.text(UiText::RussianLanguage),
         UiLanguage::Spanish => localizer.text(UiText::SpanishLanguage),
     }
 }
