@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
@@ -11,6 +11,7 @@ use dream_ini::{ImportOptions, IniImporter, serialize_cfg};
 fn round_trip(c: &mut Criterion) {
     let dir = unique_bench_dir();
     fs::create_dir_all(&dir).expect("create benchmark directory");
+    create_archives(&dir);
     let ini = dir.join("Morrowind.ini");
     let cfg = dir.join("openmw.cfg");
 
@@ -79,7 +80,9 @@ fn large_openmw_cfg() -> String {
 }
 
 fn unique_bench_dir() -> PathBuf {
-    std::env::temp_dir().join(format!(
+    let temp_dir = std::env::temp_dir();
+    let temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
+    temp_dir.join(format!(
         "dream-ini-bench-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -87,6 +90,15 @@ fn unique_bench_dir() -> PathBuf {
             .expect("system time after Unix epoch")
             .as_nanos()
     ))
+}
+
+fn create_archives(dir: &Path) {
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).expect("create benchmark data directory");
+    fs::write(data_dir.join("Morrowind.bsa"), []).expect("write base archive");
+    for index in 0..128 {
+        fs::write(data_dir.join(format!("Archive{index}.bsa")), []).expect("write archive");
+    }
 }
 
 criterion_group!(benches, round_trip);
