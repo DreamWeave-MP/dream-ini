@@ -19,7 +19,7 @@ fn main() -> ExitCode {
 
     #[cfg(all(not(feature = "gui"), feature = "portmaster-gui"))]
     if std::env::args_os().len() == 1 {
-        return gui::run_portmaster_probe();
+        return gui::run_portmaster_gui();
     }
 
     match command::run() {

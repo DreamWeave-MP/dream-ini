@@ -39,7 +39,7 @@ const CONTROLLER_PREVIEW_SCROLL_PIXELS: f32 = 72.0;
 const CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS: f32 = 480.0;
 
 #[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
-pub(crate) use portmaster::run as run_portmaster_probe;
+pub(crate) use portmaster::run as run_portmaster_gui;
 
 #[cfg(feature = "gui")]
 pub(crate) fn run() -> ExitCode {

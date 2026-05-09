@@ -19,11 +19,11 @@ use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use std::thread;
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "linux")]
-use super::controller::{Controller, ControllerAction, ControllerEvent};
+use super::{GuiApp, GuiShell};
 
 const LOG_FILE_NAME: &str = "dream-ini-portmaster.log";
 #[cfg(target_os = "linux")]
@@ -32,8 +32,6 @@ const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 #[cfg(target_os = "linux")]
 const FRAME_DELAY: Duration = Duration::from_millis(33);
-#[cfg(target_os = "linux")]
-const AUTO_EXIT_AFTER: Duration = Duration::from_secs(15);
 #[cfg(target_os = "linux")]
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 #[cfg(target_os = "linux")]
@@ -44,9 +42,6 @@ const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RENDER_PIXELS: usize = 1024 * 768;
 #[cfg(target_os = "linux")]
 const MAX_TEXTURE_BYTES: usize = 8 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const HEARTBEAT_RENDER_AFTER: Duration = Duration::from_millis(250);
-
 type SharedLog = Arc<Mutex<File>>;
 
 pub(crate) fn run() -> ExitCode {
@@ -54,7 +49,7 @@ pub(crate) fn run() -> ExitCode {
     install_panic_hook(log.clone());
     log_startup(log.as_ref());
 
-    match run_probe(log.as_ref()) {
+    match run_gui(log.as_ref()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             write_log(log.as_ref(), format!("fatal error: {error}"));
@@ -64,7 +59,7 @@ pub(crate) fn run() -> ExitCode {
 }
 
 #[cfg(target_os = "linux")]
-fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
+fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
     let mut framebuffer = Framebuffer::open()?;
     framebuffer.log_info(log);
     framebuffer.validate_format()?;
@@ -77,66 +72,43 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
             env::var_os(DRAW_ENV_VAR)
         ),
     );
+    if !draw_enabled {
+        write_log(
+            log,
+            "framebuffer drawing disabled; exiting without launching GUI",
+        );
+        return Ok(());
+    }
 
     let egui_context = egui::Context::default();
-    let mut controller = Controller::new(egui_context.clone());
-    write_log(log, "controller worker started");
+    let mut app = GuiApp::new(egui_context.clone());
+    let mut shell = PortMasterGuiShell::new(log);
+    write_log(log, "shared GUI and controller worker started");
 
-    let start = Instant::now();
-    let mut input_count = 0_u64;
     let mut frame_count = 0_u64;
-    let mut rendered_frame_count = 0_u64;
     let mut snapshots = Vec::new();
     let mut renderer = SoftwareRenderer::default();
-    let mut last_action = "none".to_owned();
-    let mut phase = 0_u32;
-    let mut dirty = true;
-    let mut last_render = Instant::now()
-        .checked_sub(HEARTBEAT_RENDER_AFTER)
-        .unwrap_or_else(Instant::now);
-    let mut probe_error = None;
-    let exit_reason = 'probe: loop {
-        if drain_controller_events(
-            &mut controller,
-            &mut input_count,
-            &mut phase,
-            &mut last_action,
-            &mut dirty,
+    let mut gui_error = None;
+    let exit_reason = 'gui: loop {
+        let log_frame = frame_count == 0 || frame_count.is_multiple_of(30);
+        let mut frame = GuiFrame {
+            context: &egui_context,
+            app: &mut app,
+            shell: &mut shell,
+            snapshots: &mut snapshots,
             log,
-        ) {
-            write_log(log, "quit requested by cancel action");
-            break 'probe "cancel";
-        }
-
-        let heartbeat_due = last_render.elapsed() >= HEARTBEAT_RENDER_AFTER;
-        if draw_enabled && (dirty || heartbeat_due) {
-            rendered_frame_count = rendered_frame_count.saturating_add(1);
-            phase = phase.wrapping_add(1);
-            let state = ProbeUiState {
-                frame_count: rendered_frame_count,
-                last_action: &last_action,
-                phase,
-            };
-            if let Err(error) = framebuffer.draw_egui_probe(
-                &mut renderer,
-                &egui_context,
-                &state,
-                &mut snapshots,
-                log,
-                rendered_frame_count == 1 || heartbeat_due,
-            ) {
-                write_log(log, format!("draw failed: {error}"));
-                probe_error = Some(error);
-                break 'probe "draw-error";
-            }
-            dirty = false;
-            last_render = Instant::now();
+            log_frame,
+        };
+        if let Err(error) = framebuffer.draw_egui_gui(&mut renderer, &mut frame) {
+            write_log(log, format!("draw failed: {error}"));
+            gui_error = Some(error);
+            break 'gui "draw-error";
         }
         frame_count = frame_count.saturating_add(1);
 
-        if start.elapsed() >= AUTO_EXIT_AFTER {
-            write_log(log, format!("auto-exit after {frame_count} frames"));
-            break 'probe "auto-exit";
+        if shell.exit_requested() {
+            write_log(log, "quit requested by GUI shell");
+            break 'gui "exit-requested";
         }
 
         thread::sleep(FRAME_DELAY);
@@ -144,21 +116,17 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
 
     write_log(
         log,
-        format!("leaving framebuffer probe reason={exit_reason}"),
+        format!("leaving framebuffer GUI reason={exit_reason} frames={frame_count}"),
     );
-    let restore_result = if draw_enabled {
-        framebuffer.restore_snapshots(&snapshots, log)
-    } else {
-        Ok(())
-    };
+    let restore_result = framebuffer.restore_snapshots(&snapshots, log);
     if let Err(error) = &restore_result {
         write_log(log, format!("framebuffer restore failed: {error}"));
     }
-    write_log(log, "dropping controller worker");
-    drop(controller);
+    write_log(log, "dropping shared GUI and controller worker");
+    drop(app);
     write_log(log, "controller worker dropped");
-    write_log(log, "framebuffer probe complete");
-    if let Some(error) = probe_error {
+    write_log(log, "framebuffer GUI complete");
+    if let Some(error) = gui_error {
         Err(error)
     } else {
         restore_result
@@ -166,51 +134,58 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn drain_controller_events(
-    controller: &mut Controller,
-    input_count: &mut u64,
-    phase: &mut u32,
-    last_action: &mut String,
-    dirty: &mut bool,
-    log: Option<&SharedLog>,
-) -> bool {
-    for event in controller.drain_events() {
-        match event {
-            ControllerEvent::Action(action) => {
-                *input_count = input_count.saturating_add(1);
-                *phase = phase.wrapping_add(action_phase_step(action));
-                action_name(action).clone_into(last_action);
-                *dirty = true;
-                write_log(
-                    log,
-                    format!(
-                        "controller action={} count={}",
-                        action_name(action),
-                        *input_count
-                    ),
-                );
-                if action == ControllerAction::Cancel {
-                    return true;
-                }
-            }
-            ControllerEvent::Available(available) => {
-                *dirty = true;
-                write_log(
-                    log,
-                    format!("controller availability changed available={available}"),
-                );
-            }
-            ControllerEvent::PurgeQueuedActions => {
-                write_log(log, "controller purge queued actions");
-            }
+#[derive(Debug, Default)]
+struct PortMasterGuiShell {
+    exit_requested: bool,
+    clipboard_unsupported_logged: bool,
+    log: Option<SharedLog>,
+}
+
+#[cfg(target_os = "linux")]
+impl PortMasterGuiShell {
+    fn new(log: Option<&SharedLog>) -> Self {
+        Self {
+            exit_requested: false,
+            clipboard_unsupported_logged: false,
+            log: log.cloned(),
         }
     }
-    false
+
+    const fn exit_requested(&self) -> bool {
+        self.exit_requested
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl GuiShell for PortMasterGuiShell {
+    fn request_exit(&mut self, _context: &egui::Context) {
+        self.exit_requested = true;
+    }
+
+    fn copy_text(&mut self, _context: &egui::Context, _text: String) {
+        if !self.clipboard_unsupported_logged {
+            write_log(
+                self.log.as_ref(),
+                "clipboard requested, but PortMaster framebuffer shell has no clipboard",
+            );
+            self.clipboard_unsupported_logged = true;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct GuiFrame<'a, S: GuiShell> {
+    context: &'a egui::Context,
+    app: &'a mut GuiApp,
+    shell: &'a mut S,
+    snapshots: &'a mut Vec<FramebufferSnapshot>,
+    log: Option<&'a SharedLog>,
+    log_frame: bool,
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
-    let message = "PortMaster framebuffer probe is only supported on Linux";
+fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
+    let message = "PortMaster framebuffer GUI is only supported on Linux";
     write_log(log, message);
     eprintln!("{message}");
     Err(io::Error::other(message))
@@ -346,37 +321,26 @@ impl Framebuffer {
         );
     }
 
-    fn draw_egui_probe(
+    fn draw_egui_gui<S: GuiShell>(
         &mut self,
         renderer: &mut SoftwareRenderer,
-        egui_context: &egui::Context,
-        state: &ProbeUiState<'_>,
-        snapshots: &mut Vec<FramebufferSnapshot>,
-        log: Option<&SharedLog>,
-        log_frame: bool,
+        frame: &mut GuiFrame<'_, S>,
     ) -> io::Result<()> {
         self.var = get_var_info(&self.file).map_err(|error| {
             write_log(
-                log,
+                frame.log,
                 format!("failed to refresh framebuffer variable info: {error}"),
             );
             error
         })?;
         self.validate_format()?;
         let viewport = visible_viewport(&self.fix, &self.var)?;
-        if log_frame {
-            log_visible_viewport(log, &viewport);
-            log_derived_page_info(log, &self.var);
+        if frame.log_frame {
+            log_visible_viewport(frame.log, &viewport);
+            log_derived_page_info(frame.log, &self.var);
         }
-        renderer.render(
-            egui_context,
-            viewport.width,
-            viewport.height,
-            state,
-            log,
-            log_frame,
-        )?;
-        self.capture_snapshot_if_needed(snapshots, &viewport, log)?;
+        renderer.render(viewport.width, viewport.height, frame)?;
+        self.capture_snapshot_if_needed(frame.snapshots, &viewport, frame.log)?;
         self.blit_rgba_surface(renderer.surface(), &viewport)
     }
 
@@ -590,14 +554,11 @@ struct SoftwareRenderer {
 
 #[cfg(target_os = "linux")]
 impl SoftwareRenderer {
-    fn render(
+    fn render<S: GuiShell>(
         &mut self,
-        context: &egui::Context,
         width: usize,
         height: usize,
-        state: &ProbeUiState<'_>,
-        log: Option<&SharedLog>,
-        log_frame: bool,
+        frame: &mut GuiFrame<'_, S>,
     ) -> io::Result<()> {
         self.surface.resize(width, height)?;
         self.surface.clear([17, 20, 28, 255]);
@@ -610,12 +571,14 @@ impl SoftwareRenderer {
             max_texture_side: Some(1024),
             ..Default::default()
         };
-        let output = context.run_ui(raw_input, |ui| draw_probe_ui(ui, state));
+        let output = frame
+            .context
+            .run_ui(raw_input, |ui| frame.app.ui(ui, frame.shell));
         self.textures.apply(&output.textures_delta)?;
-        let primitives = context.tessellate(output.shapes, 1.0);
-        if log_frame {
+        let primitives = frame.context.tessellate(output.shapes, 1.0);
+        if frame.log_frame {
             write_log(
-                log,
+                frame.log,
                 format!(
                     "software renderer surface={}x{} bytes={} textures={} texture_bytes={} primitives={}",
                     self.surface.width,
@@ -931,36 +894,6 @@ impl ClipBounds {
     const fn is_empty(self) -> bool {
         self.min_x >= self.max_x || self.min_y >= self.max_y
     }
-}
-
-#[cfg(target_os = "linux")]
-struct ProbeUiState<'a> {
-    frame_count: u64,
-    last_action: &'a str,
-    phase: u32,
-}
-
-#[cfg(target_os = "linux")]
-fn draw_probe_ui(ui: &mut egui::Ui, state: &ProbeUiState<'_>) {
-    egui::CentralPanel::default()
-        .frame(egui::Frame::default().fill(egui::Color32::from_rgb(17, 20, 28)))
-        .show_inside(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(16.0);
-                ui.heading("Dream INI PortMaster");
-                ui.label("Framebuffer egui probe");
-                ui.add_space(8.0);
-                ui.label(format!("Frame: {}", state.frame_count));
-                ui.label(format!("Last controller action: {}", state.last_action));
-                ui.label("Press B/Cancel to exit");
-                ui.add_space(8.0);
-                let red = u8::try_from(80 + (state.phase % 120)).unwrap_or(80);
-                let color = egui::Color32::from_rgb(red, 140, 220);
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(96.0, 10.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, 5.0, color);
-            });
-        });
 }
 
 #[cfg(target_os = "linux")]
@@ -1453,46 +1386,6 @@ fn write_pixel(pixel: &mut [u8], bytes_per_pixel: usize, packed: u32) {
     pixel[..bytes_per_pixel].copy_from_slice(&bytes[..bytes_per_pixel]);
 }
 
-#[cfg(target_os = "linux")]
-const fn action_phase_step(action: ControllerAction) -> u32 {
-    match action {
-        ControllerAction::Up => 17,
-        ControllerAction::Down => 29,
-        ControllerAction::Left => 41,
-        ControllerAction::Right => 53,
-        ControllerAction::Accept => 83,
-        ControllerAction::Cancel => 127,
-        ControllerAction::ClearCurrent => 67,
-        ControllerAction::SelectCurrent => 71,
-        ControllerAction::ToggleHiddenDirectories => 73,
-        ControllerAction::PagePreviewDown => 79,
-        ControllerAction::ScrollPreviewLeft => 89,
-        ControllerAction::ScrollPreviewRight => 97,
-        ControllerAction::ScrollPreviewUp => 101,
-        ControllerAction::ScrollPreviewDown => 103,
-    }
-}
-
-#[cfg(target_os = "linux")]
-const fn action_name(action: ControllerAction) -> &'static str {
-    match action {
-        ControllerAction::Up => "up",
-        ControllerAction::Down => "down",
-        ControllerAction::Left => "left",
-        ControllerAction::Right => "right",
-        ControllerAction::Accept => "accept",
-        ControllerAction::Cancel => "cancel",
-        ControllerAction::ClearCurrent => "clear-current",
-        ControllerAction::SelectCurrent => "select-current",
-        ControllerAction::ToggleHiddenDirectories => "toggle-hidden-directories",
-        ControllerAction::PagePreviewDown => "page-preview-down",
-        ControllerAction::ScrollPreviewLeft => "scroll-preview-left",
-        ControllerAction::ScrollPreviewRight => "scroll-preview-right",
-        ControllerAction::ScrollPreviewUp => "scroll-preview-up",
-        ControllerAction::ScrollPreviewDown => "scroll-preview-down",
-    }
-}
-
 fn open_log() -> Option<File> {
     let paths = log_paths();
     for path in paths {
@@ -1647,6 +1540,17 @@ mod tests {
         ];
 
         assert_eq!(snapshot_bytes_used(&snapshots).expect("bytes used"), 40);
+    }
+
+    #[test]
+    fn portmaster_shell_records_exit_and_unsupported_clipboard() {
+        let mut shell = PortMasterGuiShell::new(None);
+
+        shell.copy_text(&egui::Context::default(), "fallback=1\n".to_owned());
+        shell.request_exit(&egui::Context::default());
+
+        assert!(shell.clipboard_unsupported_logged);
+        assert!(shell.exit_requested());
     }
 
     #[test]
