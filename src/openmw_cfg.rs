@@ -314,9 +314,50 @@ fn finish_atomic_write(
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    fs::rename(temp_path, path)?;
+    replace_file(temp_path, path)?;
     sync_parent_dir(parent);
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let source = wide_null(source);
+    let destination = wide_null(destination);
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn wide_null(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain([0]).collect()
 }
 
 fn temporary_path_for(path: &Path) -> PathBuf {
