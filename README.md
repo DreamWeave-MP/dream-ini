@@ -36,7 +36,7 @@ dream-ini -M > dream-ini.1
 
 When built with the default `gui` feature, running `dream-ini` with no arguments opens the graphical importer. The GUI uses the same explicit import model as the CLI: choose `Morrowind.ini`, optionally choose an existing `openmw.cfg`, pick import options, then either preview, save as a separate cfg, or update the existing cfg.
 
-Controller navigation is available in the GUI:
+Controller navigation is available in the GUI on Linux, Windows, and macOS:
 
 - D-pad or left stick: move between fields, picker entries, and result tabs.
 - A / South: activate the selected field, toggle checkboxes, open directories, or choose files.
