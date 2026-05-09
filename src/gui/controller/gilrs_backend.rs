@@ -86,17 +86,17 @@ impl WorkerState {
                 break;
             };
             input.extend(self.handle_event(event, now));
-            if input.actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
+            if input.actions.len() + input.repeat_actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
                 break;
             }
         }
         for gamepad in self.gamepads.values_mut() {
-            input.actions.extend(gamepad.repeater.poll(now));
-            if input.actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
+            input.repeat_actions.extend(gamepad.repeater.poll(now));
+            if input.actions.len() + input.repeat_actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
                 break;
             }
         }
-        input.actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
+        truncate_input_actions(&mut input, MAX_WORKER_ACTIONS_PER_TICK);
         input
     }
 
@@ -209,7 +209,7 @@ fn run_worker(sender: &ControllerEventSender, context: &egui::Context, stop: &At
             sender.purge_actions();
             send_event(sender, ControllerEvent::PurgeQueuedActions);
         }
-        if input.actions.is_empty() {
+        if input.actions.is_empty() && input.repeat_actions.is_empty() {
             thread::park_timeout(state.sleep_duration());
             continue;
         }
@@ -217,6 +217,11 @@ fn run_worker(sender: &ControllerEventSender, context: &egui::Context, stop: &At
         let mut sent_action = false;
         for action in input.actions {
             if send_event(sender, ControllerEvent::Action(action)) {
+                sent_action = true;
+            }
+        }
+        for action in input.repeat_actions {
+            if send_event(sender, ControllerEvent::RepeatAction(action)) {
                 sent_action = true;
             }
         }
@@ -228,6 +233,13 @@ fn run_worker(sender: &ControllerEventSender, context: &egui::Context, stop: &At
 
 fn send_event(sender: &ControllerEventSender, event: ControllerEvent) -> bool {
     sender.send(event)
+}
+
+fn truncate_input_actions(input: &mut InputActions, limit: usize) {
+    input.actions.truncate(limit);
+    input
+        .repeat_actions
+        .truncate(limit.saturating_sub(input.actions.len()));
 }
 
 #[derive(Debug, Default)]
@@ -247,7 +259,7 @@ fn button_pressed(button: Button, gamepad: &mut GamepadInputState, now: Instant)
             InputActions::default()
         } else {
             gamepad.held_buttons.push(button);
-            InputActions::repeated(gamepad.repeater.start(action, now))
+            InputActions::repeatable_press(gamepad.repeater.start(action, now))
         }
     })
 }

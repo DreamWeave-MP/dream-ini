@@ -124,7 +124,7 @@ impl WorkerState {
         self.devices.retain_mut(|device| match device.poll() {
             Ok(device_input) => {
                 input.extend(device_input);
-                input.actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
+                truncate_input_actions(&mut input, MAX_WORKER_ACTIONS_PER_POLL);
                 true
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
@@ -226,6 +226,13 @@ fn run_worker(
             send_event(sender, ControllerEvent::PurgeQueuedActions);
         }
         if input.actions.is_empty() {
+            for action in input.repeat_actions {
+                if send_event(sender, ControllerEvent::RepeatAction(action)) {
+                    context.request_repaint();
+                } else {
+                    log_controller_event(format_args!("dropped queued repeat action={action:?}"));
+                }
+            }
             continue;
         }
 
@@ -237,6 +244,13 @@ fn run_worker(
                 log_controller_event(format_args!("dropped queued action={action:?}"));
             }
         }
+        for action in input.repeat_actions {
+            if send_event(sender, ControllerEvent::RepeatAction(action)) {
+                sent_action = true;
+            } else {
+                log_controller_event(format_args!("dropped queued repeat action={action:?}"));
+            }
+        }
         if sent_action {
             context.request_repaint();
         }
@@ -245,6 +259,13 @@ fn run_worker(
 
 fn send_event(sender: &ControllerEventSender, event: ControllerEvent) -> bool {
     sender.send(event)
+}
+
+fn truncate_input_actions(input: &mut InputActions, limit: usize) {
+    input.actions.truncate(limit);
+    input
+        .repeat_actions
+        .truncate(limit.saturating_sub(input.actions.len()));
 }
 
 fn controller_log_enabled() -> bool {
@@ -397,8 +418,8 @@ impl InputDevice {
             }
         }
 
-        input.actions.extend(self.repeater.poll(now));
-        input.actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
+        input.repeat_actions.extend(self.repeater.poll(now));
+        truncate_input_actions(&mut input, MAX_WORKER_ACTIONS_PER_POLL);
         Ok(input)
     }
 
@@ -803,7 +824,7 @@ fn key_actions(
             1,
         ) => InputActions::action(action),
         (Some(action), 1) if action.is_repeatable() && held_buttons.insert(code) => {
-            InputActions::repeated(repeater.start(action, now))
+            InputActions::repeatable_press(repeater.start(action, now))
         }
         (Some(action), 1) if action.is_repeatable() => InputActions::default(),
         (Some(action), 0) if action_repeats(action) => {

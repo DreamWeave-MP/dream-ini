@@ -51,14 +51,9 @@ impl ControllerAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::gui) enum ControllerEvent {
     Action(ControllerAction),
+    RepeatAction(ControllerAction),
     Available(bool),
     PurgeQueuedActions,
-}
-
-impl ControllerEvent {
-    const fn is_repeatable_action(self) -> bool {
-        matches!(self, Self::Action(action) if action.is_repeatable())
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -89,7 +84,7 @@ impl ControllerEventQueue {
     fn push(&self, event: ControllerEvent) -> bool {
         let mut events = self.events.lock().expect("controller event queue poisoned");
         match event {
-            ControllerEvent::Action(_) => {
+            ControllerEvent::Action(_) | ControllerEvent::RepeatAction(_) => {
                 if events.len() >= MAX_QUEUED_CONTROLLER_ACTIONS {
                     return false;
                 }
@@ -101,10 +96,8 @@ impl ControllerEventQueue {
                 }
             }
             ControllerEvent::PurgeQueuedActions => {
-                events.retain(|queued| {
-                    !matches!(queued, ControllerEvent::PurgeQueuedActions)
-                        && !queued.is_repeatable_action()
-                });
+                events.retain(|queued| !matches!(queued, ControllerEvent::RepeatAction(_)));
+                events.retain(|queued| !matches!(queued, ControllerEvent::PurgeQueuedActions));
                 if events.len() >= MAX_QUEUED_CONTROLLER_ACTIONS {
                     events.pop_front();
                 }
@@ -115,10 +108,8 @@ impl ControllerEventQueue {
     }
 
     fn purge_actions(&self) {
-        self.events
-            .lock()
-            .expect("controller event queue poisoned")
-            .retain(|event| !event.is_repeatable_action());
+        let mut events = self.events.lock().expect("controller event queue poisoned");
+        events.retain(|event| !matches!(event, ControllerEvent::RepeatAction(_)));
     }
 
     fn drain(&self) -> Vec<ControllerEvent> {
@@ -208,16 +199,39 @@ mod tests {
     }
 
     #[test]
-    fn purge_event_drops_queued_actions() {
+    fn purge_event_keeps_initial_action_and_drops_repeat_actions() {
         let (mut controller, sender) = Controller::with_test_sender();
 
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::RepeatAction(ControllerAction::Down)));
         sender.purge_actions();
         assert!(sender.send(ControllerEvent::PurgeQueuedActions));
 
         assert_eq!(
             controller.drain_events(),
-            vec![ControllerEvent::PurgeQueuedActions]
+            vec![
+                ControllerEvent::Action(ControllerAction::Down),
+                ControllerEvent::PurgeQueuedActions,
+            ]
+        );
+    }
+
+    #[test]
+    fn purge_events_preserve_multiple_initial_taps() {
+        let (mut controller, sender) = Controller::with_test_sender();
+
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::PurgeQueuedActions));
+        assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::PurgeQueuedActions));
+
+        assert_eq!(
+            controller.drain_events(),
+            vec![
+                ControllerEvent::Action(ControllerAction::Down),
+                ControllerEvent::Action(ControllerAction::Down),
+                ControllerEvent::PurgeQueuedActions,
+            ]
         );
     }
 
@@ -259,8 +273,10 @@ mod tests {
 
         assert!(sender.send(ControllerEvent::Available(true)));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::RepeatAction(ControllerAction::Down)));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Accept)));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Up)));
+        assert!(sender.send(ControllerEvent::RepeatAction(ControllerAction::Up)));
         assert!(sender.send(ControllerEvent::PurgeQueuedActions));
         assert!(sender.send(ControllerEvent::PurgeQueuedActions));
 
@@ -268,7 +284,9 @@ mod tests {
             controller.drain_events(),
             vec![
                 ControllerEvent::Available(true),
+                ControllerEvent::Action(ControllerAction::Down),
                 ControllerEvent::Action(ControllerAction::Accept),
+                ControllerEvent::Action(ControllerAction::Up),
                 ControllerEvent::PurgeQueuedActions,
             ]
         );

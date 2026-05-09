@@ -10,6 +10,7 @@ pub(super) const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
 #[derive(Debug, Default)]
 pub(super) struct InputActions {
     pub(super) actions: Vec<ControllerAction>,
+    pub(super) repeat_actions: Vec<ControllerAction>,
     pub(super) released: bool,
 }
 
@@ -17,6 +18,7 @@ impl InputActions {
     pub(super) fn action(action: ControllerAction) -> Self {
         Self {
             actions: vec![action],
+            repeat_actions: Vec::new(),
             released: false,
         }
     }
@@ -24,19 +26,22 @@ impl InputActions {
     pub(super) const fn released() -> Self {
         Self {
             actions: Vec::new(),
+            repeat_actions: Vec::new(),
             released: true,
         }
     }
 
-    pub(super) fn repeated(actions: Vec<ControllerAction>) -> Self {
+    pub(super) fn repeatable_press(actions: Vec<ControllerAction>) -> Self {
         Self {
             actions,
+            repeat_actions: Vec::new(),
             released: false,
         }
     }
 
     pub(super) fn extend(&mut self, other: Self) {
         self.actions.extend(other.actions);
+        self.repeat_actions.extend(other.repeat_actions);
         self.released |= other.released;
     }
 }

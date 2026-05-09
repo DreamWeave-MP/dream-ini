@@ -478,25 +478,29 @@ impl GuiApp {
 
 impl GuiApp {
     fn drain_controller_actions(&mut self) -> Vec<ControllerAction> {
-        let mut actions = Vec::new();
+        let mut actions = Vec::<(ControllerAction, bool)>::new();
         for event in self.controller.drain_events() {
             match event {
                 ControllerEvent::PurgeQueuedActions => {
-                    actions.retain(|action: &ControllerAction| !action.is_repeatable());
+                    actions.retain(|(_, repeat)| !*repeat);
+                }
+                ControllerEvent::RepeatAction(action) => {
+                    self.controller_navigation_visible = true;
+                    actions.push((action, true));
                 }
                 event => {
                     if let Some(action) = self.handle_controller_event(event) {
-                        actions.push(action);
+                        actions.push((action, false));
                     }
                 }
             }
         }
-        actions
+        actions.into_iter().map(|(action, _)| action).collect()
     }
 
     fn handle_controller_event(&mut self, event: ControllerEvent) -> Option<ControllerAction> {
         match event {
-            ControllerEvent::Action(action) => {
+            ControllerEvent::Action(action) | ControllerEvent::RepeatAction(action) => {
                 self.controller_navigation_visible = true;
                 Some(action)
             }
@@ -2736,19 +2740,24 @@ mod tests {
     }
 
     #[test]
-    fn controller_purge_event_clears_actions_drained_in_same_frame() {
+    fn controller_purge_event_collapses_repeatable_actions_drained_in_same_frame() {
         let mut app = GuiApp::new_without_controller_worker();
         let (controller, sender) = controller::Controller::with_test_sender();
         app.controller = controller;
 
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
+        assert!(sender.send(ControllerEvent::RepeatAction(ControllerAction::Down)));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Accept)));
         assert!(sender.send(ControllerEvent::PurgeQueuedActions));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Up)));
 
         assert_eq!(
             app.drain_controller_actions(),
-            vec![ControllerAction::Accept, ControllerAction::Up]
+            vec![
+                ControllerAction::Down,
+                ControllerAction::Accept,
+                ControllerAction::Up,
+            ]
         );
     }
 
