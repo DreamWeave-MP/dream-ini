@@ -73,16 +73,17 @@ impl WorkerState {
     }
 
     fn poll(&mut self) -> InputActions {
-        let Some(gilrs) = &mut self.gilrs else {
+        if self.gilrs.is_none() {
             self.gilrs = Gilrs::new().ok();
             thread::park_timeout(GILRS_RETRY_INTERVAL);
             return InputActions::default();
-        };
+        }
 
         let now = Instant::now();
         let mut input = InputActions::default();
         for _ in 0..MAX_GILRS_EVENTS_PER_TICK {
-            let Some(event) = gilrs.next_event() else {
+            let event = self.gilrs.as_mut().and_then(Gilrs::next_event);
+            let Some(event) = event else {
                 break;
             };
             input.extend(self.handle_event(event, now));

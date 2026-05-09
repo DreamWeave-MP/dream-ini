@@ -6,8 +6,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::cli::CliCommand;
-use crate::desktop_entry::APP_ID;
 use clap_complete::Shell;
 
 #[test]
@@ -101,7 +99,7 @@ fn run_with_install_launcher_command_writes_launcher_and_icon() {
             fonts: false,
             no_archives: false,
             encoding: None,
-            command: Some(CliCommand::InstallLauncher {
+            command: Some(crate::cli::CliCommand::InstallLauncher {
                 data_home: Some(dir.clone()),
             }),
         },
@@ -112,9 +110,10 @@ fn run_with_install_launcher_command_writes_launcher_and_icon() {
 
     #[cfg(target_os = "linux")]
     let (launcher, icon) = (
-        dir.join("applications").join(format!("{APP_ID}.desktop")),
+        dir.join("applications")
+            .join(format!("{}.desktop", crate::desktop_entry::APP_ID)),
         dir.join("icons/hicolor/512x512/apps")
-            .join(format!("{APP_ID}.png")),
+            .join(format!("{}.png", crate::desktop_entry::APP_ID)),
     );
     #[cfg(windows)]
     let (launcher, icon) = (
@@ -135,7 +134,7 @@ fn run_with_install_launcher_command_writes_launcher_and_icon() {
     assert!(
         fs::read_to_string(launcher)
             .unwrap()
-            .contains(&format!("Icon={APP_ID}"))
+            .contains(&format!("Icon={}", crate::desktop_entry::APP_ID))
     );
     assert!(!fs::read(icon).unwrap().is_empty());
     assert!(stderr.is_empty());

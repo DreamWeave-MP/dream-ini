@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::env;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -33,14 +32,14 @@ fn install_with_executable(
     let paths = linux_install_paths(&data_home);
 
     if let Some(parent) = paths.launcher.parent() {
-        fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)?;
     }
     if let Some(parent) = paths.icon.parent() {
-        fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)?;
     }
 
-    fs::write(&paths.launcher, desktop_entry(executable))?;
-    fs::write(&paths.icon, PNG_ICON_BYTES)?;
+    std::fs::write(&paths.launcher, desktop_entry(executable))?;
+    std::fs::write(&paths.icon, PNG_ICON_BYTES)?;
 
     Ok(paths)
 }
@@ -56,13 +55,13 @@ fn install_with_executable(
     let paths = windows_install_paths(&app_data);
 
     if let Some(parent) = paths.launcher.parent() {
-        fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)?;
     }
     if let Some(parent) = paths.icon.parent() {
-        fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent)?;
     }
 
-    fs::write(&paths.icon, ICO_ICON_BYTES)?;
+    std::fs::write(&paths.icon, ICO_ICON_BYTES)?;
     create_windows_shortcut(executable, &paths.icon, &paths.launcher)?;
 
     Ok(paths)
@@ -312,12 +311,12 @@ mod tests {
                 .join(format!("{APP_ID}.png"))
         );
         assert_eq!(
-            fs::read_to_string(paths.launcher).unwrap(),
+            std::fs::read_to_string(paths.launcher).unwrap(),
             desktop_entry(&executable)
         );
-        assert_eq!(fs::read(paths.icon).unwrap(), PNG_ICON_BYTES);
+        assert_eq!(std::fs::read(paths.icon).unwrap(), PNG_ICON_BYTES);
 
-        fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(windows)]
