@@ -97,7 +97,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         }
         UiText::OskTitle => "Pfad-Tastatur",
         UiText::OskControllerHelp => {
-            "Controller: Steuerkreuz/linker Stick bewegt • A drückt Taste • Y schaltet Shift • X löscht rückwärts • B/Escape bricht ab • Start/OK übernimmt"
+            "Controller: Steuerkreuz/linker Stick bewegt • A drückt Taste • B schaltet Shift • Y Leerzeichen • X löscht rückwärts • Select/Escape bricht ab • Start/OK übernimmt"
         }
         UiText::OskOk => "OK",
     }

@@ -324,6 +324,7 @@ impl PathPickerState {
                 ControllerAction::Accept => return self.selected_entry_action(),
                 ControllerAction::ClearCurrent
                 | ControllerAction::Shift
+                | ControllerAction::Space
                 | ControllerAction::PagePreviewDown
                 | ControllerAction::ScrollPreviewLeft
                 | ControllerAction::ScrollPreviewRight

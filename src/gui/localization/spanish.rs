@@ -97,7 +97,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         }
         UiText::OskTitle => "Teclado de ruta",
         UiText::OskControllerHelp => {
-            "Mando: cruceta/stick izquierdo mueve • A pulsa tecla • Y activa mayús • X borra atrás • B/Escape cancela • Start/OK aplica"
+            "Mando: cruceta/stick izquierdo mueve • A pulsa tecla • B activa mayús • Y espacio • X borra atrás • Select/Escape cancela • Start/OK aplica"
         }
         UiText::OskOk => "OK",
     }

@@ -795,6 +795,7 @@ fn key_actions(
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
                 | ControllerAction::Shift
+                | ControllerAction::Space
                 | ControllerAction::SelectCurrent
                 | ControllerAction::PagePreviewDown
                 | ControllerAction::ToggleHiddenDirectories),
@@ -841,9 +842,10 @@ fn key_action(code: u16) -> Option<ControllerAction> {
 const fn default_key_action(code: u16) -> Option<ControllerAction> {
     match code {
         BTN_SOUTH => Some(ControllerAction::Accept),
-        BTN_EAST | BTN_SELECT => Some(ControllerAction::Cancel),
+        BTN_EAST => Some(ControllerAction::Shift),
+        BTN_SELECT => Some(ControllerAction::Cancel),
         BTN_WEST => Some(ControllerAction::ClearCurrent),
-        BTN_NORTH => Some(ControllerAction::Shift),
+        BTN_NORTH => Some(ControllerAction::Space),
         BTN_START => Some(ControllerAction::SelectCurrent),
         BTN_TL => Some(ControllerAction::ToggleHiddenDirectories),
         BTN_TR => Some(ControllerAction::PagePreviewDown),
@@ -937,9 +939,9 @@ mod tests {
     #[test]
     fn key_events_map_to_controller_actions() {
         assert_eq!(key_action(BTN_SOUTH), Some(ControllerAction::Accept));
-        assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Cancel));
+        assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Shift));
         assert_eq!(key_action(BTN_WEST), Some(ControllerAction::ClearCurrent));
-        assert_eq!(key_action(BTN_NORTH), Some(ControllerAction::Shift));
+        assert_eq!(key_action(BTN_NORTH), Some(ControllerAction::Space));
         #[cfg(not(all(feature = "portmaster-gui", not(feature = "gui"))))]
         {
             assert_eq!(key_action(BTN_SELECT), Some(ControllerAction::Cancel));
@@ -971,6 +973,8 @@ mod tests {
 
     #[test]
     fn default_key_events_map_to_controller_actions() {
+        assert_eq!(default_key_action(BTN_EAST), Some(ControllerAction::Shift));
+        assert_eq!(default_key_action(BTN_NORTH), Some(ControllerAction::Space));
         assert_eq!(
             default_key_action(BTN_SELECT),
             Some(ControllerAction::Cancel)

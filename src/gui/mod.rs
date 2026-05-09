@@ -284,6 +284,7 @@ impl OskState {
                 self.buffer.pop();
             }
             ControllerAction::Shift => self.toggle_shift(),
+            ControllerAction::Space => self.push_char(' '),
             ControllerAction::SelectCurrent => {
                 return OskOutcome::Commit {
                     target: self.target,
@@ -542,7 +543,7 @@ impl GuiApp {
                 ControllerAction::Right => self.adjust_selected_form_control(FormAdjustment::Next),
                 ControllerAction::Accept => self.activate_selected_form_control(shell, context),
                 ControllerAction::ClearCurrent => self.clear_selected_form_control(),
-                ControllerAction::Shift => {}
+                ControllerAction::Shift | ControllerAction::Space => {}
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
                 ControllerAction::ToggleHiddenDirectories => {
                     self.page_generated_cfg_preview(PreviewPageScroll::Up);
@@ -1574,6 +1575,7 @@ fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
                 | ControllerAction::Shift
+                | ControllerAction::Space
                 | ControllerAction::PagePreviewDown
                 | ControllerAction::SelectCurrent
                 | ControllerAction::ToggleHiddenDirectories => egui::Vec2::ZERO,
@@ -1592,6 +1594,7 @@ fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState)
 
     egui::Modal::new(modal_id)
         .area(modal_area)
+        .backdrop_color(egui::Color32::TRANSPARENT)
         .show(ui.ctx(), |ui| {
             ui.set_min_width(size.x);
             ui.set_max_width(size.x);
@@ -2610,6 +2613,18 @@ mod tests {
 
         assert_eq!(osk.buffer, "Mm");
         assert!(!osk.shift_next);
+    }
+
+    #[test]
+    fn osk_space_action_inserts_space() {
+        let mut osk = OskState::new(PathTarget::MorrowindIni, "Data".to_owned());
+
+        assert_eq!(
+            osk.handle_controller_action(ControllerAction::Space),
+            OskOutcome::None
+        );
+
+        assert_eq!(osk.buffer, "Data ");
     }
 
     #[test]
