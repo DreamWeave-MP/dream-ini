@@ -21,6 +21,9 @@ use self::controller::{ControllerAction, ControllerEvent};
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
 use self::osk::{OskOutcome, OskState, show_osk_overlay};
+use self::path_widgets::{
+    controller_marker_width, path_file_row, path_folder_row, path_label_width, path_save_file_row,
+};
 #[cfg(feature = "gui")]
 use crate::desktop_entry::{APP_ID, APP_NAME};
 
@@ -28,6 +31,7 @@ mod controller;
 mod file_picker;
 mod localization;
 mod osk;
+mod path_widgets;
 #[cfg(feature = "portmaster-gui")]
 #[cfg_attr(feature = "gui", allow(dead_code))]
 mod portmaster;
@@ -1813,108 +1817,6 @@ fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
             .to_owned(),
         GuiImportError::Import(error) => localizer.error_title(error),
     }
-}
-
-fn path_file_row(
-    ui: &mut egui::Ui,
-    label_width: f32,
-    label: &str,
-    browse: &str,
-    value: &mut String,
-) -> bool {
-    path_row_plain(ui, label_width, label, browse, value)
-}
-
-fn path_folder_row(
-    ui: &mut egui::Ui,
-    label_width: f32,
-    label: &str,
-    browse: &str,
-    value: &mut String,
-    tooltip: Option<&str>,
-) -> bool {
-    path_row(ui, label_width, label, browse, value, tooltip)
-}
-
-fn path_save_file_row(
-    ui: &mut egui::Ui,
-    label_width: f32,
-    label: &str,
-    browse: &str,
-    value: &mut String,
-) -> bool {
-    path_row_plain(ui, label_width, label, browse, value)
-}
-
-fn path_row_plain(
-    ui: &mut egui::Ui,
-    label_width: f32,
-    label: &str,
-    browse: &str,
-    value: &mut String,
-) -> bool {
-    path_row(ui, label_width, label, browse, value, None)
-}
-
-fn path_row(
-    ui: &mut egui::Ui,
-    label_width: f32,
-    label: &str,
-    browse: &str,
-    value: &mut String,
-    tooltip: Option<&str>,
-) -> bool {
-    let mut browse_clicked = false;
-    ui.horizontal(|ui| {
-        let row_height = ui.spacing().interact_size.y;
-        let label_response = ui.add_sized([label_width, row_height], egui::Label::new(label));
-        if let Some(tooltip) = tooltip {
-            label_response.on_hover_text(tooltip);
-        }
-        let browse_button_width = button_width(ui, browse);
-        let text_width = (ui.available_width() - browse_button_width - ui.spacing().item_spacing.x)
-            .max(ui.spacing().interact_size.x);
-        ui.add_sized([text_width, row_height], egui::TextEdit::singleline(value));
-        browse_clicked = ui
-            .add_sized([browse_button_width, row_height], egui::Button::new(browse))
-            .clicked();
-    });
-    browse_clicked
-}
-
-fn button_width(ui: &egui::Ui, label: &str) -> f32 {
-    let font_id = egui::TextStyle::Button.resolve(ui.style());
-    let text_width = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font_id, ui.visuals().text_color())
-        .size()
-        .x;
-    text_width + ui.spacing().button_padding.x * 2.0
-}
-
-fn path_label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
-    let font_id = egui::TextStyle::Body.resolve(ui.style());
-    labels
-        .iter()
-        .map(|label| {
-            ui.painter()
-                .layout_no_wrap(
-                    (*label).to_owned(),
-                    font_id.clone(),
-                    ui.visuals().text_color(),
-                )
-                .size()
-                .x
-        })
-        .fold(0.0, f32::max)
-}
-
-fn controller_marker_width(ui: &egui::Ui) -> f32 {
-    let font_id = egui::TextStyle::Body.resolve(ui.style());
-    ui.painter()
-        .layout_no_wrap("▶ ".to_owned(), font_id, ui.visuals().text_color())
-        .size()
-        .x
 }
 
 fn optional_path(value: &str) -> Option<PathBuf> {
