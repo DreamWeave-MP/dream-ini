@@ -371,7 +371,12 @@ impl InputDevice {
 
         for _ in 0..MAX_DEVICE_READ_BATCHES {
             match self.file.read(&mut buffer) {
-                Ok(0) => break,
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "input device reached EOF",
+                    ));
+                }
                 Ok(bytes_read) => {
                     for event in parse_events(&buffer[..bytes_read]) {
                         input.extend(self.handle_event(event, now));
