@@ -22,12 +22,16 @@ use std::time::Instant;
 mod log;
 #[cfg(target_os = "linux")]
 mod pacing;
+#[cfg(target_os = "linux")]
+mod shell;
 
 #[cfg(target_os = "linux")]
 use super::{GuiApp, GuiShell};
 use log::{SharedLog, install_panic_hook, log_startup, open_log, write_log};
 #[cfg(target_os = "linux")]
 use pacing::{REFRESH_ENV_VAR, select_refresh_rate, sleep_after_frame};
+#[cfg(target_os = "linux")]
+use shell::PortMasterGuiShell;
 
 #[cfg(target_os = "linux")]
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
@@ -147,46 +151,6 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
         Err(error)
     } else {
         restore_result
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Default)]
-struct PortMasterGuiShell {
-    exit_requested: bool,
-    clipboard_unsupported_logged: bool,
-    log: Option<SharedLog>,
-}
-
-#[cfg(target_os = "linux")]
-impl PortMasterGuiShell {
-    fn new(log: Option<&SharedLog>) -> Self {
-        Self {
-            exit_requested: false,
-            clipboard_unsupported_logged: false,
-            log: log.cloned(),
-        }
-    }
-
-    const fn exit_requested(&self) -> bool {
-        self.exit_requested
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl GuiShell for PortMasterGuiShell {
-    fn request_exit(&mut self, _context: &egui::Context) {
-        self.exit_requested = true;
-    }
-
-    fn copy_text(&mut self, _context: &egui::Context, _text: String) {
-        if !self.clipboard_unsupported_logged {
-            write_log(
-                self.log.as_ref(),
-                "clipboard requested, but PortMaster framebuffer shell has no clipboard",
-            );
-            self.clipboard_unsupported_logged = true;
-        }
     }
 }
 
@@ -1609,17 +1573,6 @@ mod tests {
         ];
 
         assert_eq!(snapshot_bytes_used(&snapshots).expect("bytes used"), 40);
-    }
-
-    #[test]
-    fn portmaster_shell_records_exit_and_unsupported_clipboard() {
-        let mut shell = PortMasterGuiShell::new(None);
-
-        shell.copy_text(&egui::Context::default(), "fallback=1\n".to_owned());
-        shell.request_exit(&egui::Context::default());
-
-        assert!(shell.clipboard_unsupported_logged);
-        assert!(shell.exit_requested());
     }
 
     #[test]
