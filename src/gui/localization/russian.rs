@@ -37,7 +37,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Events => "События",
         UiText::GeneratedCfg => "Сгенерированный cfg",
         UiText::Copy => "Копировать",
-        UiText::Clear => "Очистить",
+        UiText::Clear | UiText::OskClear => "Очистить",
         UiText::EncodingTooltip => {
             "Кодировка для чтения текста контента и плагинов. Авто использует кодировку из существующего cfg, а если она не задана — win1252."
         }
@@ -69,7 +69,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Выберите существующий openmw.cfg перед обновлением на месте."
         }
-        UiText::CancelPicker => "Отмена",
+        UiText::CancelPicker | UiText::OskCancel => "Отмена",
         UiText::ChoosePath | UiText::SelectPath => "Выбрать",
         UiText::CurrentDirectory => "Текущий каталог:",
         UiText::ParentDirectory => "На уровень выше",
@@ -90,6 +90,13 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::PickerControllerHelp => {
             "Контроллер: D-pad/левый стик — перемещение • A/Enter — открыть или выбрать • B — отмена • Влево — родительский каталог • Вправо — войти • Start — выбрать текущий/ожидаемый путь • LB — переключить скрытые каталоги"
         }
+        UiText::OskTitle => "Клавиатура пути",
+        UiText::OskControllerHelp => {
+            "Контроллер: D-pad/левый стик — перемещение • A — нажать клавишу • X — удалить символ • B/Escape — отмена • Start/OK — применить"
+        }
+        UiText::OskBackspace => "Назад",
+        UiText::OskOk => "OK",
+        UiText::OskSpace => "Пробел",
     }
 }
 

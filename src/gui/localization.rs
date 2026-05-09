@@ -87,6 +87,13 @@ pub(super) enum UiText {
     SelectUserDataDir,
     ControllerHelp,
     PickerControllerHelp,
+    OskTitle,
+    OskControllerHelp,
+    OskBackspace,
+    OskClear,
+    OskCancel,
+    OskOk,
+    OskSpace,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

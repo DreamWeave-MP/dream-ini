@@ -37,7 +37,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Events => "Eventos",
         UiText::GeneratedCfg => "Cfg generado",
         UiText::Copy => "Copiar",
-        UiText::Clear => "Borrar",
+        UiText::Clear | UiText::OskClear => "Borrar",
         UiText::EncodingTooltip => {
             "Codificación de caracteres usada al leer texto de contenido y plugins. Auto usa la codificación del cfg existente, o win1252 si no hay ninguna definida."
         }
@@ -73,7 +73,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Seleccione un openmw.cfg existente antes de actualizarlo directamente."
         }
-        UiText::CancelPicker => "Cancelar",
+        UiText::CancelPicker | UiText::OskCancel => "Cancelar",
         UiText::ChoosePath => "Elegir",
         UiText::SelectPath => "Seleccionar",
         UiText::CurrentDirectory => "Directorio actual:",
@@ -95,6 +95,13 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::PickerControllerHelp => {
             "Mando: cruceta/stick izquierdo mueve • A/Enter abre o elige • B cancela • Izquierda va al directorio superior • Derecha entra • Start elige la ruta actual/esperada • LB alterna directorios ocultos"
         }
+        UiText::OskTitle => "Teclado de ruta",
+        UiText::OskControllerHelp => {
+            "Mando: cruceta/stick izquierdo mueve • A pulsa tecla • X borra atrás • B/Escape cancela • Start/OK aplica"
+        }
+        UiText::OskBackspace => "Retroceso",
+        UiText::OskOk => "OK",
+        UiText::OskSpace => "Espacio",
     }
 }
 

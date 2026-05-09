@@ -37,6 +37,9 @@ const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
 const OPENMW_CFG_LABEL: &str = "openmw.cfg";
 const CONTROLLER_PREVIEW_SCROLL_PIXELS: f32 = 72.0;
 const CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS: f32 = 480.0;
+const OSK_MIN_WIDTH: f32 = 300.0;
+const OSK_MIN_HEIGHT: f32 = 220.0;
+const OSK_MARGIN: f32 = 16.0;
 
 #[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
 pub(crate) use portmaster::run as run_portmaster_gui;
@@ -183,24 +186,32 @@ impl GuiShell for DesktopGuiShell {
 enum GuiMode {
     ImportForm,
     PathPicker(PathPickerState),
+    Osk(OskState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormControl {
     Language,
     MorrowindIni,
+    MorrowindIniBrowse,
     ExistingCfg,
+    ExistingCfgBrowse,
     Encoding,
     ImportFonts,
     ImportArchives,
     ImportContentFiles,
     ExplicitSearchPath,
+    ExplicitSearchPathBrowse,
     DataLocal,
+    DataLocalBrowse,
     Resources,
+    ResourcesBrowse,
     UserData,
+    UserDataBrowse,
     OutputPreview,
     OutputSaveAs,
     OutputPath,
+    OutputPathBrowse,
     OutputUpdateExisting,
     Import,
     ResultTabs,
@@ -233,6 +244,185 @@ enum PreviewPageScroll {
     Up,
     Down,
 }
+
+#[derive(Debug, Clone)]
+struct OskState {
+    target: PathTarget,
+    buffer: String,
+    selected_row: usize,
+    selected_col: usize,
+}
+
+impl OskState {
+    fn new(target: PathTarget, value: String) -> Self {
+        Self {
+            target,
+            buffer: value,
+            selected_row: 0,
+            selected_col: 0,
+        }
+    }
+
+    fn handle_controller_action(&mut self, action: ControllerAction) -> OskOutcome {
+        match action {
+            ControllerAction::Up => self.move_selection(OskDirection::Up),
+            ControllerAction::Down => self.move_selection(OskDirection::Down),
+            ControllerAction::Left => self.move_selection(OskDirection::Left),
+            ControllerAction::Right => self.move_selection(OskDirection::Right),
+            ControllerAction::Accept => return self.press_selected_key(),
+            ControllerAction::Cancel => return OskOutcome::Cancel,
+            ControllerAction::ClearCurrent => {
+                self.buffer.pop();
+            }
+            ControllerAction::SelectCurrent => {
+                return OskOutcome::Commit {
+                    target: self.target,
+                    value: self.buffer.clone(),
+                };
+            }
+            ControllerAction::ToggleHiddenDirectories
+            | ControllerAction::PagePreviewDown
+            | ControllerAction::ScrollPreviewLeft
+            | ControllerAction::ScrollPreviewRight
+            | ControllerAction::ScrollPreviewUp
+            | ControllerAction::ScrollPreviewDown => {}
+        }
+        OskOutcome::None
+    }
+
+    fn move_selection(&mut self, direction: OskDirection) {
+        match direction {
+            OskDirection::Up => {
+                self.selected_row = if self.selected_row == 0 {
+                    OSK_LAYOUT.len() - 1
+                } else {
+                    self.selected_row - 1
+                };
+                self.selected_col = self
+                    .selected_col
+                    .min(OSK_LAYOUT[self.selected_row].len() - 1);
+            }
+            OskDirection::Down => {
+                self.selected_row = (self.selected_row + 1) % OSK_LAYOUT.len();
+                self.selected_col = self
+                    .selected_col
+                    .min(OSK_LAYOUT[self.selected_row].len() - 1);
+            }
+            OskDirection::Left => {
+                self.selected_col = if self.selected_col == 0 {
+                    OSK_LAYOUT[self.selected_row].len() - 1
+                } else {
+                    self.selected_col - 1
+                };
+            }
+            OskDirection::Right => {
+                self.selected_col = (self.selected_col + 1) % OSK_LAYOUT[self.selected_row].len();
+            }
+        }
+    }
+
+    fn press_selected_key(&mut self) -> OskOutcome {
+        match OSK_LAYOUT[self.selected_row][self.selected_col] {
+            OskKey::Char(value) => self.buffer.push(value),
+            OskKey::Backspace => {
+                self.buffer.pop();
+            }
+            OskKey::Clear => self.buffer.clear(),
+            OskKey::Cancel => return OskOutcome::Cancel,
+            OskKey::Ok => {
+                return OskOutcome::Commit {
+                    target: self.target,
+                    value: self.buffer.clone(),
+                };
+            }
+        }
+        OskOutcome::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OskDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OskKey {
+    Char(char),
+    Backspace,
+    Clear,
+    Cancel,
+    Ok,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OskOutcome {
+    None,
+    Cancel,
+    Commit { target: PathTarget, value: String },
+}
+
+const OSK_ROW_0: &[OskKey] = &[
+    OskKey::Char('q'),
+    OskKey::Char('w'),
+    OskKey::Char('e'),
+    OskKey::Char('r'),
+    OskKey::Char('t'),
+    OskKey::Char('y'),
+    OskKey::Char('u'),
+    OskKey::Char('i'),
+    OskKey::Char('o'),
+    OskKey::Char('p'),
+];
+const OSK_ROW_1: &[OskKey] = &[
+    OskKey::Char('a'),
+    OskKey::Char('s'),
+    OskKey::Char('d'),
+    OskKey::Char('f'),
+    OskKey::Char('g'),
+    OskKey::Char('h'),
+    OskKey::Char('j'),
+    OskKey::Char('k'),
+    OskKey::Char('l'),
+];
+const OSK_ROW_2: &[OskKey] = &[
+    OskKey::Char('z'),
+    OskKey::Char('x'),
+    OskKey::Char('c'),
+    OskKey::Char('v'),
+    OskKey::Char('b'),
+    OskKey::Char('n'),
+    OskKey::Char('m'),
+];
+const OSK_ROW_3: &[OskKey] = &[
+    OskKey::Char('0'),
+    OskKey::Char('1'),
+    OskKey::Char('2'),
+    OskKey::Char('3'),
+    OskKey::Char('4'),
+    OskKey::Char('5'),
+    OskKey::Char('6'),
+    OskKey::Char('7'),
+    OskKey::Char('8'),
+    OskKey::Char('9'),
+    OskKey::Char('/'),
+    OskKey::Char('\\'),
+];
+const OSK_ROW_4: &[OskKey] = &[
+    OskKey::Char('.'),
+    OskKey::Char(':'),
+    OskKey::Char('~'),
+    OskKey::Char('_'),
+    OskKey::Char('-'),
+    OskKey::Char(' '),
+    OskKey::Backspace,
+    OskKey::Clear,
+    OskKey::Cancel,
+    OskKey::Ok,
+];
+const OSK_LAYOUT: &[&[OskKey]] = &[OSK_ROW_0, OSK_ROW_1, OSK_ROW_2, OSK_ROW_3, OSK_ROW_4];
 
 impl GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, shell: &mut impl GuiShell) {
@@ -290,10 +480,16 @@ impl GuiApp {
         context: &egui::Context,
         actions: &[ControllerAction],
     ) -> bool {
-        if !matches!(self.mode, GuiMode::ImportForm) {
+        if actions.is_empty() {
             return false;
         }
-        if actions.is_empty() {
+
+        if matches!(self.mode, GuiMode::Osk(_)) {
+            self.handle_osk_controller_actions(actions);
+            return true;
+        }
+
+        if !matches!(self.mode, GuiMode::ImportForm) {
             return false;
         }
 
@@ -341,6 +537,14 @@ impl GuiApp {
     }
 
     fn handle_shortcuts(&mut self, shell: &mut impl GuiShell, context: &egui::Context) {
+        if matches!(self.mode, GuiMode::Osk(_)) {
+            if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.mode = GuiMode::ImportForm;
+            } else if context.input(|input| input.key_pressed(egui::Key::Enter)) {
+                self.commit_osk();
+            }
+            return;
+        }
         if !matches!(self.mode, GuiMode::ImportForm) {
             return;
         }
@@ -376,20 +580,27 @@ impl GuiApp {
         let mut controls = vec![
             FormControl::Language,
             FormControl::MorrowindIni,
+            FormControl::MorrowindIniBrowse,
             FormControl::ExistingCfg,
+            FormControl::ExistingCfgBrowse,
             FormControl::Encoding,
             FormControl::ImportFonts,
             FormControl::ImportArchives,
             FormControl::ImportContentFiles,
             FormControl::ExplicitSearchPath,
+            FormControl::ExplicitSearchPathBrowse,
             FormControl::DataLocal,
+            FormControl::DataLocalBrowse,
             FormControl::Resources,
+            FormControl::ResourcesBrowse,
             FormControl::UserData,
+            FormControl::UserDataBrowse,
             FormControl::OutputPreview,
             FormControl::OutputSaveAs,
         ];
         if self.state.output_mode == GuiOutputMode::SaveAs {
             controls.push(FormControl::OutputPath);
+            controls.push(FormControl::OutputPathBrowse);
         }
         if optional_path(&self.state.existing_cfg).is_some() {
             controls.push(FormControl::OutputUpdateExisting);
@@ -449,25 +660,36 @@ impl GuiApp {
     ) {
         match self.selected_form_control {
             FormControl::Language => self.cycle_language(FormAdjustment::Next),
-            FormControl::MorrowindIni => self.open_form_path_picker(PathTarget::MorrowindIni),
-            FormControl::ExistingCfg => self.open_form_path_picker(PathTarget::ExistingOpenmwCfg),
+            FormControl::MorrowindIni => self.open_osk_for_path(PathTarget::MorrowindIni),
+            FormControl::MorrowindIniBrowse => self.open_form_path_picker(PathTarget::MorrowindIni),
+            FormControl::ExistingCfg => self.open_osk_for_path(PathTarget::ExistingOpenmwCfg),
+            FormControl::ExistingCfgBrowse => {
+                self.open_form_path_picker(PathTarget::ExistingOpenmwCfg);
+            }
             FormControl::Encoding => self.cycle_encoding(FormAdjustment::Next),
             FormControl::ImportFonts => self.state.import_fonts = !self.state.import_fonts,
             FormControl::ImportArchives => self.state.import_archives = !self.state.import_archives,
             FormControl::ImportContentFiles => {
                 self.state.import_content_files = !self.state.import_content_files;
             }
-            FormControl::ExplicitSearchPath => self.open_form_path_picker(PathTarget::GameDataDir),
-            FormControl::DataLocal => self.open_form_path_picker(PathTarget::DataLocalDir),
-            FormControl::Resources => self.open_form_path_picker(PathTarget::ResourcesDir),
-            FormControl::UserData => self.open_form_path_picker(PathTarget::UserDataDir),
+            FormControl::ExplicitSearchPath => self.open_osk_for_path(PathTarget::GameDataDir),
+            FormControl::ExplicitSearchPathBrowse => {
+                self.open_form_path_picker(PathTarget::GameDataDir);
+            }
+            FormControl::DataLocal => self.open_osk_for_path(PathTarget::DataLocalDir),
+            FormControl::DataLocalBrowse => self.open_form_path_picker(PathTarget::DataLocalDir),
+            FormControl::Resources => self.open_osk_for_path(PathTarget::ResourcesDir),
+            FormControl::ResourcesBrowse => self.open_form_path_picker(PathTarget::ResourcesDir),
+            FormControl::UserData => self.open_osk_for_path(PathTarget::UserDataDir),
+            FormControl::UserDataBrowse => self.open_form_path_picker(PathTarget::UserDataDir),
             FormControl::OutputPreview => self.state.output_mode = GuiOutputMode::PreviewOnly,
             FormControl::OutputSaveAs => {
                 self.state.output_mode = GuiOutputMode::SaveAs;
                 self.selected_form_control = FormControl::OutputPath;
                 self.pending_form_scroll = Some(FormControl::OutputPath);
             }
-            FormControl::OutputPath => self.open_form_path_picker(PathTarget::OutputCfg),
+            FormControl::OutputPath => self.open_osk_for_path(PathTarget::OutputCfg),
+            FormControl::OutputPathBrowse => self.open_form_path_picker(PathTarget::OutputCfg),
             FormControl::OutputUpdateExisting => {
                 if optional_path(&self.state.existing_cfg).is_some() {
                     self.state.output_mode = GuiOutputMode::UpdateExistingCfg;
@@ -500,12 +722,19 @@ impl GuiApp {
             }
             FormControl::ResultTabs => self.cycle_result_panel(adjustment),
             FormControl::MorrowindIni
+            | FormControl::MorrowindIniBrowse
             | FormControl::ExistingCfg
+            | FormControl::ExistingCfgBrowse
             | FormControl::ExplicitSearchPath
+            | FormControl::ExplicitSearchPathBrowse
             | FormControl::DataLocal
+            | FormControl::DataLocalBrowse
             | FormControl::Resources
+            | FormControl::ResourcesBrowse
             | FormControl::UserData
+            | FormControl::UserDataBrowse
             | FormControl::OutputPath
+            | FormControl::OutputPathBrowse
             | FormControl::Import
             | FormControl::CopyResult
             | FormControl::ClearResult => {}
@@ -527,12 +756,19 @@ impl GuiApp {
             FormControl::UserData => self.state.user_data.clear(),
             FormControl::OutputPath => self.state.output_path.clear(),
             FormControl::Language
+            | FormControl::MorrowindIniBrowse
+            | FormControl::ExistingCfgBrowse
             | FormControl::Encoding
             | FormControl::ImportFonts
             | FormControl::ImportArchives
             | FormControl::ImportContentFiles
+            | FormControl::ExplicitSearchPathBrowse
+            | FormControl::DataLocalBrowse
+            | FormControl::ResourcesBrowse
+            | FormControl::UserDataBrowse
             | FormControl::OutputPreview
             | FormControl::OutputSaveAs
+            | FormControl::OutputPathBrowse
             | FormControl::OutputUpdateExisting
             | FormControl::Import
             | FormControl::ResultTabs
@@ -560,6 +796,69 @@ impl GuiApp {
         }
         .clone();
         self.open_path_picker(target, &current_value);
+    }
+
+    fn open_osk_for_path(&mut self, target: PathTarget) {
+        self.mode = GuiMode::Osk(OskState::new(target, self.path_value(target).to_owned()));
+    }
+
+    fn handle_osk_controller_actions(&mut self, actions: &[ControllerAction]) {
+        let mut outcome = OskOutcome::None;
+        if let GuiMode::Osk(osk) = &mut self.mode {
+            for action in actions {
+                outcome = osk.handle_controller_action(*action);
+                if !matches!(outcome, OskOutcome::None) {
+                    break;
+                }
+            }
+        }
+        self.apply_osk_outcome(outcome);
+    }
+
+    fn commit_osk(&mut self) {
+        let outcome = match &self.mode {
+            GuiMode::Osk(osk) => OskOutcome::Commit {
+                target: osk.target,
+                value: osk.buffer.clone(),
+            },
+            GuiMode::ImportForm | GuiMode::PathPicker(_) => OskOutcome::None,
+        };
+        self.apply_osk_outcome(outcome);
+    }
+
+    fn apply_osk_outcome(&mut self, outcome: OskOutcome) {
+        match outcome {
+            OskOutcome::None => {}
+            OskOutcome::Cancel => self.mode = GuiMode::ImportForm,
+            OskOutcome::Commit { target, value } => {
+                *self.path_value_mut(target) = value;
+                self.mode = GuiMode::ImportForm;
+            }
+        }
+    }
+
+    fn path_value(&self, target: PathTarget) -> &str {
+        match target {
+            PathTarget::MorrowindIni => &self.state.morrowind_ini,
+            PathTarget::ExistingOpenmwCfg => &self.state.existing_cfg,
+            PathTarget::OutputCfg => &self.state.output_path,
+            PathTarget::GameDataDir => &self.state.explicit_search_path,
+            PathTarget::DataLocalDir => &self.state.data_local,
+            PathTarget::ResourcesDir => &self.state.resources,
+            PathTarget::UserDataDir => &self.state.user_data,
+        }
+    }
+
+    fn path_value_mut(&mut self, target: PathTarget) -> &mut String {
+        match target {
+            PathTarget::MorrowindIni => &mut self.state.morrowind_ini,
+            PathTarget::ExistingOpenmwCfg => &mut self.state.existing_cfg,
+            PathTarget::OutputCfg => &mut self.state.output_path,
+            PathTarget::GameDataDir => &mut self.state.explicit_search_path,
+            PathTarget::DataLocalDir => &mut self.state.data_local,
+            PathTarget::ResourcesDir => &mut self.state.resources,
+            PathTarget::UserDataDir => &mut self.state.user_data,
+        }
     }
 
     fn cycle_language(&mut self, adjustment: FormAdjustment) {
@@ -603,11 +902,6 @@ impl GuiApp {
         controller_actions: &[ControllerAction],
     ) {
         match &mut self.mode {
-            GuiMode::ImportForm => {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| self.show_form(ui, shell));
-            }
             GuiMode::PathPicker(picker) => {
                 let controller_scroll_delta = path_picker_scroll_delta(controller_actions);
                 let outcome = egui::ScrollArea::vertical()
@@ -632,6 +926,17 @@ impl GuiApp {
                         self.mode = GuiMode::ImportForm;
                     }
                 }
+            }
+            GuiMode::ImportForm | GuiMode::Osk(_) => {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.show_form(ui, shell));
+                let outcome = if let GuiMode::Osk(osk) = &mut self.mode {
+                    show_osk_overlay(ui, self.localizer, osk)
+                } else {
+                    OskOutcome::None
+                };
+                self.apply_osk_outcome(outcome);
             }
         }
     }
@@ -792,7 +1097,10 @@ impl GuiApp {
             ui,
             label_width,
             &morrowind_label,
-            self.localizer.text(UiText::Browse),
+            &self.form_label(
+                FormControl::MorrowindIniBrowse,
+                self.localizer.text(UiText::Browse),
+            ),
             &mut self.state.morrowind_ini,
         ) {
             let current_value = self.state.morrowind_ini.clone();
@@ -804,13 +1112,18 @@ impl GuiApp {
             ui,
             label_width,
             &existing_cfg_label,
-            self.localizer.text(UiText::Browse),
+            &self.form_label(
+                FormControl::ExistingCfgBrowse,
+                self.localizer.text(UiText::Browse),
+            ),
             &mut self.state.existing_cfg,
         ) {
             let current_value = self.state.existing_cfg.clone();
             self.open_path_picker(PathTarget::ExistingOpenmwCfg, &current_value);
         }
         self.scroll_selected_form_control_into_view(ui, FormControl::ExistingCfg);
+        self.scroll_selected_form_control_into_view(ui, FormControl::MorrowindIniBrowse);
+        self.scroll_selected_form_control_into_view(ui, FormControl::ExistingCfgBrowse);
     }
 
     fn show_override_paths(&mut self, ui: &mut egui::Ui, label_width: f32) {
@@ -823,7 +1136,10 @@ impl GuiApp {
             ui,
             label_width,
             &explicit_search_label,
-            self.localizer.text(UiText::Browse),
+            &self.form_label(
+                FormControl::ExplicitSearchPathBrowse,
+                self.localizer.text(UiText::Browse),
+            ),
             &mut self.state.explicit_search_path,
             Some(self.localizer.text(UiText::ExplicitSearchPathTooltip)),
         ) {
@@ -836,7 +1152,10 @@ impl GuiApp {
             ui,
             label_width,
             &data_local_label,
-            self.localizer.text(UiText::Browse),
+            &self.form_label(
+                FormControl::DataLocalBrowse,
+                self.localizer.text(UiText::Browse),
+            ),
             &mut self.state.data_local,
             Some(self.localizer.text(UiText::DataLocalTooltip)),
         ) {
@@ -849,7 +1168,10 @@ impl GuiApp {
             ui,
             label_width,
             &resources_label,
-            self.localizer.text(UiText::Browse),
+            &self.form_label(
+                FormControl::ResourcesBrowse,
+                self.localizer.text(UiText::Browse),
+            ),
             &mut self.state.resources,
             Some(self.localizer.text(UiText::ResourcesTooltip)),
         ) {
@@ -862,7 +1184,10 @@ impl GuiApp {
             ui,
             label_width,
             &user_data_label,
-            self.localizer.text(UiText::Browse),
+            &self.form_label(
+                FormControl::UserDataBrowse,
+                self.localizer.text(UiText::Browse),
+            ),
             &mut self.state.user_data,
             Some(self.localizer.text(UiText::UserDataTooltip)),
         ) {
@@ -870,6 +1195,10 @@ impl GuiApp {
             self.open_path_picker(PathTarget::UserDataDir, &current_value);
         }
         self.scroll_selected_form_control_into_view(ui, FormControl::UserData);
+        self.scroll_selected_form_control_into_view(ui, FormControl::ExplicitSearchPathBrowse);
+        self.scroll_selected_form_control_into_view(ui, FormControl::DataLocalBrowse);
+        self.scroll_selected_form_control_into_view(ui, FormControl::ResourcesBrowse);
+        self.scroll_selected_form_control_into_view(ui, FormControl::UserDataBrowse);
     }
 
     fn show_language_selector(&mut self, ui: &mut egui::Ui) {
@@ -1050,7 +1379,10 @@ impl GuiApp {
                 ui,
                 path_label_width,
                 &output_path_label,
-                self.localizer.text(UiText::Browse),
+                &self.form_label(
+                    FormControl::OutputPathBrowse,
+                    self.localizer.text(UiText::Browse),
+                ),
                 &mut self.state.output_path,
             ) {
                 let current_value = self.state.output_path.clone();
@@ -1058,6 +1390,7 @@ impl GuiApp {
             }
         });
         self.scroll_selected_form_control_into_view(ui, FormControl::OutputPath);
+        self.scroll_selected_form_control_into_view(ui, FormControl::OutputPathBrowse);
         ui.add_enabled_ui(optional_path(&self.state.existing_cfg).is_some(), |ui| {
             ui.radio_value(
                 &mut self.state.output_mode,
@@ -1211,6 +1544,72 @@ fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
                 | ControllerAction::ToggleHiddenDirectories => egui::Vec2::ZERO,
             }
     })
+}
+
+fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState) -> OskOutcome {
+    let screen_rect = ui.ctx().input(egui::InputState::content_rect);
+    let size = osk_overlay_size(screen_rect.size());
+    let mut outcome = OskOutcome::None;
+
+    egui::Modal::new(egui::Id::new("path-osk-modal")).show(ui.ctx(), |ui| {
+        ui.set_min_size(size);
+        ui.set_max_size(size);
+        ui.vertical_centered(|ui| {
+            ui.heading(localizer.text(UiText::OskTitle));
+        });
+        ui.separator();
+        ui.label(localizer.text(UiText::OskControllerHelp));
+        ui.add_sized(
+            [ui.available_width(), ui.spacing().interact_size.y],
+            egui::TextEdit::singleline(&mut osk.buffer),
+        );
+        ui.separator();
+
+        egui::Grid::new("path-osk-keys")
+            .num_columns(10)
+            .spacing([4.0, 4.0])
+            .show(ui, |ui| {
+                for (row_index, row) in OSK_LAYOUT.iter().enumerate() {
+                    for (col_index, key) in row.iter().enumerate() {
+                        let selected =
+                            osk.selected_row == row_index && osk.selected_col == col_index;
+                        let mut button = egui::Button::new(osk_key_label(localizer, *key))
+                            .min_size(egui::vec2(34.0, 28.0));
+                        if selected {
+                            button = button.fill(ui.visuals().selection.bg_fill);
+                        }
+                        if ui.add(button).clicked() {
+                            osk.selected_row = row_index;
+                            osk.selected_col = col_index;
+                            outcome = osk.press_selected_key();
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+    });
+
+    outcome
+}
+
+fn osk_overlay_size(screen_size: egui::Vec2) -> egui::Vec2 {
+    let max_width = (screen_size.x - OSK_MARGIN * 2.0).max(1.0);
+    let max_height = (screen_size.y - OSK_MARGIN * 2.0).max(1.0);
+    egui::vec2(
+        (screen_size.x * 0.6).clamp(OSK_MIN_WIDTH.min(max_width), max_width),
+        (screen_size.y * 0.4).clamp(OSK_MIN_HEIGHT.min(max_height), max_height),
+    )
+}
+
+fn osk_key_label(localizer: Localizer, key: OskKey) -> String {
+    match key {
+        OskKey::Char(' ') => localizer.text(UiText::OskSpace).to_owned(),
+        OskKey::Char(value) => value.to_string(),
+        OskKey::Backspace => localizer.text(UiText::OskBackspace).to_owned(),
+        OskKey::Clear => localizer.text(UiText::OskClear).to_owned(),
+        OskKey::Cancel => localizer.text(UiText::OskCancel).to_owned(),
+        OskKey::Ok => localizer.text(UiText::OskOk).to_owned(),
+    }
 }
 
 fn cycle_item<T: Copy + PartialEq>(items: &[T], current: T, adjustment: FormAdjustment) -> T {
@@ -1855,12 +2254,29 @@ mod tests {
             app.visible_form_controls()
                 .contains(&FormControl::OutputPath)
         );
+        assert!(
+            app.visible_form_controls()
+                .contains(&FormControl::OutputPathBrowse)
+        );
 
         app.state.existing_cfg = "openmw.cfg".to_owned();
         assert!(
             app.visible_form_controls()
                 .contains(&FormControl::OutputUpdateExisting)
         );
+    }
+
+    #[test]
+    fn controller_path_fields_and_browse_controls_are_separate() {
+        let app = GuiApp::new_without_controller_worker();
+        let controls = app.visible_form_controls();
+
+        assert!(controls.contains(&FormControl::MorrowindIni));
+        assert!(controls.contains(&FormControl::MorrowindIniBrowse));
+        assert!(controls.contains(&FormControl::ExistingCfg));
+        assert!(controls.contains(&FormControl::ExistingCfgBrowse));
+        assert!(controls.contains(&FormControl::ExplicitSearchPath));
+        assert!(controls.contains(&FormControl::ExplicitSearchPathBrowse));
     }
 
     #[test]
@@ -1876,10 +2292,21 @@ mod tests {
     }
 
     #[test]
-    fn form_controller_accept_opens_selected_path_picker() {
+    fn form_controller_accept_opens_path_field_osk() {
         let mut app = GuiApp::new_without_controller_worker();
         let mut shell = TestGuiShell::default();
         app.selected_form_control = FormControl::MorrowindIni;
+
+        app.activate_selected_form_control(&mut shell, &egui::Context::default());
+
+        assert!(matches!(app.mode, GuiMode::Osk(_)));
+    }
+
+    #[test]
+    fn form_controller_accept_opens_selected_path_browse_picker() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+        app.selected_form_control = FormControl::MorrowindIniBrowse;
 
         app.activate_selected_form_control(&mut shell, &egui::Context::default());
 
@@ -1932,7 +2359,7 @@ mod tests {
     fn form_controller_consumes_action_that_opens_picker() {
         let mut app = GuiApp::new_without_controller_worker();
         let mut shell = TestGuiShell::default();
-        app.selected_form_control = FormControl::ExplicitSearchPath;
+        app.selected_form_control = FormControl::ExplicitSearchPathBrowse;
 
         let consumed = app.handle_controller_actions(
             &mut shell,
@@ -1942,6 +2369,22 @@ mod tests {
 
         assert!(consumed);
         assert!(matches!(app.mode, GuiMode::PathPicker(_)));
+    }
+
+    #[test]
+    fn form_controller_consumes_action_that_opens_osk() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+        app.selected_form_control = FormControl::ExplicitSearchPath;
+
+        let consumed = app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::Accept],
+        );
+
+        assert!(consumed);
+        assert!(matches!(app.mode, GuiMode::Osk(_)));
     }
 
     #[test]
@@ -1955,6 +2398,101 @@ mod tests {
 
         assert!(app.state.existing_cfg.is_empty());
         assert_eq!(app.state.output_mode, GuiOutputMode::PreviewOnly);
+    }
+
+    #[test]
+    fn osk_cancel_does_not_mutate_path() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+        app.state.morrowind_ini = "original.ini".to_owned();
+        app.selected_form_control = FormControl::MorrowindIni;
+        app.activate_selected_form_control(&mut shell, &egui::Context::default());
+        if let GuiMode::Osk(osk) = &mut app.mode {
+            osk.buffer = "changed.ini".to_owned();
+        }
+
+        app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::Cancel],
+        );
+
+        assert_eq!(app.state.morrowind_ini, "original.ini");
+        assert!(matches!(app.mode, GuiMode::ImportForm));
+        assert!(!shell.exit_requested);
+    }
+
+    #[test]
+    fn osk_start_commits_path() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+        app.state.output_path = "old.cfg".to_owned();
+        app.open_osk_for_path(PathTarget::OutputCfg);
+        if let GuiMode::Osk(osk) = &mut app.mode {
+            osk.buffer = "new.cfg".to_owned();
+        }
+
+        app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::SelectCurrent],
+        );
+
+        assert_eq!(app.state.output_path, "new.cfg");
+        assert!(matches!(app.mode, GuiMode::ImportForm));
+    }
+
+    #[test]
+    fn osk_ok_button_commits_path() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+        app.open_osk_for_path(PathTarget::DataLocalDir);
+        if let GuiMode::Osk(osk) = &mut app.mode {
+            osk.buffer = "data-local".to_owned();
+            select_osk_key(osk, OskKey::Ok);
+        }
+
+        app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::Accept],
+        );
+
+        assert_eq!(app.state.data_local, "data-local");
+        assert!(matches!(app.mode, GuiMode::ImportForm));
+    }
+
+    #[test]
+    fn osk_backspace_and_clear_edit_scratch_buffer_only() {
+        let mut app = GuiApp::new_without_controller_worker();
+        let mut shell = TestGuiShell::default();
+        app.state.resources = "original".to_owned();
+        app.open_osk_for_path(PathTarget::ResourcesDir);
+
+        app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::ClearCurrent],
+        );
+        if let GuiMode::Osk(osk) = &mut app.mode {
+            assert_eq!(osk.buffer, "origina");
+            select_osk_key(osk, OskKey::Clear);
+        }
+        app.handle_controller_actions(
+            &mut shell,
+            &egui::Context::default(),
+            &[ControllerAction::Accept],
+        );
+
+        assert_eq!(app.state.resources, "original");
+        assert!(matches!(&app.mode, GuiMode::Osk(osk) if osk.buffer.is_empty()));
+    }
+
+    #[test]
+    fn osk_letter_rows_are_qwerty_ordered() {
+        assert_eq!(osk_row_chars(OSK_ROW_0), "qwertyuiop");
+        assert_eq!(osk_row_chars(OSK_ROW_1), "asdfghjkl");
+        assert_eq!(osk_row_chars(OSK_ROW_2), "zxcvbnm");
     }
 
     #[test]
@@ -2276,6 +2814,30 @@ mod tests {
             events: Vec::new(),
             changed_keys: BTreeSet::new(),
         }
+    }
+
+    fn select_osk_key(osk: &mut OskState, key: OskKey) {
+        for (row_index, row) in OSK_LAYOUT.iter().enumerate() {
+            if let Some(col_index) = row.iter().position(|candidate| *candidate == key) {
+                osk.selected_row = row_index;
+                osk.selected_col = col_index;
+                return;
+            }
+        }
+        panic!("OSK key {key:?} not present");
+    }
+
+    fn osk_row_chars(row: &[OskKey]) -> String {
+        row.iter()
+            .filter_map(|key| match key {
+                OskKey::Char(value) if value.is_ascii_alphabetic() => Some(*value),
+                OskKey::Char(_)
+                | OskKey::Backspace
+                | OskKey::Clear
+                | OskKey::Cancel
+                | OskKey::Ok => None,
+            })
+            .collect()
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

@@ -37,7 +37,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Events => "Events",
         UiText::GeneratedCfg => "Generated cfg",
         UiText::Copy => "Copy",
-        UiText::Clear => "Clear",
+        UiText::Clear | UiText::OskClear => "Clear",
         UiText::EncodingTooltip => {
             "Character encoding used when reading content/plugin text. Auto uses the existing cfg encoding, or win1252 if none is set."
         }
@@ -71,7 +71,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Select an existing openmw.cfg before updating in place."
         }
-        UiText::CancelPicker => "Cancel",
+        UiText::CancelPicker | UiText::OskCancel => "Cancel",
         UiText::ChoosePath => "Choose",
         UiText::SelectPath => "Select",
         UiText::CurrentDirectory => "Current directory:",
@@ -93,6 +93,13 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::PickerControllerHelp => {
             "Controller: D-pad/left stick moves • A/Enter opens or chooses • B cancels • Left goes parent • Right enters • Start chooses the current/expected path • LB toggles hidden directories"
         }
+        UiText::OskTitle => "Path keyboard",
+        UiText::OskControllerHelp => {
+            "Controller: D-pad/left stick moves • A presses key • X backspaces • B/Escape cancels • Start/OK applies"
+        }
+        UiText::OskBackspace => "Backspace",
+        UiText::OskOk => "OK",
+        UiText::OskSpace => "Space",
     }
 }
 

@@ -37,7 +37,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Events => "Événements",
         UiText::GeneratedCfg => "Cfg généré",
         UiText::Copy => "Copier",
-        UiText::Clear => "Effacer",
+        UiText::Clear | UiText::OskClear => "Effacer",
         UiText::EncodingTooltip => {
             "Encodage des caractères utilisé pour lire le texte du contenu et des plugins. Auto utilise l’encodage du cfg existant, ou win1252 s’il n’est pas défini."
         }
@@ -73,7 +73,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Sélectionnez un openmw.cfg existant avant de le mettre à jour sur place."
         }
-        UiText::CancelPicker => "Annuler",
+        UiText::CancelPicker | UiText::OskCancel => "Annuler",
         UiText::ChoosePath => "Choisir",
         UiText::SelectPath => "Sélectionner",
         UiText::CurrentDirectory => "Répertoire actuel :",
@@ -95,6 +95,13 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::PickerControllerHelp => {
             "Manette : croix/stick gauche pour naviguer • A/Entrée ouvre ou choisit • B annule • Gauche va au parent • Droite entre • Start choisit le chemin actuel/attendu • LB affiche/masque les répertoires cachés"
         }
+        UiText::OskTitle => "Clavier de chemin",
+        UiText::OskControllerHelp => {
+            "Manette : croix/stick gauche déplace • A appuie • X efface arrière • B/Échap annule • Start/OK applique"
+        }
+        UiText::OskBackspace => "Retour",
+        UiText::OskOk => "OK",
+        UiText::OskSpace => "Espace",
     }
 }
 
