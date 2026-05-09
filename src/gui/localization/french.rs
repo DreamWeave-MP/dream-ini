@@ -37,7 +37,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Events => "Événements",
         UiText::GeneratedCfg => "Cfg généré",
         UiText::Copy => "Copier",
-        UiText::Clear | UiText::OskClear => "Effacer",
+        UiText::Clear => "Effacer",
         UiText::EncodingTooltip => {
             "Encodage des caractères utilisé pour lire le texte du contenu et des plugins. Auto utilise l’encodage du cfg existant, ou win1252 s’il n’est pas défini."
         }
@@ -73,7 +73,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Sélectionnez un openmw.cfg existant avant de le mettre à jour sur place."
         }
-        UiText::CancelPicker | UiText::OskCancel => "Annuler",
+        UiText::CancelPicker => "Annuler",
         UiText::ChoosePath => "Choisir",
         UiText::SelectPath => "Sélectionner",
         UiText::CurrentDirectory => "Répertoire actuel :",
@@ -99,9 +99,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::OskControllerHelp => {
             "Manette : croix/stick gauche déplace • A appuie • X efface arrière • B/Échap annule • Start/OK applique"
         }
-        UiText::OskBackspace => "Retour",
         UiText::OskOk => "OK",
-        UiText::OskSpace => "Espace",
     }
 }
 

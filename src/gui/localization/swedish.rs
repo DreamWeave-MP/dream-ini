@@ -37,7 +37,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Events => "Händelser",
         UiText::GeneratedCfg => "Genererad cfg",
         UiText::Copy => "Kopiera",
-        UiText::Clear | UiText::OskClear => "Rensa",
+        UiText::Clear => "Rensa",
         UiText::EncodingTooltip => {
             "Teckenkodning som används när innehålls- och plugintext läses. Auto använder kodningen i befintlig cfg, eller win1252 om ingen är angiven."
         }
@@ -71,7 +71,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectExistingCfgBeforeUpdating => {
             "Välj en befintlig openmw.cfg innan du uppdaterar på plats."
         }
-        UiText::CancelPicker | UiText::OskCancel => "Avbryt",
+        UiText::CancelPicker => "Avbryt",
         UiText::ChoosePath | UiText::SelectPath => "Välj",
         UiText::CurrentDirectory => "Aktuell katalog:",
         UiText::ParentDirectory => "Överordnad",
@@ -96,9 +96,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::OskControllerHelp => {
             "Handkontroll: styrkors/vänster spak flyttar • A trycker tangent • X backsteg • B/Escape avbryter • Start/OK använder"
         }
-        UiText::OskBackspace => "Backsteg",
         UiText::OskOk => "OK",
-        UiText::OskSpace => "Mellanslag",
     }
 }
 
