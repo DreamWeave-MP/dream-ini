@@ -308,6 +308,8 @@ impl PathPickerState {
                 ControllerAction::Down => self.move_selection(SelectionStep::Next),
                 ControllerAction::Accept => return self.selected_entry_action(),
                 ControllerAction::ClearCurrent
+                | ControllerAction::ScrollPreviewLeft
+                | ControllerAction::ScrollPreviewRight
                 | ControllerAction::ScrollPreviewUp
                 | ControllerAction::ScrollPreviewDown => {}
                 ControllerAction::SelectCurrent => return self.current_target_action(),

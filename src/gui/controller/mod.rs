@@ -22,6 +22,8 @@ pub(super) enum ControllerAction {
     ClearCurrent,
     SelectCurrent,
     ToggleHiddenDirectories,
+    ScrollPreviewLeft,
+    ScrollPreviewRight,
     ScrollPreviewUp,
     ScrollPreviewDown,
 }

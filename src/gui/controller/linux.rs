@@ -39,6 +39,7 @@ const BTN_DPAD_RIGHT: u16 = 0x223;
 
 const ABS_X: u16 = 0x00;
 const ABS_Y: u16 = 0x01;
+const ABS_RX: u16 = 0x03;
 const ABS_RY: u16 = 0x04;
 const ABS_HAT0X: u16 = 0x10;
 const ABS_HAT0Y: u16 = 0x11;
@@ -391,6 +392,7 @@ struct DeviceCapabilities {
 struct AxisState {
     left_x: AxisDirection,
     left_y: AxisDirection,
+    right_x: AxisDirection,
     right_y: AxisDirection,
     hat_x: AxisDirection,
     hat_y: AxisDirection,
@@ -402,6 +404,7 @@ impl AxisState {
         Self {
             left_x: AxisDirection::Neutral,
             left_y: AxisDirection::Neutral,
+            right_x: AxisDirection::Neutral,
             right_y: AxisDirection::Neutral,
             hat_x: AxisDirection::Neutral,
             hat_y: AxisDirection::Neutral,
@@ -429,9 +432,15 @@ impl AxisState {
                 repeater,
                 now,
             ),
+            ABS_RX => self.right_x.update(
+                self.calibration.rx.direction(value),
+                preview_horizontal_scroll_action,
+                repeater,
+                now,
+            ),
             ABS_RY => self.right_y.update(
                 self.calibration.ry.direction(value),
-                preview_scroll_action,
+                preview_vertical_scroll_action,
                 repeater,
                 now,
             ),
@@ -456,6 +465,7 @@ impl Default for AxisState {
 struct AxisCalibration {
     x: AxisInfo,
     y: AxisInfo,
+    rx: AxisInfo,
     ry: AxisInfo,
 }
 
@@ -464,6 +474,7 @@ impl AxisCalibration {
         Self {
             x: AxisInfo::read(fd, ABS_X),
             y: AxisInfo::read(fd, ABS_Y),
+            rx: AxisInfo::read(fd, ABS_RX),
             ry: AxisInfo::read(fd, ABS_RY),
         }
     }
@@ -559,6 +570,8 @@ struct ActionRepeater {
     down: HeldAction,
     left: HeldAction,
     right: HeldAction,
+    scroll_preview_left: HeldAction,
+    scroll_preview_right: HeldAction,
     scroll_preview_up: HeldAction,
     scroll_preview_down: HeldAction,
 }
@@ -585,6 +598,14 @@ impl ActionRepeater {
             (ControllerAction::Left, &mut self.left),
             (ControllerAction::Right, &mut self.right),
             (
+                ControllerAction::ScrollPreviewLeft,
+                &mut self.scroll_preview_left,
+            ),
+            (
+                ControllerAction::ScrollPreviewRight,
+                &mut self.scroll_preview_right,
+            ),
+            (
                 ControllerAction::ScrollPreviewUp,
                 &mut self.scroll_preview_up,
             ),
@@ -604,6 +625,8 @@ impl ActionRepeater {
             &self.down,
             &self.left,
             &self.right,
+            &self.scroll_preview_left,
+            &self.scroll_preview_right,
             &self.scroll_preview_up,
             &self.scroll_preview_down,
         ]
@@ -618,6 +641,8 @@ impl ActionRepeater {
             ControllerAction::Down => Some(&mut self.down),
             ControllerAction::Left => Some(&mut self.left),
             ControllerAction::Right => Some(&mut self.right),
+            ControllerAction::ScrollPreviewLeft => Some(&mut self.scroll_preview_left),
+            ControllerAction::ScrollPreviewRight => Some(&mut self.scroll_preview_right),
             ControllerAction::ScrollPreviewUp => Some(&mut self.scroll_preview_up),
             ControllerAction::ScrollPreviewDown => Some(&mut self.scroll_preview_down),
             ControllerAction::Accept
@@ -908,7 +933,15 @@ fn vertical_action(direction: AxisDirection) -> Option<ControllerAction> {
     }
 }
 
-fn preview_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
+fn preview_horizontal_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
+    match direction {
+        AxisDirection::Negative => Some(ControllerAction::ScrollPreviewLeft),
+        AxisDirection::Neutral => None,
+        AxisDirection::Positive => Some(ControllerAction::ScrollPreviewRight),
+    }
+}
+
+fn preview_vertical_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
     match direction {
         AxisDirection::Negative => Some(ControllerAction::ScrollPreviewUp),
         AxisDirection::Neutral => None,
@@ -981,6 +1014,23 @@ mod tests {
         assert_eq!(
             axes.update(ABS_RY, -20_000, &mut repeater, now),
             vec![ControllerAction::ScrollPreviewUp]
+        );
+    }
+
+    #[test]
+    fn right_stick_horizontal_scrolls_preview() {
+        let mut axes = AxisState::default();
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            axes.update(ABS_RX, 20_000, &mut repeater, now),
+            vec![ControllerAction::ScrollPreviewRight]
+        );
+        assert_eq!(axes.update(ABS_RX, 0, &mut repeater, now), Vec::new());
+        assert_eq!(
+            axes.update(ABS_RX, -20_000, &mut repeater, now),
+            vec![ControllerAction::ScrollPreviewLeft]
         );
     }
 

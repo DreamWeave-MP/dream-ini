@@ -124,9 +124,15 @@ impl WorkerState {
                 &mut self.repeater,
                 now,
             ),
+            EventType::AxisChanged(Axis::RightStickX, value, _) => self.axes.right_x.update(
+                stick_direction(value),
+                preview_horizontal_scroll_action,
+                &mut self.repeater,
+                now,
+            ),
             EventType::AxisChanged(Axis::RightStickY, value, _) => self.axes.right_y.update(
                 stick_direction(value),
-                preview_scroll_action,
+                preview_vertical_scroll_action,
                 &mut self.repeater,
                 now,
             ),
@@ -183,6 +189,7 @@ fn send_event(sender: &SyncSender<ControllerEvent>, event: ControllerEvent) -> b
 struct AxisState {
     left_x: AxisDirection,
     left_y: AxisDirection,
+    right_x: AxisDirection,
     right_y: AxisDirection,
 }
 
@@ -219,6 +226,8 @@ struct ActionRepeater {
     down: HeldAction,
     left: HeldAction,
     right: HeldAction,
+    scroll_preview_left: HeldAction,
+    scroll_preview_right: HeldAction,
     scroll_preview_up: HeldAction,
     scroll_preview_down: HeldAction,
 }
@@ -245,6 +254,14 @@ impl ActionRepeater {
             (ControllerAction::Left, &mut self.left),
             (ControllerAction::Right, &mut self.right),
             (
+                ControllerAction::ScrollPreviewLeft,
+                &mut self.scroll_preview_left,
+            ),
+            (
+                ControllerAction::ScrollPreviewRight,
+                &mut self.scroll_preview_right,
+            ),
+            (
                 ControllerAction::ScrollPreviewUp,
                 &mut self.scroll_preview_up,
             ),
@@ -264,6 +281,8 @@ impl ActionRepeater {
             &self.down,
             &self.left,
             &self.right,
+            &self.scroll_preview_left,
+            &self.scroll_preview_right,
             &self.scroll_preview_up,
             &self.scroll_preview_down,
         ]
@@ -278,6 +297,8 @@ impl ActionRepeater {
             ControllerAction::Down => Some(&mut self.down),
             ControllerAction::Left => Some(&mut self.left),
             ControllerAction::Right => Some(&mut self.right),
+            ControllerAction::ScrollPreviewLeft => Some(&mut self.scroll_preview_left),
+            ControllerAction::ScrollPreviewRight => Some(&mut self.scroll_preview_right),
             ControllerAction::ScrollPreviewUp => Some(&mut self.scroll_preview_up),
             ControllerAction::ScrollPreviewDown => Some(&mut self.scroll_preview_down),
             ControllerAction::Accept
@@ -383,7 +404,15 @@ fn vertical_action(direction: AxisDirection) -> Option<ControllerAction> {
     }
 }
 
-fn preview_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
+fn preview_horizontal_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
+    match direction {
+        AxisDirection::Negative => Some(ControllerAction::ScrollPreviewLeft),
+        AxisDirection::Neutral => None,
+        AxisDirection::Positive => Some(ControllerAction::ScrollPreviewRight),
+    }
+}
+
+fn preview_vertical_scroll_action(direction: AxisDirection) -> Option<ControllerAction> {
     match direction {
         AxisDirection::Negative => Some(ControllerAction::ScrollPreviewDown),
         AxisDirection::Neutral => None,

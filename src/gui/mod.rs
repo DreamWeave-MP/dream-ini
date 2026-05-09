@@ -71,7 +71,7 @@ struct GuiApp {
     selected_result_panel: ResultPanel,
     selected_form_control: FormControl,
     controller_navigation_visible: bool,
-    generated_cfg_scroll_delta: f32,
+    generated_cfg_scroll_delta: egui::Vec2,
     mode: GuiMode,
 }
 
@@ -91,7 +91,7 @@ impl GuiApp {
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
             controller_navigation_visible: false,
-            generated_cfg_scroll_delta: 0.0,
+            generated_cfg_scroll_delta: egui::Vec2::ZERO,
             mode: GuiMode::ImportForm,
         }
     }
@@ -105,7 +105,7 @@ impl GuiApp {
             selected_result_panel: ResultPanel::default(),
             selected_form_control: FormControl::MorrowindIni,
             controller_navigation_visible: false,
-            generated_cfg_scroll_delta: 0.0,
+            generated_cfg_scroll_delta: egui::Vec2::ZERO,
             mode: GuiMode::ImportForm,
         }
     }
@@ -153,6 +153,8 @@ enum FormAdjustment {
 
 #[derive(Debug, Clone, Copy)]
 enum PreviewScroll {
+    Left,
+    Right,
     Up,
     Down,
 }
@@ -229,6 +231,12 @@ impl GuiApp {
                 ControllerAction::ClearCurrent => self.clear_selected_form_control(),
                 ControllerAction::SelectCurrent => self.run_import_if_enabled(),
                 ControllerAction::ToggleHiddenDirectories => {}
+                ControllerAction::ScrollPreviewLeft => {
+                    self.scroll_generated_cfg_preview(PreviewScroll::Left);
+                }
+                ControllerAction::ScrollPreviewRight => {
+                    self.scroll_generated_cfg_preview(PreviewScroll::Right);
+                }
                 ControllerAction::ScrollPreviewUp => {
                     self.scroll_generated_cfg_preview(PreviewScroll::Up);
                 }
@@ -829,7 +837,7 @@ impl GuiApp {
         {
             std::mem::take(&mut self.generated_cfg_scroll_delta)
         } else {
-            0.0
+            egui::Vec2::ZERO
         };
         let Some(result) = &mut self.result else {
             return;
@@ -993,10 +1001,12 @@ fn cycled_result_panel(panel: ResultPanel, adjustment: FormAdjustment) -> Result
     )
 }
 
-const fn generated_cfg_scroll_delta(direction: PreviewScroll) -> f32 {
+fn generated_cfg_scroll_delta(direction: PreviewScroll) -> egui::Vec2 {
     match direction {
-        PreviewScroll::Up => CONTROLLER_PREVIEW_SCROLL_PIXELS,
-        PreviewScroll::Down => -CONTROLLER_PREVIEW_SCROLL_PIXELS,
+        PreviewScroll::Left => egui::vec2(CONTROLLER_PREVIEW_SCROLL_PIXELS, 0.0),
+        PreviewScroll::Right => egui::vec2(-CONTROLLER_PREVIEW_SCROLL_PIXELS, 0.0),
+        PreviewScroll::Up => egui::vec2(0.0, CONTROLLER_PREVIEW_SCROLL_PIXELS),
+        PreviewScroll::Down => egui::vec2(0.0, -CONTROLLER_PREVIEW_SCROLL_PIXELS),
     }
 }
 
@@ -1390,7 +1400,7 @@ fn show_generated_cfg_panel(
     ui: &mut egui::Ui,
     localizer: Localizer,
     result: &mut GuiImportResult,
-    controller_scroll_delta: f32,
+    controller_scroll_delta: egui::Vec2,
 ) {
     let GuiImportResult::Success { cfg_text, .. } = result else {
         ui.label(localizer.text(UiText::NoGeneratedCfg));
@@ -1401,8 +1411,8 @@ fn show_generated_cfg_panel(
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if controller_scroll_delta != 0.0 {
-                    ui.scroll_with_delta(egui::vec2(0.0, controller_scroll_delta));
+                if controller_scroll_delta != egui::Vec2::ZERO {
+                    ui.scroll_with_delta(controller_scroll_delta);
                 }
                 show_numbered_cfg(ui, cfg_text);
             });
@@ -1760,11 +1770,18 @@ mod tests {
 
         app.handle_controller_actions(
             &egui::Context::default(),
-            &[ControllerAction::ScrollPreviewDown],
+            &[
+                ControllerAction::ScrollPreviewDown,
+                ControllerAction::ScrollPreviewRight,
+            ],
         );
 
         assert!(
-            (app.generated_cfg_scroll_delta + CONTROLLER_PREVIEW_SCROLL_PIXELS).abs()
+            (app.generated_cfg_scroll_delta.x + CONTROLLER_PREVIEW_SCROLL_PIXELS).abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (app.generated_cfg_scroll_delta.y + CONTROLLER_PREVIEW_SCROLL_PIXELS).abs()
                 < f32::EPSILON
         );
     }
@@ -1785,7 +1802,7 @@ mod tests {
             &[ControllerAction::ScrollPreviewDown],
         );
 
-        assert!(app.generated_cfg_scroll_delta.abs() < f32::EPSILON);
+        assert!(app.generated_cfg_scroll_delta.length_sq() < f32::EPSILON);
     }
 
     #[test]
