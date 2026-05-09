@@ -31,7 +31,7 @@ const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 #[cfg(target_os = "linux")]
 const FRAME_DELAY: Duration = Duration::from_millis(33);
 #[cfg(target_os = "linux")]
-const AUTO_EXIT_AFTER: Duration = Duration::from_secs(120);
+const AUTO_EXIT_AFTER: Duration = Duration::from_mins(2);
 #[cfg(target_os = "linux")]
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 
