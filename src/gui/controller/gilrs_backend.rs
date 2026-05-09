@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use gilrs::{Axis, Button, EventType, Gilrs};
 
-use super::ControllerAction;
+use super::{ControllerAction, ControllerEvent};
 
 const GILRS_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const GILRS_RETRY_INTERVAL: Duration = Duration::from_millis(500);
@@ -33,7 +33,7 @@ impl std::fmt::Debug for ControllerWorker {
 }
 
 impl ControllerWorker {
-    pub(super) fn spawn(sender: SyncSender<ControllerAction>, context: egui::Context) -> Self {
+    pub(super) fn spawn(sender: SyncSender<ControllerEvent>, context: egui::Context) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let handle = thread::Builder::new()
@@ -96,9 +96,16 @@ impl WorkerState {
         actions
     }
 
+    fn has_gamepads(&self) -> bool {
+        self.gilrs
+            .as_ref()
+            .is_some_and(|gilrs| gilrs.gamepads().any(|(_, gamepad)| gamepad.is_connected()))
+    }
+
     fn handle_event(&mut self, event: EventType, now: Instant) -> Vec<ControllerAction> {
         match event {
             EventType::ButtonPressed(button, _) => button_pressed(button, &mut self.repeater, now),
+            EventType::Connected | EventType::Disconnected => Vec::new(),
             EventType::ButtonReleased(button, _) => {
                 if let Some(action) = repeatable_button_action(button) {
                     self.repeater.stop(action);
@@ -130,10 +137,18 @@ impl WorkerState {
     }
 }
 
-fn run_worker(sender: &SyncSender<ControllerAction>, context: &egui::Context, stop: &AtomicBool) {
+fn run_worker(sender: &SyncSender<ControllerEvent>, context: &egui::Context, stop: &AtomicBool) {
     let mut state = WorkerState::new();
+    let mut last_availability = state.has_gamepads();
     while !stop.load(Ordering::Relaxed) {
         let actions = state.poll();
+        let available = state.has_gamepads();
+        if available != last_availability {
+            if send_event(sender, ControllerEvent::Available(available)) {
+                context.request_repaint();
+            }
+            last_availability = available;
+        }
         if actions.is_empty() {
             thread::park_timeout(state.sleep_duration());
             continue;
@@ -141,15 +156,20 @@ fn run_worker(sender: &SyncSender<ControllerAction>, context: &egui::Context, st
 
         let mut sent_action = false;
         for action in actions {
-            match sender.try_send(action) {
-                Ok(()) => sent_action = true,
-                Err(TrySendError::Full(_)) => {}
-                Err(TrySendError::Disconnected(_)) => return,
+            if send_event(sender, ControllerEvent::Action(action)) {
+                sent_action = true;
             }
         }
         if sent_action {
             context.request_repaint();
         }
+    }
+}
+
+fn send_event(sender: &SyncSender<ControllerEvent>, event: ControllerEvent) -> bool {
+    match sender.try_send(event) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
     }
 }
 

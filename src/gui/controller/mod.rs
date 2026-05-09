@@ -24,9 +24,15 @@ pub(super) enum ControllerAction {
     ToggleHiddenDirectories,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ControllerEvent {
+    Action(ControllerAction),
+    Available(bool),
+}
+
 #[derive(Debug)]
 pub(super) struct Controller {
-    receiver: Receiver<ControllerAction>,
+    receiver: Receiver<ControllerEvent>,
     worker: Option<backend::ControllerWorker>,
 }
 
@@ -39,7 +45,7 @@ impl Controller {
         }
     }
 
-    pub(super) fn drain_actions(&mut self) -> Vec<ControllerAction> {
+    pub(super) fn drain_events(&mut self) -> Vec<ControllerEvent> {
         self.receiver
             .try_iter()
             .take(MAX_DRAINED_CONTROLLER_ACTIONS)
@@ -88,6 +94,6 @@ mod tests {
 
     #[test]
     fn default_controller_starts_quiet() {
-        assert!(Controller::default().drain_actions().is_empty());
+        assert!(Controller::default().drain_events().is_empty());
     }
 }

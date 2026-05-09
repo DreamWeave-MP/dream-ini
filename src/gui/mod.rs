@@ -10,7 +10,7 @@ use dream_ini::{
 };
 use eframe::egui;
 
-use self::controller::ControllerAction;
+use self::controller::{ControllerAction, ControllerEvent};
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
 use crate::desktop_entry::{APP_ID, APP_NAME};
@@ -149,10 +149,7 @@ enum FormAdjustment {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        let controller_actions = self.controller.drain_actions();
-        if !controller_actions.is_empty() {
-            self.controller_navigation_visible = true;
-        }
+        let controller_actions = self.drain_controller_actions();
         let controller_actions_consumed =
             self.handle_controller_actions(context, &controller_actions);
         self.handle_shortcuts(context);
@@ -168,6 +165,30 @@ impl eframe::App for GuiApp {
 }
 
 impl GuiApp {
+    fn drain_controller_actions(&mut self) -> Vec<ControllerAction> {
+        let mut actions = Vec::new();
+        for event in self.controller.drain_events() {
+            if let Some(action) = self.handle_controller_event(event) {
+                actions.push(action);
+            }
+        }
+        actions
+    }
+
+    fn handle_controller_event(&mut self, event: ControllerEvent) -> Option<ControllerAction> {
+        match event {
+            ControllerEvent::Action(action) => {
+                self.controller_navigation_visible = true;
+                Some(action)
+            }
+            ControllerEvent::Available(false) => {
+                self.controller_navigation_visible = false;
+                None
+            }
+            ControllerEvent::Available(true) => None,
+        }
+    }
+
     fn handle_controller_actions(
         &mut self,
         context: &egui::Context,
@@ -247,10 +268,10 @@ impl GuiApp {
         }
         if self.result.is_some() {
             controls.push(FormControl::ResultTabs);
+            controls.push(FormControl::ClearResult);
             if matches!(self.result, Some(GuiImportResult::Success { .. })) {
                 controls.push(FormControl::CopyResult);
             }
-            controls.push(FormControl::ClearResult);
         }
         controls
     }
@@ -1636,6 +1657,46 @@ mod tests {
             app.form_label(FormControl::MorrowindIni, "Morrowind.ini"),
             "▶ Morrowind.ini"
         );
+    }
+
+    #[test]
+    fn controller_disconnect_hides_selection_marker() {
+        let mut app = GuiApp::new_without_controller_worker();
+
+        assert_eq!(
+            app.handle_controller_event(ControllerEvent::Action(ControllerAction::Down)),
+            Some(ControllerAction::Down)
+        );
+        assert!(app.controller_navigation_visible);
+
+        assert_eq!(
+            app.handle_controller_event(ControllerEvent::Available(false)),
+            None
+        );
+
+        assert!(!app.controller_navigation_visible);
+    }
+
+    #[test]
+    fn result_controls_select_clear_before_copy() {
+        let mut app = GuiApp::new_without_controller_worker();
+        app.state.morrowind_ini = "Morrowind.ini".to_owned();
+        app.result = Some(GuiImportResult::Success {
+            cfg_text: String::new(),
+            warnings: Vec::new(),
+            events: Vec::new(),
+            output_path: None,
+        });
+        app.selected_form_control = FormControl::ResultTabs;
+
+        app.move_form_selection(FormSelectionStep::Next);
+        assert_eq!(app.selected_form_control, FormControl::ClearResult);
+
+        app.move_form_selection(FormSelectionStep::Next);
+        assert_eq!(app.selected_form_control, FormControl::CopyResult);
+
+        app.move_form_selection(FormSelectionStep::Next);
+        assert_eq!(app.selected_form_control, FormControl::Language);
     }
 
     #[test]

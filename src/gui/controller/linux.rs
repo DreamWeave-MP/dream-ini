@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::ControllerAction;
+use super::{ControllerAction, ControllerEvent};
 
 const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
@@ -60,7 +60,7 @@ impl std::fmt::Debug for ControllerWorker {
 }
 
 impl ControllerWorker {
-    pub(super) fn spawn(sender: SyncSender<ControllerAction>, context: egui::Context) -> Self {
+    pub(super) fn spawn(sender: SyncSender<ControllerEvent>, context: egui::Context) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let (worker_wake, wake) = WakeFd::new_pair().expect("Linux controller wake fd should open");
@@ -124,6 +124,10 @@ impl WorkerState {
             Err(_) => false,
         });
         actions
+    }
+
+    fn has_devices(&self) -> bool {
+        !self.devices.is_empty()
     }
 
     fn wait_for_input(&mut self) {
@@ -190,29 +194,42 @@ impl WorkerState {
 }
 
 fn run_worker(
-    sender: &SyncSender<ControllerAction>,
+    sender: &SyncSender<ControllerEvent>,
     context: &egui::Context,
     stop: &AtomicBool,
     wake: WakeFd,
 ) {
     let mut state = WorkerState::new(wake);
+    let mut last_availability = state.has_devices();
     while !stop.load(Ordering::Relaxed) {
         let actions = state.poll();
+        let available = state.has_devices();
+        if available != last_availability {
+            if send_event(sender, ControllerEvent::Available(available)) {
+                context.request_repaint();
+            }
+            last_availability = available;
+        }
         if actions.is_empty() {
             continue;
         }
 
         let mut sent_action = false;
         for action in actions {
-            match sender.try_send(action) {
-                Ok(()) => sent_action = true,
-                Err(TrySendError::Full(_)) => {}
-                Err(TrySendError::Disconnected(_)) => return,
+            if send_event(sender, ControllerEvent::Action(action)) {
+                sent_action = true;
             }
         }
         if sent_action {
             context.request_repaint();
         }
+    }
+}
+
+fn send_event(sender: &SyncSender<ControllerEvent>, event: ControllerEvent) -> bool {
+    match sender.try_send(event) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
     }
 }
 
