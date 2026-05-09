@@ -44,8 +44,6 @@ const OSK_KEY_WIDTH: f32 = 30.0;
 const OSK_KEY_HEIGHT: f32 = 22.0;
 const OSK_KEY_SPACING: f32 = 2.0;
 #[cfg(test)]
-const OSK_FIXED_CONTENT_HEIGHT: f32 = 78.0;
-#[cfg(test)]
 const OSK_CONTENT_HORIZONTAL_PADDING: f32 = 24.0;
 
 #[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
@@ -1586,6 +1584,7 @@ fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
 fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState) -> OskOutcome {
     let screen_rect = ui.ctx().input(egui::InputState::content_rect);
     let size = osk_overlay_size(screen_rect.size());
+    let max_height = (screen_rect.height() - OSK_MARGIN * 2.0).max(OSK_KEY_HEIGHT);
     let mut outcome = OskOutcome::None;
     let modal_id = egui::Id::new("path-osk-modal");
     let modal_area = egui::Modal::default_area(modal_id)
@@ -1596,7 +1595,7 @@ fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState)
         .show(ui.ctx(), |ui| {
             ui.set_min_width(size.x);
             ui.set_max_width(size.x);
-            ui.set_max_height(size.y);
+            ui.set_max_height(max_height);
             ui.vertical_centered(|ui| {
                 ui.heading(localizer.text(UiText::OskTitle));
             });
@@ -1608,41 +1607,43 @@ fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState)
             );
             ui.separator();
 
-            let keyboard_height = osk_keyboard_height();
-            let keyboard_max_height = ui
-                .available_height()
-                .min(keyboard_height)
-                .max(OSK_KEY_HEIGHT);
-            egui::ScrollArea::vertical()
-                .id_salt("path-osk-keys-scroll")
-                .max_height(keyboard_max_height)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(OSK_KEY_SPACING, OSK_KEY_SPACING);
-                    for (row_index, row) in OSK_LAYOUT.iter().enumerate() {
-                        ui.horizontal_centered(|ui| {
-                            for (col_index, key) in row.iter().enumerate() {
-                                let selected =
-                                    osk.selected_row == row_index && osk.selected_col == col_index;
-                                let mut button =
-                                    egui::Button::new(osk_key_label(osk, localizer, *key));
-                                if selected {
-                                    button = button.fill(ui.visuals().selection.bg_fill);
-                                }
-                                if ui
-                                    .add_sized([OSK_KEY_WIDTH, OSK_KEY_HEIGHT], button)
-                                    .clicked()
-                                {
-                                    osk.selected_row = row_index;
-                                    osk.selected_col = col_index;
-                                    outcome = osk.press_selected_key();
-                                }
-                            }
-                        });
-                    }
-                });
+            ui.spacing_mut().item_spacing.y = OSK_KEY_SPACING;
+            for (row_index, row) in OSK_LAYOUT.iter().enumerate() {
+                show_osk_key_row(ui, localizer, osk, row_index, row, &mut outcome);
+            }
         });
 
     outcome
+}
+
+fn show_osk_key_row(
+    ui: &mut egui::Ui,
+    localizer: Localizer,
+    osk: &mut OskState,
+    row_index: usize,
+    row: &[OskKey],
+    outcome: &mut OskOutcome,
+) {
+    let row_width = osk_row_width(row);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = OSK_KEY_SPACING;
+        ui.add_space(((ui.available_width() - row_width) * 0.5).max(0.0));
+        for (col_index, key) in row.iter().enumerate() {
+            let selected = osk.selected_row == row_index && osk.selected_col == col_index;
+            let mut button = egui::Button::new(osk_key_label(osk, localizer, *key));
+            if selected {
+                button = button.fill(ui.visuals().selection.bg_fill);
+            }
+            if ui
+                .add_sized([OSK_KEY_WIDTH, OSK_KEY_HEIGHT], button)
+                .clicked()
+            {
+                osk.selected_row = row_index;
+                osk.selected_col = col_index;
+                *outcome = osk.press_selected_key();
+            }
+        }
+    });
 }
 
 fn osk_overlay_size(screen_size: egui::Vec2) -> egui::Vec2 {
@@ -1655,10 +1656,6 @@ fn osk_overlay_size(screen_size: egui::Vec2) -> egui::Vec2 {
 }
 
 #[cfg(test)]
-fn osk_keyboard_section_height(overlay_size: egui::Vec2) -> f32 {
-    (overlay_size.y - OSK_FIXED_CONTENT_HEIGHT).max(OSK_KEY_HEIGHT)
-}
-
 fn osk_keyboard_height() -> f32 {
     OSK_LAYOUT.iter().fold(0.0, |height, _row| {
         if height == 0.0 {
@@ -1670,6 +1667,10 @@ fn osk_keyboard_height() -> f32 {
 }
 
 #[cfg(test)]
+fn osk_keyboard_section_height(overlay_size: egui::Vec2) -> f32 {
+    overlay_size.y.max(OSK_KEY_HEIGHT)
+}
+
 fn osk_row_width(row: &[OskKey]) -> f32 {
     row.iter().fold(0.0, |width, _key| {
         if width == 0.0 {
