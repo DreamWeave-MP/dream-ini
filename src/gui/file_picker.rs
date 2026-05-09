@@ -77,6 +77,7 @@ impl PathPickerState {
         ui: &mut egui::Ui,
         localizer: Localizer,
         controller_actions: &[ControllerAction],
+        show_controller_help: bool,
     ) -> PickOutcome {
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             return PickOutcome::Cancelled;
@@ -90,6 +91,9 @@ impl PathPickerState {
             ui.heading(self.title(localizer));
         });
         ui.separator();
+        if show_controller_help {
+            ui.small("Controller: D-pad/left stick moves • A/Enter opens or chooses • B cancels • Left goes parent • Right enters • Start chooses the current path • LB toggles hidden directories");
+        }
 
         ui.label(localizer.text(UiText::CurrentDirectory));
         ui.monospace(self.current_dir.display().to_string());

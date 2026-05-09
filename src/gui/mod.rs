@@ -504,7 +504,12 @@ impl GuiApp {
                     .show(ui, |ui| self.show_form(ui));
             }
             GuiMode::PathPicker(picker) => {
-                match picker.ui(ui, self.localizer, controller_actions) {
+                match picker.ui(
+                    ui,
+                    self.localizer,
+                    controller_actions,
+                    self.controller_navigation_visible,
+                ) {
                     PickOutcome::None => {}
                     PickOutcome::Cancelled => self.mode = GuiMode::ImportForm,
                     PickOutcome::Chosen { target, path } => {
@@ -519,6 +524,7 @@ impl GuiApp {
     fn show_form(&mut self, ui: &mut egui::Ui) {
         self.ensure_selected_form_control_available();
         self.show_language_selector(ui);
+        self.show_controller_help(ui);
         ui.separator();
         let existing_cfg_label = self.existing_cfg_label();
         let path_label_width = self.path_label_width(ui, &existing_cfg_label);
@@ -597,6 +603,13 @@ impl GuiApp {
         let result = self.state.run_import();
         self.selected_result_panel = result.default_panel();
         self.result = Some(result);
+    }
+
+    fn show_controller_help(&self, ui: &mut egui::Ui) {
+        if !self.controller_navigation_visible {
+            return;
+        }
+        ui.small("Controller: D-pad/left stick moves • A toggles/chooses • B exits • X clears selected path • Start imports • left/right adjusts options • right stick scrolls generated cfg");
     }
 
     fn existing_cfg_label(&self) -> String {
