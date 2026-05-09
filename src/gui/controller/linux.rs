@@ -62,20 +62,23 @@ impl std::fmt::Debug for ControllerWorker {
 }
 
 impl ControllerWorker {
-    pub(super) fn spawn(sender: SyncSender<ControllerEvent>, context: egui::Context) -> Self {
+    pub(super) fn spawn(
+        sender: SyncSender<ControllerEvent>,
+        context: egui::Context,
+    ) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
-        let (worker_wake, wake) = WakeFd::new_pair().expect("Linux controller wake fd should open");
+        let (worker_wake, wake) = WakeFd::new_pair().ok()?;
         let handle = thread::Builder::new()
             .name("dream-ini-linux-controller".to_owned())
             .spawn(move || run_worker(&sender, &context, &worker_stop, worker_wake))
-            .expect("Linux controller worker thread should spawn");
+            .ok()?;
 
-        Self {
+        Some(Self {
             stop,
             wake,
             handle: Some(handle),
-        }
+        })
     }
 }
 

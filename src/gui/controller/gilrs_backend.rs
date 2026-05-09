@@ -33,18 +33,21 @@ impl std::fmt::Debug for ControllerWorker {
 }
 
 impl ControllerWorker {
-    pub(super) fn spawn(sender: SyncSender<ControllerEvent>, context: egui::Context) -> Self {
+    pub(super) fn spawn(
+        sender: SyncSender<ControllerEvent>,
+        context: egui::Context,
+    ) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let handle = thread::Builder::new()
             .name("dream-ini-gilrs-controller".to_owned())
             .spawn(move || run_worker(&sender, &context, &worker_stop))
-            .expect("gilrs controller worker thread should spawn");
+            .ok()?;
 
-        Self {
+        Some(Self {
             stop,
             handle: Some(handle),
-        }
+        })
     }
 }
 

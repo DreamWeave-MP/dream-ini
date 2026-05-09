@@ -45,7 +45,7 @@ impl Controller {
         let (sender, receiver) = mpsc::sync_channel(MAX_QUEUED_CONTROLLER_ACTIONS);
         Self {
             receiver,
-            worker: Some(backend::ControllerWorker::spawn(sender, context)),
+            worker: backend::ControllerWorker::spawn(sender, context),
         }
     }
 

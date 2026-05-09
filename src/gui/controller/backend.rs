@@ -8,7 +8,10 @@ use super::ControllerEvent;
 pub(super) struct ControllerWorker;
 
 impl ControllerWorker {
-    pub(super) fn spawn(_sender: SyncSender<ControllerEvent>, _context: egui::Context) -> Self {
-        Self
+    pub(super) fn spawn(
+        _sender: SyncSender<ControllerEvent>,
+        _context: egui::Context,
+    ) -> Option<Self> {
+        None
     }
 }
