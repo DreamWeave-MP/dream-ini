@@ -2,12 +2,20 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+use eframe::egui;
 
 use super::ControllerAction;
 
 const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
+const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 const INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(350);
 const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
 const STICK_DEADZONE: i32 = 16_384;
@@ -27,13 +35,53 @@ const ABS_Y: u16 = 0x01;
 const ABS_HAT0X: u16 = 0x10;
 const ABS_HAT0Y: u16 = 0x11;
 
+pub(super) struct ControllerWorker {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for ControllerWorker {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ControllerWorker")
+            .field("stop_requested", &self.stop.load(Ordering::Relaxed))
+            .field("running", &self.handle.is_some())
+            .finish()
+    }
+}
+
+impl ControllerWorker {
+    pub(super) fn spawn(sender: Sender<ControllerAction>, context: egui::Context) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let handle = thread::Builder::new()
+            .name("dream-ini-linux-controller".to_owned())
+            .spawn(move || run_worker(&sender, &context, &worker_stop))
+            .expect("Linux controller worker thread should spawn");
+
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for ControllerWorker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 #[derive(Debug)]
-pub(super) struct ControllerBackend {
+struct WorkerState {
     devices: Vec<InputDevice>,
     last_scan: Instant,
 }
 
-impl Default for ControllerBackend {
+impl Default for WorkerState {
     fn default() -> Self {
         Self {
             devices: open_devices(),
@@ -42,10 +90,15 @@ impl Default for ControllerBackend {
     }
 }
 
-impl ControllerBackend {
-    pub(super) fn poll(&mut self) -> Vec<ControllerAction> {
+impl WorkerState {
+    fn poll(&mut self) -> Vec<ControllerAction> {
         self.rescan_if_needed();
+        if self.devices.is_empty() {
+            sleep_for(IDLE_POLL_TIMEOUT);
+            return Vec::new();
+        }
 
+        self.wait_for_input();
         let mut actions = Vec::new();
         self.devices.retain_mut(|device| match device.poll() {
             Ok(device_actions) => {
@@ -56,6 +109,38 @@ impl ControllerBackend {
             Err(_) => false,
         });
         deduplicate(actions)
+    }
+
+    fn wait_for_input(&self) {
+        let timeout = self.next_repeat_delay().unwrap_or(IDLE_POLL_TIMEOUT);
+        let timeout_ms = duration_to_poll_timeout(timeout);
+        let mut poll_fds = self
+            .devices
+            .iter()
+            .map(|device| libc::pollfd {
+                fd: device.file.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect::<Vec<_>>();
+        // SAFETY: poll_fds points to a valid mutable array for the duration of
+        // the call. poll(2) only writes revents fields in that array.
+        let _ = unsafe {
+            libc::poll(
+                poll_fds.as_mut_ptr(),
+                poll_fds.len() as libc::nfds_t,
+                timeout_ms,
+            )
+        };
+    }
+
+    fn next_repeat_delay(&self) -> Option<Duration> {
+        let now = Instant::now();
+        self.devices
+            .iter()
+            .filter_map(InputDevice::next_repeat)
+            .min()
+            .map(|instant| instant.saturating_duration_since(now))
     }
 
     fn rescan_if_needed(&mut self) {
@@ -69,6 +154,36 @@ impl ControllerBackend {
         self.devices = open_devices();
         self.last_scan = Instant::now();
     }
+}
+
+fn run_worker(sender: &Sender<ControllerAction>, context: &egui::Context, stop: &AtomicBool) {
+    let mut state = WorkerState::default();
+    while !stop.load(Ordering::Relaxed) {
+        let actions = state.poll();
+        if actions.is_empty() {
+            continue;
+        }
+
+        let mut sent_action = false;
+        for action in actions {
+            if sender.send(action).is_err() {
+                return;
+            }
+            sent_action = true;
+        }
+        if sent_action {
+            context.request_repaint();
+        }
+    }
+}
+
+fn duration_to_poll_timeout(duration: Duration) -> i32 {
+    let milliseconds = duration.as_millis().min(i32::MAX as u128);
+    i32::try_from(milliseconds).expect("duration was clamped to i32::MAX")
+}
+
+fn sleep_for(duration: Duration) {
+    thread::sleep(duration);
 }
 
 #[derive(Debug)]
@@ -114,6 +229,10 @@ impl InputDevice {
 
         actions.extend(self.repeater.poll(now));
         Ok(actions)
+    }
+
+    fn next_repeat(&self) -> Option<Instant> {
+        self.repeater.next_repeat()
     }
 
     fn handle_event(&mut self, event: InputEvent, now: Instant) -> Vec<ControllerAction> {
@@ -223,6 +342,13 @@ impl ActionRepeater {
         .collect()
     }
 
+    fn next_repeat(&self) -> Option<Instant> {
+        [&self.up, &self.down, &self.left, &self.right]
+            .into_iter()
+            .filter_map(HeldAction::next_repeat)
+            .min()
+    }
+
     fn held_mut(&mut self, action: ControllerAction) -> Option<&mut HeldAction> {
         match action {
             ControllerAction::Up => Some(&mut self.up),
@@ -262,6 +388,10 @@ impl HeldAction {
         }
         self.next_repeat = Some(now + REPEAT_INTERVAL);
         true
+    }
+
+    const fn next_repeat(&self) -> Option<Instant> {
+        self.next_repeat
     }
 }
 

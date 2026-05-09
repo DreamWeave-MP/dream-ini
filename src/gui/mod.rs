@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
 
 use dream_ini::{
     ImportError, ImportEvent, ImportOptions, ImportResult, ImportWarning, IniImporter,
@@ -25,7 +24,6 @@ const CFG_KEY_RESOURCES: &str = "resources";
 const CFG_KEY_USERDATA: &str = "user-data";
 const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
 const OPENMW_CFG_LABEL: &str = "openmw.cfg";
-const CONTROLLER_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
@@ -39,7 +37,7 @@ pub(crate) fn run() -> ExitCode {
     let result = eframe::run_native(
         APP_NAME,
         options,
-        Box::new(|_creation_context| Ok(Box::new(GuiApp::default()))),
+        Box::new(|creation_context| Ok(Box::new(GuiApp::new(creation_context.egui_ctx.clone())))),
     );
 
     match result {
@@ -75,6 +73,23 @@ struct GuiApp {
 
 impl Default for GuiApp {
     fn default() -> Self {
+        Self::new_without_controller_worker()
+    }
+}
+
+impl GuiApp {
+    fn new(context: egui::Context) -> Self {
+        Self {
+            controller: controller::Controller::new(context),
+            localizer: Localizer::default(),
+            state: ImportFormState::default(),
+            result: None,
+            selected_result_panel: ResultPanel::default(),
+            mode: GuiMode::ImportForm,
+        }
+    }
+
+    fn new_without_controller_worker() -> Self {
         Self {
             controller: controller::Controller::default(),
             localizer: Localizer::default(),
@@ -93,7 +108,6 @@ enum GuiMode {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        context.request_repaint_after(CONTROLLER_POLL_INTERVAL);
         let controller_actions = self.controller.poll();
         self.handle_controller_actions(context, &controller_actions);
         self.handle_shortcuts(context);

@@ -1,10 +1,14 @@
+use std::sync::mpsc::Sender;
+
+use eframe::egui;
+
 use super::ControllerAction;
 
-#[derive(Debug, Default)]
-pub(super) struct ControllerBackend;
+#[derive(Debug)]
+pub(super) struct ControllerWorker;
 
-impl ControllerBackend {
-    pub(super) fn poll(&mut self) -> Vec<ControllerAction> {
-        Vec::new()
+impl ControllerWorker {
+    pub(super) fn spawn(_sender: Sender<ControllerAction>, _context: egui::Context) -> Self {
+        Self
     }
 }
