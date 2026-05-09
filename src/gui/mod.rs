@@ -30,8 +30,8 @@ pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(APP_ID)
-            .with_inner_size([760.0, 860.0])
-            .with_min_inner_size([640.0, 600.0])
+            .with_inner_size([640.0, 480.0])
+            .with_min_inner_size([480.0, 320.0])
             .with_icon(window_icon()),
         ..Default::default()
     };
@@ -512,12 +512,22 @@ impl GuiApp {
                     .show(ui, |ui| self.show_form(ui));
             }
             GuiMode::PathPicker(picker) => {
-                match picker.ui(
-                    ui,
-                    self.localizer,
-                    controller_actions,
-                    self.controller_navigation_visible,
-                ) {
+                let controller_scroll_delta = path_picker_scroll_delta(controller_actions);
+                let outcome = egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if controller_scroll_delta != egui::Vec2::ZERO {
+                            ui.scroll_with_delta(controller_scroll_delta);
+                        }
+                        picker.ui(
+                            ui,
+                            self.localizer,
+                            controller_actions,
+                            self.controller_navigation_visible,
+                        )
+                    })
+                    .inner;
+                match outcome {
                     PickOutcome::None => {}
                     PickOutcome::Cancelled => self.mode = GuiMode::ImportForm,
                     PickOutcome::Chosen { target, path } => {
@@ -1064,6 +1074,31 @@ fn generated_cfg_scroll_delta(direction: PreviewScroll) -> egui::Vec2 {
         PreviewScroll::Up => egui::vec2(0.0, CONTROLLER_PREVIEW_SCROLL_PIXELS),
         PreviewScroll::Down => egui::vec2(0.0, -CONTROLLER_PREVIEW_SCROLL_PIXELS),
     }
+}
+
+fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
+    actions.iter().fold(egui::Vec2::ZERO, |delta, action| {
+        delta
+            + match action {
+                ControllerAction::ScrollPreviewUp => {
+                    egui::vec2(0.0, CONTROLLER_PREVIEW_SCROLL_PIXELS)
+                }
+                ControllerAction::ScrollPreviewDown => {
+                    egui::vec2(0.0, -CONTROLLER_PREVIEW_SCROLL_PIXELS)
+                }
+                ControllerAction::ScrollPreviewLeft
+                | ControllerAction::ScrollPreviewRight
+                | ControllerAction::Up
+                | ControllerAction::Down
+                | ControllerAction::Left
+                | ControllerAction::Right
+                | ControllerAction::Accept
+                | ControllerAction::Cancel
+                | ControllerAction::ClearCurrent
+                | ControllerAction::SelectCurrent
+                | ControllerAction::ToggleHiddenDirectories => egui::Vec2::ZERO,
+            }
+    })
 }
 
 fn cycle_item<T: Copy + PartialEq>(items: &[T], current: T, adjustment: FormAdjustment) -> T {
@@ -1876,6 +1911,21 @@ mod tests {
         );
 
         assert!(app.generated_cfg_scroll_delta.length_sq() < f32::EPSILON);
+    }
+
+    #[test]
+    fn path_picker_scroll_delta_uses_only_vertical_preview_scroll_actions() {
+        let delta = path_picker_scroll_delta(&[
+            ControllerAction::ScrollPreviewDown,
+            ControllerAction::ScrollPreviewRight,
+            ControllerAction::Down,
+            ControllerAction::ScrollPreviewUp,
+            ControllerAction::ScrollPreviewUp,
+            ControllerAction::ToggleHiddenDirectories,
+        ]);
+
+        assert!(delta.x.abs() < f32::EPSILON);
+        assert!((delta.y - CONTROLLER_PREVIEW_SCROLL_PIXELS).abs() < f32::EPSILON);
     }
 
     #[test]
