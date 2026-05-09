@@ -5,17 +5,11 @@
     allow(dead_code, unused_imports)
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 #[cfg(feature = "gui")]
 use std::process::ExitCode;
 
-use dream_ini::{
-    ImportError, ImportEvent, ImportOptions, ImportResult, ImportWarning, IniImporter,
-    PreservedCfgUpdate, TextEncoding, apply_preserved_cfg_update, load_cfg_document,
-    save_cfg_output_to_path, save_preserved_cfg_document_to_path,
-    save_resolved_configuration_to_path, serialize_cfg_output, serialize_preserved_cfg_document,
-    serialize_resolved_configuration,
-};
+use dream_ini::TextEncoding;
 
 use self::controller::{ControllerAction, ControllerEvent};
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
@@ -23,9 +17,10 @@ use self::form_nav::{
     ExistingCfgVisibility, FormAdjustment, FormControl, FormSelectionStep, ImportVisibility,
     ResultVisibility, cycled_encoding, cycled_language, cycled_output_mode,
 };
+use self::form_state::{GuiImportResult, GuiOutputMode, ImportFormState};
 use self::localization::{Localizer, UiLanguage, UiText};
 use self::osk::{OskOutcome, OskState, show_osk_overlay};
-use self::path_helpers::{cfg_parent, optional_path, same_cfg_context};
+use self::path_helpers::optional_path;
 use self::path_widgets::{
     controller_marker_width, path_file_row, path_folder_row, path_label_width, path_save_file_row,
 };
@@ -45,6 +40,7 @@ use crate::desktop_entry::{APP_ID, APP_NAME};
 mod controller;
 mod file_picker;
 mod form_nav;
+mod form_state;
 mod localization;
 mod osk;
 mod path_helpers;
@@ -1190,277 +1186,6 @@ fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ImportFormState {
-    morrowind_ini: String,
-    existing_cfg: String,
-    encoding: Option<TextEncoding>,
-    import_fonts: bool,
-    import_archives: bool,
-    import_content_files: bool,
-    explicit_search_path: String,
-    data_local: String,
-    resources: String,
-    user_data: String,
-    output_mode: GuiOutputMode,
-    output_path: String,
-}
-
-impl Default for ImportFormState {
-    fn default() -> Self {
-        Self {
-            morrowind_ini: String::new(),
-            existing_cfg: String::new(),
-            encoding: None,
-            import_fonts: false,
-            import_archives: true,
-            import_content_files: false,
-            explicit_search_path: String::new(),
-            data_local: String::new(),
-            resources: String::new(),
-            user_data: String::new(),
-            output_mode: GuiOutputMode::PreviewOnly,
-            output_path: String::new(),
-        }
-    }
-}
-
-impl ImportFormState {
-    fn disabled_import_reason(&self) -> Option<UiText> {
-        if optional_path(&self.morrowind_ini).is_none() {
-            return Some(UiText::SelectMorrowindIniBeforeImporting);
-        }
-        if self.output_mode == GuiOutputMode::SaveAs && optional_path(&self.output_path).is_none() {
-            return Some(UiText::SelectOutputPathBeforeImporting);
-        }
-        if self.output_mode == GuiOutputMode::UpdateExistingCfg
-            && optional_path(&self.existing_cfg).is_none()
-        {
-            return Some(UiText::SelectExistingCfgBeforeUpdating);
-        }
-        None
-    }
-
-    fn run_import(&self) -> GuiImportResult {
-        let Some(ini_path) = optional_path(&self.morrowind_ini) else {
-            return GuiImportResult::Error {
-                error: GuiImportError::MissingMorrowindIni,
-            };
-        };
-        let cfg_path = optional_path(&self.existing_cfg);
-        let importer = IniImporter::new(self.import_options());
-
-        match importer.import_optional_cfg_path(&ini_path, cfg_path.as_deref()) {
-            Ok(result) => {
-                let cfg_text = match self.serialize_result(&result) {
-                    Ok(cfg_text) => cfg_text,
-                    Err(error) => {
-                        return GuiImportResult::Error {
-                            error: GuiImportError::Import(error),
-                        };
-                    }
-                };
-                match self.write_output(&result) {
-                    Ok(output_path) => GuiImportResult::Success {
-                        cfg_text,
-                        warnings: result.warnings,
-                        events: result.events,
-                        output_path,
-                    },
-                    Err(error) => GuiImportResult::Error { error },
-                }
-            }
-            Err(error) => GuiImportResult::Error {
-                error: GuiImportError::Import(error),
-            },
-        }
-    }
-
-    fn serialize_result(&self, result: &ImportResult) -> Result<String, ImportError> {
-        if let Some(cfg_path) = optional_path(&self.existing_cfg) {
-            let mut config = load_cfg_document(&cfg_path)?;
-            apply_preserved_cfg_update(
-                &mut config,
-                &result.cfg,
-                &self.preserved_update(),
-                &result.changed_keys,
-            )?;
-            if self.relocated_existing_cfg_output() {
-                Ok(serialize_resolved_configuration(&config))
-            } else {
-                Ok(serialize_preserved_cfg_document(
-                    &config,
-                    &cfg_path,
-                    &self.preserved_update(),
-                    &result.changed_keys,
-                ))
-            }
-        } else {
-            serialize_cfg_output(&result.cfg, &self.output_reference_dir())
-        }
-    }
-
-    fn write_output(&self, result: &ImportResult) -> Result<Option<PathBuf>, GuiImportError> {
-        match self.output_mode {
-            GuiOutputMode::PreviewOnly => Ok(None),
-            GuiOutputMode::SaveAs => {
-                let Some(output_path) = optional_path(&self.output_path) else {
-                    return Err(GuiImportError::MissingOutputPath);
-                };
-                if let Some(cfg_path) = optional_path(&self.existing_cfg) {
-                    let mut config =
-                        load_cfg_document(&cfg_path).map_err(GuiImportError::Import)?;
-                    apply_preserved_cfg_update(
-                        &mut config,
-                        &result.cfg,
-                        &self.preserved_update(),
-                        &result.changed_keys,
-                    )
-                    .map_err(GuiImportError::Import)?;
-                    if same_cfg_context(&cfg_path, &output_path) {
-                        save_preserved_cfg_document_to_path(
-                            &config,
-                            &cfg_path,
-                            &output_path,
-                            &self.preserved_update(),
-                            &result.changed_keys,
-                        )
-                        .map_err(GuiImportError::Import)?;
-                    } else {
-                        save_resolved_configuration_to_path(&config, &output_path)
-                            .map_err(GuiImportError::Import)?;
-                    }
-                } else {
-                    save_cfg_output_to_path(&result.cfg, &output_path)
-                        .map_err(GuiImportError::Import)?;
-                }
-                Ok(Some(output_path))
-            }
-            GuiOutputMode::UpdateExistingCfg => {
-                let Some(cfg_path) = optional_path(&self.existing_cfg) else {
-                    return Err(GuiImportError::MissingExistingCfgForUpdate);
-                };
-                let mut config = load_cfg_document(&cfg_path).map_err(GuiImportError::Import)?;
-                apply_preserved_cfg_update(
-                    &mut config,
-                    &result.cfg,
-                    &self.preserved_update(),
-                    &result.changed_keys,
-                )
-                .map_err(GuiImportError::Import)?;
-                save_preserved_cfg_document_to_path(
-                    &config,
-                    &cfg_path,
-                    &cfg_path,
-                    &self.preserved_update(),
-                    &result.changed_keys,
-                )
-                .map_err(GuiImportError::Import)?;
-                Ok(Some(cfg_path))
-            }
-        }
-    }
-
-    fn preserved_update(&self) -> PreservedCfgUpdate {
-        PreservedCfgUpdate {
-            import_game_files: self.import_content_files,
-            import_archives: self.import_archives,
-            data_local: optional_path(&self.data_local),
-            resources: optional_path(&self.resources),
-            user_data: optional_path(&self.user_data),
-        }
-    }
-
-    fn output_reference_dir(&self) -> PathBuf {
-        let reference = match self.output_mode {
-            GuiOutputMode::SaveAs => optional_path(&self.output_path),
-            GuiOutputMode::PreviewOnly | GuiOutputMode::UpdateExistingCfg => {
-                optional_path(&self.existing_cfg)
-            }
-        };
-
-        reference
-            .and_then(|path| path.parent().map(Path::to_owned))
-            .unwrap_or_default()
-    }
-
-    fn import_options(&self) -> ImportOptions {
-        ImportOptions {
-            import_game_files: self.import_content_files,
-            import_fonts: self.import_fonts,
-            import_archives: self.import_archives,
-            data_dirs: optional_path(&self.explicit_search_path)
-                .into_iter()
-                .collect(),
-            data_dir_base: self.output_context_dir(),
-            write_resolved_data_dirs: self.relocated_existing_cfg_output(),
-            data_local: optional_path(&self.data_local),
-            resources: optional_path(&self.resources),
-            user_data: optional_path(&self.user_data),
-            encoding: self.encoding,
-            verbose: true,
-            ..ImportOptions::default()
-        }
-    }
-
-    fn output_context_dir(&self) -> Option<PathBuf> {
-        match self.output_mode {
-            GuiOutputMode::SaveAs => optional_path(&self.output_path),
-            GuiOutputMode::PreviewOnly | GuiOutputMode::UpdateExistingCfg => {
-                optional_path(&self.existing_cfg)
-            }
-        }
-        .map(|path| cfg_parent(&path).to_owned())
-    }
-
-    fn relocated_existing_cfg_output(&self) -> bool {
-        if self.output_mode != GuiOutputMode::SaveAs {
-            return false;
-        }
-        optional_path(&self.existing_cfg)
-            .zip(optional_path(&self.output_path))
-            .is_some_and(|(cfg_path, output_path)| !same_cfg_context(&cfg_path, &output_path))
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum GuiOutputMode {
-    #[default]
-    PreviewOnly,
-    SaveAs,
-    UpdateExistingCfg,
-}
-
-#[derive(Debug)]
-enum GuiImportResult {
-    Success {
-        cfg_text: String,
-        warnings: Vec<ImportWarning>,
-        events: Vec<ImportEvent>,
-        output_path: Option<PathBuf>,
-    },
-    Error {
-        error: GuiImportError,
-    },
-}
-
-impl GuiImportResult {
-    const fn default_panel(&self) -> ResultPanel {
-        match self {
-            Self::Success { .. } => ResultPanel::GeneratedCfg,
-            Self::Error { .. } => ResultPanel::Errors,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum GuiImportError {
-    MissingMorrowindIni,
-    MissingOutputPath,
-    MissingExistingCfgForUpdate,
-    Import(ImportError),
-}
-
 fn encoding_dropdown(
     ui: &mut egui::Ui,
     localizer: Localizer,
@@ -1509,7 +1234,10 @@ const fn encoding_label(encoding: TextEncoding) -> &'static str {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use dream_ini::ImportResult;
 
     #[derive(Debug, Default)]
     struct TestGuiShell {

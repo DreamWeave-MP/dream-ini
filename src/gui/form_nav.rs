@@ -2,7 +2,7 @@
 
 use dream_ini::TextEncoding;
 
-use super::GuiOutputMode;
+use super::form_state::GuiOutputMode;
 use super::localization::UiLanguage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

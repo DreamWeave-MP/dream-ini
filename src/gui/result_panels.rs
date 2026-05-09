@@ -6,8 +6,8 @@
 )]
 
 use super::form_nav::FormAdjustment;
+use super::form_state::{GuiImportError, GuiImportResult};
 use super::localization::{Localizer, UiText};
-use super::{GuiImportError, GuiImportResult};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum ResultPanel {
