@@ -52,6 +52,10 @@ dream-ini -M > dream-ini.1
 - `-o, --output <FILE>`: output cfg path.
 - `-V, --version`: print version information.
 
+### Commands
+
+- `install-launcher`: install a desktop launcher and icon for the current user. On Linux this writes a `.desktop` file and hicolor PNG icon to `$XDG_DATA_HOME` when it is absolute, otherwise to `~/.local/share`. On Windows this writes a Start Menu shortcut and `.ico` icon under `%APPDATA%`.
+
 ## Behavior
 
 - Existing cfg output is updated through `openmw-config`'s preservation-oriented serialization when the output remains in the same cfg directory. Comments, unrelated entries, and relative/token path spelling are preserved unless a key is intentionally replaced by the import.

@@ -25,7 +25,7 @@ fn render_manpage(stdout: &mut dyn Write) -> Result<(), CliError> {
     manpage.render_name_section(stdout)?;
     write!(
         stdout,
-        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n"
+        ".SH SYNOPSIS\n.B dream-ini\n--ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n.br\n.B dream-ini\n--generate-completion <SHELL>\n.br\n.B dream-ini\n--generate-manpage\n.br\n.B dream-ini\ninstall-launcher\n"
     )?;
     manpage.render_description_section(stdout)?;
     manpage.render_options_section(stdout)?;

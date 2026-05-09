@@ -4,6 +4,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::cli::CliCommand;
+use crate::desktop_entry::APP_ID;
 use clap_complete::Shell;
 
 #[test]
@@ -29,6 +31,7 @@ fn run_with_generation_options_do_not_require_ini() {
             fonts: false,
             no_archives: false,
             encoding: None,
+            command: None,
         },
         &mut stdout,
         &mut stderr,
@@ -58,6 +61,7 @@ fn run_with_generation_options_do_not_require_ini() {
             fonts: false,
             no_archives: false,
             encoding: None,
+            command: None,
         },
         &mut stdout,
         &mut stderr,
@@ -67,6 +71,74 @@ fn run_with_generation_options_do_not_require_ini() {
     assert!(manpage.contains("dream-ini"));
     assert!(manpage.contains("Import Morrowind.ini settings"));
     assert!(stderr.is_empty());
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn run_with_install_launcher_command_writes_launcher_and_icon() {
+    let dir = unique_test_dir("install-launcher-run");
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    run_with_writers(
+        Cli {
+            verbose: false,
+            help: None,
+            version: None,
+            ini: None,
+            cfg: None,
+            output: None,
+            data_dir: None,
+            data_local: None,
+            resources: None,
+            user_data: None,
+            in_place: false,
+            generate_completion: None,
+            generate_manpage: false,
+            game_files: false,
+            fonts: false,
+            no_archives: false,
+            encoding: None,
+            command: Some(CliCommand::InstallLauncher {
+                data_home: Some(dir.clone()),
+            }),
+        },
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+
+    #[cfg(target_os = "linux")]
+    let (launcher, icon) = (
+        dir.join("applications").join(format!("{APP_ID}.desktop")),
+        dir.join("icons/hicolor/512x512/apps")
+            .join(format!("{APP_ID}.png")),
+    );
+    #[cfg(windows)]
+    let (launcher, icon) = (
+        dir.join("Microsoft")
+            .join("Windows")
+            .join("Start Menu")
+            .join("Programs")
+            .join("Dream INI.lnk"),
+        dir.join("Dream INI").join("logo.ico"),
+    );
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let (launcher, icon) = (dir.join("unsupported"), dir.join("unsupported"));
+
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(stdout.contains(&launcher.display().to_string()));
+    assert!(stdout.contains(&icon.display().to_string()));
+    #[cfg(target_os = "linux")]
+    assert!(
+        fs::read_to_string(launcher)
+            .unwrap()
+            .contains(&format!("Icon={APP_ID}"))
+    );
+    assert!(!fs::read(icon).unwrap().is_empty());
+    assert!(stderr.is_empty());
+
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -102,6 +174,7 @@ fn run_with_writes_output_from_flag_paths() {
         fonts: false,
         no_archives: false,
         encoding: None,
+        command: None,
     })
     .unwrap();
 
@@ -232,6 +305,7 @@ fn run_rejects_multiple_output_modes() {
         fonts: false,
         no_archives: true,
         encoding: None,
+        command: None,
     })
     .unwrap_err();
 
@@ -358,6 +432,7 @@ fn run_with_missing_ini_returns_parity_error() {
         fonts: false,
         no_archives: false,
         encoding: None,
+        command: None,
     })
     .unwrap_err();
 
@@ -488,6 +563,7 @@ fn import_cli(ini: PathBuf) -> Cli {
         fonts: false,
         no_archives: false,
         encoding: None,
+        command: None,
     }
 }
 
