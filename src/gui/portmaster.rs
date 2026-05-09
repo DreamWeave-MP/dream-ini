@@ -31,7 +31,7 @@ const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 #[cfg(target_os = "linux")]
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 #[cfg(target_os = "linux")]
-const FRAME_DELAY: Duration = Duration::from_millis(33);
+const PORTMASTER_FRAME_DELAY: Duration = Duration::from_millis(67);
 #[cfg(target_os = "linux")]
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 #[cfg(target_os = "linux")]
@@ -111,7 +111,7 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
             break 'gui "exit-requested";
         }
 
-        thread::sleep(FRAME_DELAY);
+        thread::sleep(PORTMASTER_FRAME_DELAY);
     };
 
     write_log(
