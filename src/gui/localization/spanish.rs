@@ -44,7 +44,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
             "Importa entradas GameFile como orden de carga y resuelve los plugins referenciados."
         }
         UiText::ExplicitSearchPathTooltip => {
-            "Directorio Data Files opcional usado para resolver contenido y archivos importados."
+            "Directorio Data Files opcional usado para resolver contenido y archivos BSA importados."
         }
         UiText::DataLocalTooltip => {
             "Escribe la opción runtime data-local de OpenMW. dream-ini no busca en esta ruta al importar; use el directorio Data Files para eso."

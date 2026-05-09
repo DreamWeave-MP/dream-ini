@@ -6,9 +6,9 @@ pub(super) const fn text(key: UiText) -> &'static str {
     match key {
         UiText::Language => "Language",
         UiText::EnglishLanguage => "English",
-        UiText::FrenchLanguage => "Français",
-        UiText::GermanLanguage => "Deutsch",
-        UiText::SpanishLanguage => "Español",
+        UiText::FrenchLanguage => "French",
+        UiText::GermanLanguage => "German",
+        UiText::SpanishLanguage => "Spanish",
         UiText::SourceSection => "Source",
         UiText::Existing => "Existing",
         UiText::Browse => "Browse…",
