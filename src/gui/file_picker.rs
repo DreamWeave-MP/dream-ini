@@ -112,6 +112,9 @@ impl PathPickerState {
                 };
             }
         });
+        if !matches!(outcome, PickOutcome::None) {
+            return outcome;
+        }
 
         if ui
             .checkbox(
@@ -138,6 +141,9 @@ impl PathPickerState {
                     path,
                 };
             }
+        }
+        if !matches!(outcome, PickOutcome::None) {
+            return outcome;
         }
 
         ui.separator();

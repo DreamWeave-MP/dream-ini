@@ -18,12 +18,13 @@ const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 const INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(350);
 const MAX_DEVICE_READ_BATCHES: usize = 4;
-const MAX_WORKER_ACTIONS_PER_TICK: usize = 32;
+const MAX_WORKER_ACTIONS_PER_POLL: usize = 32;
 const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
-const STICK_DEADZONE: i32 = 16_384;
 
 const EV_KEY: u16 = 0x01;
 const EV_ABS: u16 = 0x03;
+const KEY_MAX: u16 = 0x2ff;
+const ABS_MAX: u16 = 0x3f;
 
 const BTN_SOUTH: u16 = 0x130;
 const BTN_EAST: u16 = 0x131;
@@ -112,7 +113,7 @@ impl WorkerState {
         self.devices.retain_mut(|device| match device.poll() {
             Ok(device_actions) => {
                 actions.extend(device_actions);
-                actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
+                actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
                 true
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
@@ -292,10 +293,17 @@ impl InputDevice {
             .read(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)?;
+        if !has_controller_capabilities(file.as_raw_fd()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "input device does not expose controller capabilities",
+            ));
+        }
+        let axes = AxisState::new(AxisCalibration::read(file.as_raw_fd()));
         Ok(Self {
             identity: device_identity(path),
             file,
-            axes: AxisState::default(),
+            axes,
             repeater: ActionRepeater::default(),
         })
     }
@@ -315,7 +323,7 @@ impl InputDevice {
                     if bytes_read < buffer.len() {
                         break;
                     }
-                    if actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
+                    if actions.len() >= MAX_WORKER_ACTIONS_PER_POLL {
                         break;
                     }
                 }
@@ -325,7 +333,7 @@ impl InputDevice {
         }
 
         actions.extend(self.repeater.poll(now));
-        actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
+        actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
         Ok(actions)
     }
 
@@ -344,15 +352,26 @@ impl InputDevice {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AxisState {
     left_x: AxisDirection,
     left_y: AxisDirection,
     hat_x: AxisDirection,
     hat_y: AxisDirection,
+    calibration: AxisCalibration,
 }
 
 impl AxisState {
+    fn new(calibration: AxisCalibration) -> Self {
+        Self {
+            left_x: AxisDirection::Neutral,
+            left_y: AxisDirection::Neutral,
+            hat_x: AxisDirection::Neutral,
+            hat_y: AxisDirection::Neutral,
+            calibration,
+        }
+    }
+
     fn update(
         &mut self,
         code: u16,
@@ -361,12 +380,18 @@ impl AxisState {
         now: Instant,
     ) -> Vec<ControllerAction> {
         match code {
-            ABS_X => self
-                .left_x
-                .update(stick_direction(value), horizontal_action, repeater, now),
-            ABS_Y => self
-                .left_y
-                .update(stick_direction(value), vertical_action, repeater, now),
+            ABS_X => self.left_x.update(
+                self.calibration.x.direction(value),
+                horizontal_action,
+                repeater,
+                now,
+            ),
+            ABS_Y => self.left_y.update(
+                self.calibration.y.direction(value),
+                vertical_action,
+                repeater,
+                now,
+            ),
             ABS_HAT0X => self
                 .hat_x
                 .update(hat_direction(value), horizontal_action, repeater, now),
@@ -376,6 +401,84 @@ impl AxisState {
             _ => Vec::new(),
         }
     }
+}
+
+impl Default for AxisState {
+    fn default() -> Self {
+        Self::new(AxisCalibration::default())
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct AxisCalibration {
+    x: AxisInfo,
+    y: AxisInfo,
+}
+
+impl AxisCalibration {
+    fn read(fd: RawFd) -> Self {
+        Self {
+            x: AxisInfo::read(fd, ABS_X),
+            y: AxisInfo::read(fd, ABS_Y),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AxisInfo {
+    minimum: i32,
+    maximum: i32,
+    flat: i32,
+}
+
+impl AxisInfo {
+    fn read(fd: RawFd, axis: u16) -> Self {
+        let mut info = InputAbsInfo::default();
+        // SAFETY: info points to a valid input_absinfo-sized buffer for the ioctl to fill.
+        let result = unsafe { libc::ioctl(fd, eviocgabs(axis), &mut info) };
+        if result < 0 || info.minimum >= info.maximum {
+            return Self::default();
+        }
+        Self {
+            minimum: info.minimum,
+            maximum: info.maximum,
+            flat: info.flat.max(0),
+        }
+    }
+
+    fn direction(self, value: i32) -> AxisDirection {
+        let center = self.minimum + (self.maximum - self.minimum) / 2;
+        let range = self.maximum - self.minimum;
+        let deadzone = self.flat.max(range / 4);
+        if value < center - deadzone {
+            AxisDirection::Negative
+        } else if value > center + deadzone {
+            AxisDirection::Positive
+        } else {
+            AxisDirection::Neutral
+        }
+    }
+}
+
+impl Default for AxisInfo {
+    fn default() -> Self {
+        Self {
+            minimum: i16::MIN.into(),
+            maximum: i16::MAX.into(),
+            flat: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+struct InputAbsInfo {
+    value: i32,
+    minimum: i32,
+    maximum: i32,
+    fuzz: i32,
+    flat: i32,
+    resolution: i32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -585,6 +688,86 @@ const fn input_event_size() -> usize {
     std::mem::size_of::<libc::timeval>() + 8
 }
 
+fn has_controller_capabilities(fd: RawFd) -> bool {
+    let event_bits = ioctl_bitset(fd, EVIOCGBIT_EV, 1).unwrap_or_default();
+    if !test_bit(&event_bits, EV_KEY) {
+        return false;
+    }
+
+    let key_bits = ioctl_bitset(fd, EVIOCGBIT_KEY, KEY_MAX).unwrap_or_default();
+    let has_controller_button = [
+        BTN_SOUTH,
+        BTN_EAST,
+        BTN_DPAD_UP,
+        BTN_DPAD_DOWN,
+        BTN_DPAD_LEFT,
+        BTN_DPAD_RIGHT,
+    ]
+    .into_iter()
+    .any(|code| test_bit(&key_bits, code));
+    if has_controller_button {
+        return true;
+    }
+
+    if !test_bit(&event_bits, EV_ABS) {
+        return false;
+    }
+    let abs_bits = ioctl_bitset(fd, EVIOCGBIT_ABS, ABS_MAX).unwrap_or_default();
+    (test_bit(&abs_bits, ABS_X) && test_bit(&abs_bits, ABS_Y))
+        || (test_bit(&abs_bits, ABS_HAT0X) && test_bit(&abs_bits, ABS_HAT0Y))
+}
+
+fn ioctl_bitset(fd: RawFd, request_base: libc::c_ulong, max_bit: u16) -> io::Result<Vec<u8>> {
+    let mut bits = vec![0_u8; usize::from(max_bit / 8 + 1)];
+    // SAFETY: bits points to a valid mutable buffer of the size encoded in the request.
+    let result = unsafe {
+        libc::ioctl(
+            fd,
+            request_base + bits.len() as libc::c_ulong,
+            bits.as_mut_ptr(),
+        )
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(bits)
+}
+
+fn test_bit(bits: &[u8], bit: u16) -> bool {
+    let byte = usize::from(bit / 8);
+    let mask = 1_u8 << (bit % 8);
+    bits.get(byte).is_some_and(|value| value & mask != 0)
+}
+
+const EVIOCGBIT_EV: libc::c_ulong = eviocgbit(0);
+const EVIOCGBIT_KEY: libc::c_ulong = eviocgbit(EV_KEY);
+const EVIOCGBIT_ABS: libc::c_ulong = eviocgbit(EV_ABS);
+const IOC_READ: u8 = 2;
+const IOC_NRSHIFT: u8 = 0;
+const IOC_TYPESHIFT: u8 = 8;
+const IOC_SIZESHIFT: u8 = 16;
+const IOC_DIRSHIFT: u8 = 30;
+
+const fn eviocgbit(event_type: u16) -> libc::c_ulong {
+    ioc(IOC_READ, b'E', 0x20 + event_type, 0)
+}
+
+const fn eviocgabs(axis: u16) -> libc::c_ulong {
+    ioc(
+        IOC_READ,
+        b'E',
+        0x40 + axis,
+        std::mem::size_of::<InputAbsInfo>(),
+    )
+}
+
+const fn ioc(direction: u8, ioctl_type: u8, number: u16, size: usize) -> libc::c_ulong {
+    ((direction as libc::c_ulong) << IOC_DIRSHIFT)
+        | ((ioctl_type as libc::c_ulong) << IOC_TYPESHIFT)
+        | ((number as libc::c_ulong) << IOC_NRSHIFT)
+        | ((size as libc::c_ulong) << IOC_SIZESHIFT)
+}
+
 fn key_actions(
     code: u16,
     value: i32,
@@ -613,16 +796,6 @@ fn key_action(code: u16) -> Option<ControllerAction> {
         BTN_DPAD_LEFT => Some(ControllerAction::Left),
         BTN_DPAD_RIGHT => Some(ControllerAction::Right),
         _ => None,
-    }
-}
-
-fn stick_direction(value: i32) -> AxisDirection {
-    if value < -STICK_DEADZONE {
-        AxisDirection::Negative
-    } else if value > STICK_DEADZONE {
-        AxisDirection::Positive
-    } else {
-        AxisDirection::Neutral
     }
 }
 
@@ -671,16 +844,13 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            axes.update(ABS_X, STICK_DEADZONE + 1, &mut repeater, now),
+            axes.update(ABS_X, 20_000, &mut repeater, now),
             vec![ControllerAction::Right]
         );
-        assert_eq!(
-            axes.update(ABS_X, STICK_DEADZONE + 2, &mut repeater, now),
-            Vec::new()
-        );
+        assert_eq!(axes.update(ABS_X, 20_001, &mut repeater, now), Vec::new());
         assert_eq!(axes.update(ABS_X, 0, &mut repeater, now), Vec::new());
         assert_eq!(
-            axes.update(ABS_X, -STICK_DEADZONE - 1, &mut repeater, now),
+            axes.update(ABS_X, -20_000, &mut repeater, now),
             vec![ControllerAction::Left]
         );
     }

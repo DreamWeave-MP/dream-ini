@@ -323,8 +323,8 @@ fn horizontal_action(direction: AxisDirection) -> Option<ControllerAction> {
 
 fn vertical_action(direction: AxisDirection) -> Option<ControllerAction> {
     match direction {
-        AxisDirection::Negative => Some(ControllerAction::Up),
+        AxisDirection::Negative => Some(ControllerAction::Down),
         AxisDirection::Neutral => None,
-        AxisDirection::Positive => Some(ControllerAction::Down),
+        AxisDirection::Positive => Some(ControllerAction::Up),
     }
 }
