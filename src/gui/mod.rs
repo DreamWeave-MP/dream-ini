@@ -91,32 +91,29 @@ enum GuiMode {
 
 impl eframe::App for GuiApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
-        self.apply_controller_input(context);
+        let controller_actions = self.controller.poll();
+        self.handle_controller_actions(context, &controller_actions);
         self.handle_shortcuts(context);
         egui::CentralPanel::default().show(context, |ui| {
-            self.show_current_mode(ui);
+            self.show_current_mode(ui, &controller_actions);
         });
     }
 }
 
 impl GuiApp {
-    fn apply_controller_input(&mut self, context: &egui::Context) {
-        let actions = self.controller.poll();
-        if actions.is_empty() {
+    fn handle_controller_actions(&mut self, context: &egui::Context, actions: &[ControllerAction]) {
+        if !matches!(self.mode, GuiMode::ImportForm) {
             return;
         }
 
-        context.input_mut(|input| {
-            for action in actions {
-                input.events.push(egui::Event::Key {
-                    key: controller_action_key(action),
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                });
-            }
-        });
+        if actions.contains(&ControllerAction::Cancel) {
+            context.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if actions.contains(&ControllerAction::Accept)
+            && self.state.disabled_import_reason().is_none()
+        {
+            self.run_import();
+        }
     }
 
     fn handle_shortcuts(&mut self, context: &egui::Context) {
@@ -133,17 +130,19 @@ impl GuiApp {
         }
     }
 
-    fn show_current_mode(&mut self, ui: &mut egui::Ui) {
+    fn show_current_mode(&mut self, ui: &mut egui::Ui, controller_actions: &[ControllerAction]) {
         match &mut self.mode {
             GuiMode::ImportForm => self.show_form(ui),
-            GuiMode::PathPicker(picker) => match picker.ui(ui, self.localizer) {
-                PickOutcome::None => {}
-                PickOutcome::Cancelled => self.mode = GuiMode::ImportForm,
-                PickOutcome::Chosen { target, path } => {
-                    self.apply_picked_path(target, &path);
-                    self.mode = GuiMode::ImportForm;
+            GuiMode::PathPicker(picker) => {
+                match picker.ui(ui, self.localizer, controller_actions) {
+                    PickOutcome::None => {}
+                    PickOutcome::Cancelled => self.mode = GuiMode::ImportForm,
+                    PickOutcome::Chosen { target, path } => {
+                        self.apply_picked_path(target, &path);
+                        self.mode = GuiMode::ImportForm;
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -471,17 +470,6 @@ impl GuiApp {
             PathTarget::ResourcesDir => self.state.resources = value,
             PathTarget::UserDataDir => self.state.user_data = value,
         }
-    }
-}
-
-fn controller_action_key(action: ControllerAction) -> egui::Key {
-    match action {
-        ControllerAction::Up => egui::Key::ArrowUp,
-        ControllerAction::Down => egui::Key::ArrowDown,
-        ControllerAction::Left => egui::Key::ArrowLeft,
-        ControllerAction::Right => egui::Key::ArrowRight,
-        ControllerAction::Accept => egui::Key::Enter,
-        ControllerAction::Cancel => egui::Key::Escape,
     }
 }
 

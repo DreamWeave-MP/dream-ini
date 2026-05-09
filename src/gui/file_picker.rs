@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use eframe::egui;
 
+use super::controller::ControllerAction;
 use super::localization::{Localizer, UiText};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,8 +72,15 @@ impl PathPickerState {
         state
     }
 
-    pub(super) fn ui(&mut self, ui: &mut egui::Ui, localizer: Localizer) -> PickOutcome {
-        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+    pub(super) fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        localizer: Localizer,
+        controller_actions: &[ControllerAction],
+    ) -> PickOutcome {
+        if ui.input(|input| input.key_pressed(egui::Key::Escape))
+            || controller_actions.contains(&ControllerAction::Cancel)
+        {
             return PickOutcome::Cancelled;
         }
 
@@ -121,7 +129,7 @@ impl PathPickerState {
         }
 
         ui.separator();
-        match self.show_entries(ui) {
+        match self.show_entries(ui, controller_actions) {
             EntryAction::None => {}
             EntryAction::Navigate(path) => self.enter_directory(path),
             EntryAction::SelectFile(path) => self.select_file(path),
@@ -151,14 +159,15 @@ impl PathPickerState {
 
         if !self.target.is_directory_target() {
             let choose_enabled = chosen_path.is_some();
-            let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let accept_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter))
+                || controller_actions.contains(&ControllerAction::Accept);
             if (ui
                 .add_enabled(
                     choose_enabled,
                     egui::Button::new(localizer.text(UiText::ChoosePath)),
                 )
                 .clicked()
-                || (enter_pressed && choose_enabled))
+                || (accept_pressed && choose_enabled))
                 && let Some(path) = chosen_path
             {
                 outcome = PickOutcome::Chosen {
@@ -171,8 +180,12 @@ impl PathPickerState {
         outcome
     }
 
-    fn show_entries(&mut self, ui: &mut egui::Ui) -> EntryAction {
-        let mut entry_action = self.keyboard_entry_action(ui);
+    fn show_entries(
+        &mut self,
+        ui: &mut egui::Ui,
+        controller_actions: &[ControllerAction],
+    ) -> EntryAction {
+        let mut entry_action = self.keyboard_entry_action(ui, controller_actions);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -269,15 +282,25 @@ impl PathPickerState {
         EntryAction::None
     }
 
-    fn keyboard_entry_action(&mut self, ui: &egui::Ui) -> EntryAction {
-        if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
+    fn keyboard_entry_action(
+        &mut self,
+        ui: &egui::Ui,
+        controller_actions: &[ControllerAction],
+    ) -> EntryAction {
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowUp))
+            || controller_actions.contains(&ControllerAction::Up)
+        {
             self.move_selection(SelectionStep::Previous);
         }
-        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown))
+            || controller_actions.contains(&ControllerAction::Down)
+        {
             self.move_selection(SelectionStep::Next);
         }
 
-        if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+        if ui.input(|input| input.key_pressed(egui::Key::Enter))
+            || controller_actions.contains(&ControllerAction::Accept)
+        {
             return self.selected_entry_action();
         }
         EntryAction::None
