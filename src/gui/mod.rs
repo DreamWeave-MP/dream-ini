@@ -202,8 +202,7 @@ impl GuiApp {
                 self.controller_navigation_visible = false;
                 None
             }
-            ControllerEvent::Available(true) => None,
-            ControllerEvent::PurgeQueuedActions => None,
+            ControllerEvent::Available(true) | ControllerEvent::PurgeQueuedActions => None,
         }
     }
 
