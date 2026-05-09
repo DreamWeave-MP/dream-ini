@@ -24,6 +24,8 @@ mod log;
 mod pacing;
 #[cfg(target_os = "linux")]
 mod shell;
+#[cfg(target_os = "linux")]
+mod surface;
 
 #[cfg(target_os = "linux")]
 use super::{GuiApp, GuiShell};
@@ -32,6 +34,8 @@ use log::{SharedLog, install_panic_hook, log_startup, open_log, write_log};
 use pacing::{REFRESH_ENV_VAR, select_refresh_rate, sleep_after_frame};
 #[cfg(target_os = "linux")]
 use shell::PortMasterGuiShell;
+#[cfg(target_os = "linux")]
+use surface::SoftwareSurface;
 
 #[cfg(target_os = "linux")]
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
@@ -42,8 +46,6 @@ const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
 #[cfg(target_os = "linux")]
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
-#[cfg(target_os = "linux")]
-const MAX_RENDER_PIXELS: usize = 1024 * 768;
 #[cfg(target_os = "linux")]
 const MAX_TEXTURE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -631,48 +633,6 @@ impl SoftwareRenderer {
 
 #[cfg(target_os = "linux")]
 #[derive(Debug, Default)]
-struct SoftwareSurface {
-    width: usize,
-    height: usize,
-    pixels: Vec<u8>,
-}
-
-#[cfg(target_os = "linux")]
-impl SoftwareSurface {
-    fn resize(&mut self, width: usize, height: usize) -> io::Result<()> {
-        let pixels = width
-            .checked_mul(height)
-            .ok_or_else(|| io::Error::other("software surface pixel count overflow"))?;
-        if pixels > MAX_RENDER_PIXELS {
-            return Err(io::Error::other(format!(
-                "software surface pixel budget exceeded: {pixels} > {MAX_RENDER_PIXELS}"
-            )));
-        }
-        let bytes = pixels
-            .checked_mul(4)
-            .ok_or_else(|| io::Error::other("software surface byte count overflow"))?;
-        if self.width != width || self.height != height || self.pixels.len() != bytes {
-            self.pixels.resize(bytes, 0);
-            self.width = width;
-            self.height = height;
-        }
-        Ok(())
-    }
-
-    fn clear(&mut self, color: [u8; 4]) {
-        for pixel in self.pixels.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&color);
-        }
-    }
-
-    fn blend_pixel(&mut self, x: usize, y: usize, color: [u8; 4]) {
-        let offset = (y * self.width + x) * 4;
-        alpha_blend(&mut self.pixels[offset..offset + 4], color);
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Default)]
 struct TextureStore {
     textures: HashMap<egui::TextureId, TextureImage>,
 }
@@ -1043,24 +1003,6 @@ fn modulate_color(vertex: [u8; 4], texture: [u8; 4]) -> [u8; 4] {
 #[cfg(target_os = "linux")]
 fn multiply_u8(a: u8, b: u8) -> u8 {
     u8::try_from((u16::from(a) * u16::from(b) + 127) / 255).unwrap_or(u8::MAX)
-}
-
-#[cfg(target_os = "linux")]
-fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {
-    let inverse_alpha = u16::from(u8::MAX - source[3]);
-    // egui::Color32 stores premultiplied-alpha sRGBA. Do not multiply the
-    // source channels by alpha again here unless darker fringes around every
-    // translucent primitive sound like entertainment.
-    destination[0] = blend_premultiplied_channel(source[0], destination[0], inverse_alpha);
-    destination[1] = blend_premultiplied_channel(source[1], destination[1], inverse_alpha);
-    destination[2] = blend_premultiplied_channel(source[2], destination[2], inverse_alpha);
-    destination[3] = u8::MAX;
-}
-
-#[cfg(target_os = "linux")]
-fn blend_premultiplied_channel(source: u8, destination: u8, inverse_alpha: u16) -> u8 {
-    u8::try_from(u16::from(source) + ((u16::from(destination) * inverse_alpha + 127) / 255))
-        .unwrap_or(u8::MAX)
 }
 
 #[cfg(target_os = "linux")]
@@ -1573,32 +1515,6 @@ mod tests {
         ];
 
         assert_eq!(snapshot_bytes_used(&snapshots).expect("bytes used"), 40);
-    }
-
-    #[test]
-    fn alpha_blend_places_premultiplied_half_alpha_over_opaque_destination() {
-        let mut destination = [0, 0, 255, 255];
-
-        alpha_blend(&mut destination, [128, 0, 0, 128]);
-
-        assert_eq!(destination, [128, 0, 127, 255]);
-    }
-
-    #[test]
-    fn software_surface_rejects_pixel_budget_overflow() {
-        let mut surface = SoftwareSurface::default();
-
-        let error = surface
-            .resize(MAX_RENDER_PIXELS + 1, 1)
-            .expect_err("oversized surface");
-
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "software surface pixel budget exceeded: {} > {MAX_RENDER_PIXELS}",
-                MAX_RENDER_PIXELS + 1
-            )
-        );
     }
 
     #[test]
