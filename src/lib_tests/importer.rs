@@ -69,6 +69,21 @@ fn resolved_cfg_serialization_does_not_persist_composed_resource_vfs_data_dir() 
 }
 
 #[test]
+fn resolved_cfg_serialization_does_not_persist_composed_data_local_data_dir() {
+    let dir = unique_test_dir("resolved-data-local");
+    let local = dir.join("local");
+    fs::create_dir_all(&local).unwrap();
+    let cfg = parse_cfg_str(&format!("data-local={}\n", local.display()));
+
+    let written = serialize_resolved_cfg(&cfg, &dir).unwrap();
+
+    assert!(written.contains(&format!("data-local={}\n", local.display())));
+    assert!(!written.contains(&format!("data={}\n", local.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn font_import_is_option_gated() {
     let ini = parse_ini_str("[Fonts]\nFont 0=magic\n[Movies]\nNew Game=intro.bik\n");
     let mut cfg = MultiMap::new();

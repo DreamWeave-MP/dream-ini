@@ -339,15 +339,15 @@ fn cfg_resources_vfs_is_not_used_for_morrowind_content_import() {
 }
 
 #[test]
-fn cfg_data_local_takes_precedence_over_cfg_data() {
-    let dir = unique_test_dir("game-files-data-local-precedence");
+fn cfg_data_local_does_not_take_precedence_over_cfg_data() {
+    let dir = unique_test_dir("game-files-data-local-ignored-over-data");
     let cfg_dir = dir.join("config");
     let data_dir = cfg_dir.join("Data Files");
     let local_dir = cfg_dir.join("Local Data");
     fs::create_dir_all(&data_dir).unwrap();
     fs::create_dir_all(&local_dir).unwrap();
-    fs::write(data_dir.join("Patch.esp"), b"TES4").unwrap();
-    fs::write(local_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
+    fs::write(data_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
+    fs::write(local_dir.join("Patch.esp"), b"TES4").unwrap();
     let cfg = cfg_dir.join("openmw.cfg");
     let ini = dir.join("Morrowind.ini");
     fs::write(&cfg, "data=Data Files\ndata-local=Local Data\n").unwrap();
@@ -373,15 +373,15 @@ fn cfg_data_local_takes_precedence_over_cfg_data() {
 }
 
 #[test]
-fn cfg_data_local_takes_precedence_over_explicit_data() {
+fn cfg_data_local_does_not_take_precedence_over_explicit_data() {
     let dir = unique_test_dir("game-files-data-local-over-explicit");
     let cfg_dir = dir.join("config");
     let explicit_data_dir = dir.join("Explicit Data");
     let local_dir = cfg_dir.join("Local Data");
     fs::create_dir_all(&explicit_data_dir).unwrap();
     fs::create_dir_all(&local_dir).unwrap();
-    fs::write(explicit_data_dir.join("Patch.esp"), b"TES4").unwrap();
-    fs::write(local_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
+    fs::write(explicit_data_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
+    fs::write(local_dir.join("Patch.esp"), b"TES4").unwrap();
     let cfg = cfg_dir.join("openmw.cfg");
     let ini = dir.join("Morrowind.ini");
     fs::write(&cfg, "data-local=Local Data\n").unwrap();
@@ -390,17 +390,43 @@ fn cfg_data_local_takes_precedence_over_explicit_data() {
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
         import_archives: false,
-        data_dirs: vec![explicit_data_dir],
+        data_dirs: vec![explicit_data_dir.clone()],
         ..ImportOptions::default()
     });
     let result = importer.import_paths(&ini, &cfg).unwrap();
 
     assert_eq!(values(&result.cfg, "content"), &["Patch.esp".to_owned()]);
-    assert_eq!(values(&result.cfg, "data"), &[] as &[String]);
+    assert_eq!(
+        values(&result.cfg, "data"),
+        &[explicit_data_dir.display().to_string()]
+    );
     assert_eq!(
         values(&result.cfg, "data-local"),
         &[local_dir.display().to_string()]
     );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cfg_data_local_is_not_used_as_only_content_source() {
+    let dir = unique_test_dir("game-files-data-local-only-ignored");
+    let cfg_dir = dir.join("config");
+    let local_dir = cfg_dir.join("Local Data");
+    fs::create_dir_all(&local_dir).unwrap();
+    fs::write(local_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    let cfg = cfg_dir.join("openmw.cfg");
+    let ini = dir.join("Morrowind.ini");
+    fs::write(&cfg, "data-local=Local Data\n").unwrap();
+    fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+    let error = importer.import_paths(&ini, &cfg).unwrap_err().to_string();
+
+    assert!(error.contains("content files not found: Base.esm"));
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -504,7 +530,7 @@ fn invalid_plugin_header_leaves_cfg_unchanged() {
 }
 
 #[test]
-fn explicit_data_dir_is_not_written_when_data_local_already_covers_it() {
+fn explicit_data_dir_is_written_when_data_local_already_covers_it() {
     let dir = unique_test_dir("game-files-explicit-covered-by-data-local");
     let data_dir = dir.join("External Data");
     fs::create_dir_all(&data_dir).unwrap();
@@ -524,12 +550,15 @@ fn explicit_data_dir_is_not_written_when_data_local_already_covers_it() {
         .unwrap();
 
     assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
-    assert_eq!(values(&cfg, "data"), &[] as &[String]);
+    assert_eq!(
+        values(&cfg, "data"),
+        &[data_dir.to_string_lossy().into_owned()]
+    );
     assert_eq!(
         values(&cfg, "data-local"),
         &[format!("\"{}\"", data_dir.display())]
     );
-    assert!(result.events.is_empty());
+    assert_eq!(result.events.len(), 1);
     fs::remove_dir_all(dir).unwrap();
 }
 

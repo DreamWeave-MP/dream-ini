@@ -148,7 +148,7 @@ pub fn apply_preserved_cfg_update(
 pub(crate) fn load_resolved_cfg(path: &Path) -> Result<MultiMap, ImportError> {
     let config = OpenMWConfiguration::load_optional(path).map_err(|error| config_error(&error))?;
     let mut cfg = crate::parse_cfg_str(&config.to_resolved_string());
-    remove_composed_resource_vfs_data_dir(&mut cfg);
+    remove_composed_non_import_data_dirs(&mut cfg);
     Ok(cfg)
 }
 
@@ -162,14 +162,14 @@ pub(crate) fn normalize_cfg(
     let mut cfg = crate::parse_cfg_str(
         &configuration_from_multimap_resolved(cfg, user_config_dir)?.to_resolved_string(),
     );
-    remove_composed_resource_vfs_data_dir(&mut cfg);
+    remove_composed_non_import_data_dirs(&mut cfg);
     Ok(cfg)
 }
 
 #[must_use]
 pub fn serialize_resolved_configuration(config: &OpenMWConfiguration) -> String {
     let mut cfg = crate::parse_cfg_str(&config.to_resolved_string());
-    remove_composed_resource_vfs_data_dir(&mut cfg);
+    remove_composed_non_import_data_dirs(&mut cfg);
     crate::serialize_cfg(&cfg)
 }
 
@@ -267,21 +267,27 @@ fn clear_preserved_key(config: &mut OpenMWConfiguration, key: &str) {
     });
 }
 
-fn remove_composed_resource_vfs_data_dir(cfg: &mut MultiMap) {
-    // openmw-config 1.0.5 serializes <resources>/vfs as a composed data= entry in resolved
-    // output. That path is an implicit engine VFS mount derived from resources=, not a persisted
-    // user data directory, so dream-ini must not write it back as data=... while the importer still
-    // uses the legacy MultiMap adapter. Keep resources=... as the source of truth.
-    let Some(resources) = cfg.get("resources").and_then(|values| values.last()) else {
+fn remove_composed_non_import_data_dirs(cfg: &mut MultiMap) {
+    // openmw-config 1.0.5 serializes some singleton directory settings as composed data= entries
+    // in resolved output. They are not Morrowind.exe content inputs for dream-ini and must not be
+    // persisted as authored data= entries. Keep their singleton keys as the source of truth.
+    remove_composed_data_dir(cfg, "data-local", Path::to_owned);
+    remove_composed_data_dir(cfg, "resources", |path| path.join("vfs"));
+}
+
+fn remove_composed_data_dir<F>(cfg: &mut MultiMap, key: &str, mut composed_path: F)
+where
+    F: FnMut(&Path) -> PathBuf,
+{
+    let Some(value) = cfg.get(key).and_then(|values| values.last()) else {
         return;
     };
-    let engine_vfs = Path::new(resources)
-        .join("vfs")
+    let composed = composed_path(Path::new(value))
         .to_string_lossy()
         .into_owned();
 
     if let Some(data_dirs) = cfg.get_mut("data") {
-        data_dirs.retain(|data_dir| data_dir != &engine_vfs);
+        data_dirs.retain(|data_dir| data_dir != &composed);
     }
 }
 

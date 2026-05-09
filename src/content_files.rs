@@ -201,9 +201,6 @@ fn build_search_paths(
     write_resolved_data_dirs: bool,
 ) -> Vec<ContentSearchPath> {
     let mut search_paths = Vec::new();
-    if let Some(paths) = cfg.get("data-local") {
-        add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
-    }
     search_paths.extend(explicit_data_dirs.iter().map(|path| {
         let resolved_path = resolve_explicit_data_path(path, explicit_data_dir_base);
         let search_path = fs::canonicalize(&resolved_path).unwrap_or(resolved_path);
@@ -457,12 +454,10 @@ fn unquote_path(path: &str) -> &str {
 }
 
 fn has_equivalent_data_path(cfg: &MultiMap, cfg_dir: Option<&Path>, path: &Path) -> bool {
-    ["data", "data-local"].iter().any(|key| {
-        cfg.get(*key).is_some_and(|values| {
-            values.iter().any(|value| {
-                equivalent_paths(&resolve_cfg_path(unquote_path(value), cfg_dir), path)
-            })
-        })
+    cfg.get("data").is_some_and(|values| {
+        values
+            .iter()
+            .any(|value| equivalent_paths(&resolve_cfg_path(unquote_path(value), cfg_dir), path))
     })
 }
 
