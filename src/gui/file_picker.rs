@@ -267,6 +267,9 @@ impl PathPickerState {
             .as_ref()
             .is_some_and(|path| path == &entry.path);
         let response = ui.selectable_label(selected, label);
+        if selected {
+            response.scroll_to_me(Some(egui::Align::Center));
+        }
         if response.double_clicked() {
             return match entry.kind {
                 EntryKind::Parent | EntryKind::Directory => {

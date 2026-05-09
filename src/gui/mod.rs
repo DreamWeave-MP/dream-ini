@@ -213,7 +213,7 @@ impl GuiApp {
             return false;
         }
 
-        self.ensure_selected_form_control_visible();
+        self.ensure_selected_form_control_available();
 
         for action in actions {
             match action {
@@ -309,13 +309,19 @@ impl GuiApp {
         controls
     }
 
-    fn ensure_selected_form_control_visible(&mut self) {
+    fn ensure_selected_form_control_available(&mut self) {
         let controls = self.visible_form_controls();
         if !controls.contains(&self.selected_form_control) {
             self.selected_form_control = controls
                 .into_iter()
                 .next()
                 .unwrap_or(FormControl::MorrowindIni);
+        }
+    }
+
+    fn scroll_selected_form_control_into_view(&self, ui: &mut egui::Ui, control: FormControl) {
+        if self.controller_navigation_visible && self.selected_form_control == control {
+            ui.scroll_to_cursor(Some(egui::Align::Center));
         }
     }
 
@@ -428,7 +434,7 @@ impl GuiApp {
             | FormControl::CopyResult
             | FormControl::ClearResult => {}
         }
-        self.ensure_selected_form_control_visible();
+        self.ensure_selected_form_control_available();
     }
 
     fn run_import_if_enabled(&mut self) {
@@ -486,7 +492,11 @@ impl GuiApp {
 
     fn show_current_mode(&mut self, ui: &mut egui::Ui, controller_actions: &[ControllerAction]) {
         match &mut self.mode {
-            GuiMode::ImportForm => self.show_form(ui),
+            GuiMode::ImportForm => {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.show_form(ui));
+            }
             GuiMode::PathPicker(picker) => {
                 match picker.ui(ui, self.localizer, controller_actions) {
                     PickOutcome::None => {}
@@ -501,7 +511,7 @@ impl GuiApp {
     }
 
     fn show_form(&mut self, ui: &mut egui::Ui) {
-        self.ensure_selected_form_control_visible();
+        self.ensure_selected_form_control_available();
         self.show_language_selector(ui);
         ui.separator();
         let existing_cfg_label = self.existing_cfg_label();
@@ -519,17 +529,20 @@ impl GuiApp {
             &encoding_label,
             &mut self.state.encoding,
         );
+        self.scroll_selected_form_control_into_view(ui, FormControl::Encoding);
         let import_fonts_label = self.form_label(
             FormControl::ImportFonts,
             self.localizer.text(UiText::ImportFallbacks),
         );
         ui.checkbox(&mut self.state.import_fonts, import_fonts_label);
+        self.scroll_selected_form_control_into_view(ui, FormControl::ImportFonts);
         let import_archives_label = self.form_label(
             FormControl::ImportArchives,
             self.localizer.text(UiText::ImportArchives),
         );
         ui.checkbox(&mut self.state.import_archives, import_archives_label)
             .on_hover_text(self.localizer.text(UiText::ImportArchivesTooltip));
+        self.scroll_selected_form_control_into_view(ui, FormControl::ImportArchives);
         let import_content_files_label = self.form_label(
             FormControl::ImportContentFiles,
             self.localizer.text(UiText::ImportContentFiles),
@@ -539,6 +552,7 @@ impl GuiApp {
             import_content_files_label,
         )
         .on_hover_text(self.localizer.text(UiText::ImportContentFilesTooltip));
+        self.scroll_selected_form_control_into_view(ui, FormControl::ImportContentFiles);
 
         ui.separator();
         self.show_override_paths(ui, path_label_width);
@@ -565,6 +579,7 @@ impl GuiApp {
         if import_button.clicked() {
             self.run_import();
         }
+        self.scroll_selected_form_control_into_view(ui, FormControl::Import);
 
         if self.result.is_some() {
             ui.separator();
@@ -649,6 +664,7 @@ impl GuiApp {
             let current_value = self.state.morrowind_ini.clone();
             self.open_path_picker(PathTarget::MorrowindIni, &current_value);
         }
+        self.scroll_selected_form_control_into_view(ui, FormControl::MorrowindIni);
         let existing_cfg_label = self.form_label(FormControl::ExistingCfg, existing_cfg_label);
         if path_file_row(
             ui,
@@ -660,6 +676,7 @@ impl GuiApp {
             let current_value = self.state.existing_cfg.clone();
             self.open_path_picker(PathTarget::ExistingOpenmwCfg, &current_value);
         }
+        self.scroll_selected_form_control_into_view(ui, FormControl::ExistingCfg);
     }
 
     fn show_override_paths(&mut self, ui: &mut egui::Ui, label_width: f32) {
@@ -679,6 +696,7 @@ impl GuiApp {
             let current_value = self.state.explicit_search_path.clone();
             self.open_path_picker(PathTarget::GameDataDir, &current_value);
         }
+        self.scroll_selected_form_control_into_view(ui, FormControl::ExplicitSearchPath);
         let data_local_label = self.form_label(FormControl::DataLocal, CFG_KEY_DATA_LOCAL);
         if path_folder_row(
             ui,
@@ -691,6 +709,7 @@ impl GuiApp {
             let current_value = self.state.data_local.clone();
             self.open_path_picker(PathTarget::DataLocalDir, &current_value);
         }
+        self.scroll_selected_form_control_into_view(ui, FormControl::DataLocal);
         let resources_label = self.form_label(FormControl::Resources, CFG_KEY_RESOURCES);
         if path_folder_row(
             ui,
@@ -703,6 +722,7 @@ impl GuiApp {
             let current_value = self.state.resources.clone();
             self.open_path_picker(PathTarget::ResourcesDir, &current_value);
         }
+        self.scroll_selected_form_control_into_view(ui, FormControl::Resources);
         let user_data_label = self.form_label(FormControl::UserData, CFG_KEY_USERDATA);
         if path_folder_row(
             ui,
@@ -715,6 +735,7 @@ impl GuiApp {
             let current_value = self.state.user_data.clone();
             self.open_path_picker(PathTarget::UserDataDir, &current_value);
         }
+        self.scroll_selected_form_control_into_view(ui, FormControl::UserData);
     }
 
     fn show_language_selector(&mut self, ui: &mut egui::Ui) {
@@ -752,6 +773,7 @@ impl GuiApp {
                 });
             self.localizer.set_language(language);
         });
+        self.scroll_selected_form_control_into_view(ui, FormControl::Language);
     }
 
     fn show_results(&mut self, ui: &mut egui::Ui) {
@@ -827,6 +849,9 @@ impl GuiApp {
                 }
             });
         });
+        self.scroll_selected_form_control_into_view(ui, FormControl::ResultTabs);
+        self.scroll_selected_form_control_into_view(ui, FormControl::CopyResult);
+        self.scroll_selected_form_control_into_view(ui, FormControl::ClearResult);
         if clear_results {
             self.result = None;
             return;
@@ -874,11 +899,13 @@ impl GuiApp {
             GuiOutputMode::PreviewOnly,
             preview_label,
         );
+        self.scroll_selected_form_control_into_view(ui, FormControl::OutputPreview);
         ui.radio_value(
             &mut self.state.output_mode,
             GuiOutputMode::SaveAs,
             save_as_label,
         );
+        self.scroll_selected_form_control_into_view(ui, FormControl::OutputSaveAs);
         ui.add_enabled_ui(self.state.output_mode == GuiOutputMode::SaveAs, |ui| {
             if path_save_file_row(
                 ui,
@@ -891,6 +918,7 @@ impl GuiApp {
                 self.open_path_picker(PathTarget::OutputCfg, &current_value);
             }
         });
+        self.scroll_selected_form_control_into_view(ui, FormControl::OutputPath);
         ui.add_enabled_ui(optional_path(&self.state.existing_cfg).is_some(), |ui| {
             ui.radio_value(
                 &mut self.state.output_mode,
@@ -898,6 +926,7 @@ impl GuiApp {
                 &update_existing_label,
             );
         });
+        self.scroll_selected_form_control_into_view(ui, FormControl::OutputUpdateExisting);
         if self.state.output_mode == GuiOutputMode::UpdateExistingCfg
             && optional_path(&self.state.existing_cfg).is_none()
         {
