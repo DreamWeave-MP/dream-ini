@@ -7,6 +7,7 @@ mod french;
 mod german;
 mod russian;
 mod spanish;
+mod swedish;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum UiLanguage {
@@ -16,6 +17,7 @@ pub(super) enum UiLanguage {
     German,
     Russian,
     Spanish,
+    Swedish,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,7 @@ pub(super) enum UiText {
     GermanLanguage,
     RussianLanguage,
     SpanishLanguage,
+    SwedishLanguage,
     SourceSection,
     Existing,
     Browse,
@@ -107,6 +110,7 @@ impl Localizer {
             UiLanguage::German => german::text(key),
             UiLanguage::Russian => russian::text(key),
             UiLanguage::Spanish => spanish::text(key),
+            UiLanguage::Swedish => swedish::text(key),
         }
     }
 
@@ -117,6 +121,7 @@ impl Localizer {
             UiLanguage::German => german::warning_title(warning),
             UiLanguage::Russian => russian::warning_title(warning),
             UiLanguage::Spanish => spanish::warning_title(warning),
+            UiLanguage::Swedish => swedish::warning_title(warning),
         }
     }
 
@@ -127,6 +132,7 @@ impl Localizer {
             UiLanguage::German => german::event_title(event),
             UiLanguage::Russian => russian::event_title(event),
             UiLanguage::Spanish => spanish::event_title(event),
+            UiLanguage::Swedish => swedish::event_title(event),
         }
     }
 
@@ -137,6 +143,7 @@ impl Localizer {
             UiLanguage::German => german::error_title(error),
             UiLanguage::Russian => russian::error_title(error),
             UiLanguage::Spanish => spanish::error_title(error),
+            UiLanguage::Swedish => swedish::error_title(error),
         }
     }
 }
@@ -166,6 +173,10 @@ mod tests {
         let mut russian = Localizer::default();
         russian.set_language(UiLanguage::Russian);
         assert_eq!(russian.text(UiText::SourceSection), "Исходные файлы");
+
+        let mut swedish = Localizer::default();
+        swedish.set_language(UiLanguage::Swedish);
+        assert_eq!(swedish.text(UiText::SourceSection), "Källa");
     }
 
     #[test]

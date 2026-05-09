@@ -904,6 +904,11 @@ impl GuiApp {
                         UiLanguage::Spanish,
                         self.localizer.text(UiText::SpanishLanguage),
                     );
+                    ui.selectable_value(
+                        &mut language,
+                        UiLanguage::Swedish,
+                        self.localizer.text(UiText::SwedishLanguage),
+                    );
                 });
             self.localizer.set_language(language);
         });
@@ -1094,6 +1099,7 @@ fn language_label(localizer: Localizer, language: UiLanguage) -> &'static str {
         UiLanguage::German => localizer.text(UiText::GermanLanguage),
         UiLanguage::Russian => localizer.text(UiText::RussianLanguage),
         UiLanguage::Spanish => localizer.text(UiText::SpanishLanguage),
+        UiLanguage::Swedish => localizer.text(UiText::SwedishLanguage),
     }
 }
 
@@ -1105,6 +1111,7 @@ fn cycled_language(language: UiLanguage, adjustment: FormAdjustment) -> UiLangua
             UiLanguage::German,
             UiLanguage::Russian,
             UiLanguage::Spanish,
+            UiLanguage::Swedish,
         ],
         language,
         adjustment,
@@ -2162,7 +2169,7 @@ mod tests {
     fn controller_adjustments_cycle_multivalue_controls() {
         assert_eq!(
             cycled_language(UiLanguage::English, FormAdjustment::Previous),
-            UiLanguage::Spanish
+            UiLanguage::Swedish
         );
         assert_eq!(
             cycled_encoding(None, FormAdjustment::Next),
