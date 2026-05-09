@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::collections::BTreeSet;
+use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
@@ -18,6 +19,7 @@ const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_DEVICE_READ_BATCHES: usize = 4;
 const MAX_WORKER_ACTIONS_PER_POLL: usize = 32;
+const CONTROLLER_LOG_ENV_VAR: &str = "DREAM_INI_CONTROLLER_LOG";
 
 const EV_KEY: u16 = 0x01;
 const EV_ABS: u16 = 0x03;
@@ -30,6 +32,8 @@ const BTN_EAST: u16 = 0x131;
 const BTN_WEST: u16 = 0x133;
 const BTN_TL: u16 = 0x136;
 const BTN_TR: u16 = 0x137;
+const BTN_TL2: u16 = 0x138;
+const BTN_TR2: u16 = 0x139;
 const BTN_SELECT: u16 = 0x13a;
 const BTN_START: u16 = 0x13b;
 const BTN_DPAD_UP: u16 = 0x220;
@@ -228,6 +232,8 @@ fn run_worker(
         for action in input.actions {
             if send_event(sender, ControllerEvent::Action(action)) {
                 sent_action = true;
+            } else {
+                log_controller_event(format_args!("dropped queued action={action:?}"));
             }
         }
         if sent_action {
@@ -238,6 +244,16 @@ fn run_worker(
 
 fn send_event(sender: &ControllerEventSender, event: ControllerEvent) -> bool {
     sender.send(event)
+}
+
+fn controller_log_enabled() -> bool {
+    env::var_os(CONTROLLER_LOG_ENV_VAR).is_some_and(|value| value != "0")
+}
+
+fn log_controller_event(arguments: std::fmt::Arguments<'_>) {
+    if controller_log_enabled() {
+        eprintln!("dream-ini controller: {arguments}");
+    }
 }
 
 fn duration_to_poll_timeout(duration: Duration) -> i32 {
@@ -315,6 +331,7 @@ struct InputDevice {
     axes: AxisState,
     held_buttons: BTreeSet<u16>,
     repeater: ActionRepeater,
+    log_events: bool,
 }
 
 impl InputDevice {
@@ -330,13 +347,23 @@ impl InputDevice {
             ));
         };
         let axes = AxisState::new(AxisCalibration::read(file.as_raw_fd()));
+        let identity = device_identity(path);
+        let log_events = controller_log_enabled();
+        if log_events {
+            log_controller_event(format_args!(
+                "opened device={} has_hat_axes={}",
+                identity.display(),
+                capabilities.has_hat_axes
+            ));
+        }
         Ok(Self {
-            identity: device_identity(path),
+            identity,
             file,
             capabilities,
             axes,
             held_buttons: BTreeSet::new(),
             repeater: ActionRepeater::default(),
+            log_events,
         })
     }
 
@@ -380,14 +407,29 @@ impl InputDevice {
 
     fn handle_event(&mut self, event: InputEvent, now: Instant) -> InputActions {
         match event.kind {
-            EV_KEY => key_actions(
-                event.code,
-                event.value,
-                self.capabilities.has_hat_axes,
-                &mut self.held_buttons,
-                &mut self.repeater,
-                now,
-            ),
+            EV_KEY => {
+                let input = key_actions(
+                    event.code,
+                    event.value,
+                    self.capabilities.has_hat_axes,
+                    &mut self.held_buttons,
+                    &mut self.repeater,
+                    now,
+                );
+                if self.log_events {
+                    log_controller_event(format_args!(
+                        "device={} key code=0x{:03x} name={} value={} mapped={:?} emitted={:?} ignored_dpad_key={}",
+                        self.identity.display(),
+                        event.code,
+                        key_name(event.code),
+                        event.value,
+                        key_action(event.code),
+                        input.actions,
+                        self.capabilities.has_hat_axes && is_dpad_key(event.code)
+                    ));
+                }
+                input
+            }
             EV_ABS => self
                 .axes
                 .update(event.code, event.value, &mut self.repeater, now),
@@ -669,6 +711,8 @@ fn controller_capabilities_from_bits(
         BTN_WEST,
         BTN_TL,
         BTN_TR,
+        BTN_TL2,
+        BTN_TR2,
         BTN_SELECT,
         BTN_START,
         BTN_DPAD_UP,
@@ -798,6 +842,25 @@ fn key_action(code: u16) -> Option<ControllerAction> {
     }
 }
 
+const fn key_name(code: u16) -> &'static str {
+    match code {
+        BTN_SOUTH => "BTN_SOUTH",
+        BTN_EAST => "BTN_EAST",
+        BTN_WEST => "BTN_WEST",
+        BTN_TL => "BTN_TL",
+        BTN_TR => "BTN_TR",
+        BTN_TL2 => "BTN_TL2",
+        BTN_TR2 => "BTN_TR2",
+        BTN_SELECT => "BTN_SELECT",
+        BTN_START => "BTN_START",
+        BTN_DPAD_UP => "BTN_DPAD_UP",
+        BTN_DPAD_DOWN => "BTN_DPAD_DOWN",
+        BTN_DPAD_LEFT => "BTN_DPAD_LEFT",
+        BTN_DPAD_RIGHT => "BTN_DPAD_RIGHT",
+        _ => "unknown",
+    }
+}
+
 fn hat_direction(value: i32) -> AxisDirection {
     match value.cmp(&0) {
         std::cmp::Ordering::Less => AxisDirection::Negative,
@@ -859,6 +922,14 @@ mod tests {
         assert_eq!(key_action(BTN_DPAD_DOWN), Some(ControllerAction::Down));
         assert_eq!(key_action(BTN_DPAD_LEFT), Some(ControllerAction::Left));
         assert_eq!(key_action(BTN_DPAD_RIGHT), Some(ControllerAction::Right));
+    }
+
+    #[test]
+    fn key_names_cover_trigger_and_menu_codes() {
+        assert_eq!(key_name(BTN_TL2), "BTN_TL2");
+        assert_eq!(key_name(BTN_TR2), "BTN_TR2");
+        assert_eq!(key_name(BTN_SELECT), "BTN_SELECT");
+        assert_eq!(key_name(BTN_START), "BTN_START");
     }
 
     #[test]
