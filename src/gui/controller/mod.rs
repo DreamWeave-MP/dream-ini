@@ -139,6 +139,8 @@ impl Drop for Controller {
 #[cfg(target_os = "linux")]
 mod linux;
 
+mod common;
+
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod gilrs_backend;
 

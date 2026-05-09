@@ -11,14 +11,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use super::common::{ActionRepeater, AxisDirection, InputActions};
 use super::{ControllerAction, ControllerEvent, ControllerEventSender};
 
 const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
-const INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(350);
 const MAX_DEVICE_READ_BATCHES: usize = 4;
 const MAX_WORKER_ACTIONS_PER_POLL: usize = 32;
-const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
 
 const EV_KEY: u16 = 0x01;
 const EV_ABS: u16 = 0x03;
@@ -315,33 +314,6 @@ struct InputDevice {
     repeater: ActionRepeater,
 }
 
-#[derive(Debug, Default)]
-struct InputActions {
-    actions: Vec<ControllerAction>,
-    released: bool,
-}
-
-impl InputActions {
-    fn action(action: ControllerAction) -> Self {
-        Self {
-            actions: vec![action],
-            released: false,
-        }
-    }
-
-    fn released() -> Self {
-        Self {
-            actions: Vec::new(),
-            released: true,
-        }
-    }
-
-    fn extend(&mut self, other: Self) {
-        self.actions.extend(other.actions);
-        self.released |= other.released;
-    }
-}
-
 impl InputDevice {
     fn open(path: &Path) -> io::Result<Self> {
         let file = OpenOptions::new()
@@ -573,167 +545,6 @@ struct InputAbsInfo {
     resolution: i32,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-enum AxisDirection {
-    Negative,
-    #[default]
-    Neutral,
-    Positive,
-}
-
-impl AxisDirection {
-    fn update(
-        &mut self,
-        next: Self,
-        action: impl Fn(Self) -> Option<ControllerAction>,
-        repeater: &mut ActionRepeater,
-        now: Instant,
-    ) -> InputActions {
-        if *self == next {
-            return InputActions::default();
-        }
-        let mut input = InputActions::default();
-        if let Some(action) = action(*self) {
-            repeater.stop(action);
-            input.released = true;
-        }
-        *self = next;
-        if let Some(action) = action(next) {
-            input.actions.extend(repeater.start(action, now));
-        }
-        input
-    }
-}
-
-#[derive(Debug, Default)]
-struct ActionRepeater {
-    up: HeldAction,
-    down: HeldAction,
-    left: HeldAction,
-    right: HeldAction,
-    scroll_preview_left: HeldAction,
-    scroll_preview_right: HeldAction,
-    scroll_preview_up: HeldAction,
-    scroll_preview_down: HeldAction,
-}
-
-impl ActionRepeater {
-    fn start(&mut self, action: ControllerAction, now: Instant) -> Vec<ControllerAction> {
-        let Some(held) = self.held_mut(action) else {
-            return vec![action];
-        };
-        held.start(now);
-        vec![action]
-    }
-
-    fn stop(&mut self, action: ControllerAction) {
-        if let Some(held) = self.held_mut(action) {
-            held.stop();
-        }
-    }
-
-    fn clear(&mut self) {
-        *self = Self::default();
-    }
-
-    fn poll(&mut self, now: Instant) -> Vec<ControllerAction> {
-        [
-            (ControllerAction::Up, &mut self.up),
-            (ControllerAction::Down, &mut self.down),
-            (ControllerAction::Left, &mut self.left),
-            (ControllerAction::Right, &mut self.right),
-            (
-                ControllerAction::ScrollPreviewLeft,
-                &mut self.scroll_preview_left,
-            ),
-            (
-                ControllerAction::ScrollPreviewRight,
-                &mut self.scroll_preview_right,
-            ),
-            (
-                ControllerAction::ScrollPreviewUp,
-                &mut self.scroll_preview_up,
-            ),
-            (
-                ControllerAction::ScrollPreviewDown,
-                &mut self.scroll_preview_down,
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(action, held)| held.poll(now).then_some(action))
-        .collect()
-    }
-
-    fn next_repeat(&self) -> Option<Instant> {
-        [
-            &self.up,
-            &self.down,
-            &self.left,
-            &self.right,
-            &self.scroll_preview_left,
-            &self.scroll_preview_right,
-            &self.scroll_preview_up,
-            &self.scroll_preview_down,
-        ]
-        .into_iter()
-        .filter_map(HeldAction::next_repeat)
-        .min()
-    }
-
-    fn held_mut(&mut self, action: ControllerAction) -> Option<&mut HeldAction> {
-        match action {
-            ControllerAction::Up => Some(&mut self.up),
-            ControllerAction::Down => Some(&mut self.down),
-            ControllerAction::Left => Some(&mut self.left),
-            ControllerAction::Right => Some(&mut self.right),
-            ControllerAction::ScrollPreviewLeft => Some(&mut self.scroll_preview_left),
-            ControllerAction::ScrollPreviewRight => Some(&mut self.scroll_preview_right),
-            ControllerAction::ScrollPreviewUp => Some(&mut self.scroll_preview_up),
-            ControllerAction::ScrollPreviewDown => Some(&mut self.scroll_preview_down),
-            ControllerAction::Accept
-            | ControllerAction::Cancel
-            | ControllerAction::ClearCurrent
-            | ControllerAction::SelectCurrent
-            | ControllerAction::ToggleHiddenDirectories => None,
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct HeldAction {
-    source_count: u8,
-    next_repeat: Option<Instant>,
-}
-
-impl HeldAction {
-    fn start(&mut self, now: Instant) {
-        self.source_count = self.source_count.saturating_add(1);
-        self.next_repeat = Some(now + INITIAL_REPEAT_DELAY);
-    }
-
-    fn stop(&mut self) {
-        self.source_count = self.source_count.saturating_sub(1);
-        if self.source_count == 0 {
-            self.next_repeat = None;
-        }
-    }
-
-    fn poll(&mut self, now: Instant) -> bool {
-        let Some(next_repeat) = self.next_repeat else {
-            return false;
-        };
-        if now < next_repeat {
-            return false;
-        }
-        self.next_repeat = Some(now + REPEAT_INTERVAL);
-        true
-    }
-
-    const fn next_repeat(&self) -> Option<Instant> {
-        self.next_repeat
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct InputEvent {
     kind: u16,
@@ -936,10 +747,7 @@ fn key_actions(
             ),
             1,
         ) => InputActions::action(action),
-        (Some(action), 1) => InputActions {
-            actions: repeater.start(action, now),
-            released: false,
-        },
+        (Some(action), 1) => InputActions::repeated(repeater.start(action, now)),
         (Some(action), 0) => {
             repeater.stop(action);
             InputActions::released()
@@ -1160,57 +968,6 @@ mod tests {
             axes.update(ABS_HAT0X, 1, &mut repeater, now).actions,
             vec![ControllerAction::Right]
         );
-    }
-
-    #[test]
-    fn held_direction_repeats_after_initial_delay() {
-        let mut repeater = ActionRepeater::default();
-        let now = Instant::now();
-
-        assert_eq!(
-            repeater.start(ControllerAction::Down, now),
-            vec![ControllerAction::Down]
-        );
-        let before_initial_repeat = (now + INITIAL_REPEAT_DELAY)
-            .checked_sub(Duration::from_millis(1))
-            .unwrap();
-        assert!(repeater.poll(before_initial_repeat).is_empty());
-        assert_eq!(
-            repeater.poll(now + INITIAL_REPEAT_DELAY),
-            vec![ControllerAction::Down]
-        );
-        assert!(
-            repeater
-                .poll(now + INITIAL_REPEAT_DELAY + Duration::from_millis(1))
-                .is_empty()
-        );
-        assert_eq!(
-            repeater.poll(now + INITIAL_REPEAT_DELAY + REPEAT_INTERVAL),
-            vec![ControllerAction::Down]
-        );
-    }
-
-    #[test]
-    fn released_direction_stops_repeating() {
-        let mut repeater = ActionRepeater::default();
-        let now = Instant::now();
-
-        repeater.start(ControllerAction::Down, now);
-        repeater.stop(ControllerAction::Down);
-
-        assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
-    }
-
-    #[test]
-    fn clearing_repeater_stops_all_held_actions() {
-        let mut repeater = ActionRepeater::default();
-        let now = Instant::now();
-
-        repeater.start(ControllerAction::Down, now);
-        repeater.start(ControllerAction::ScrollPreviewRight, now);
-        repeater.clear();
-
-        assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
     }
 
     fn bitset(bits: &[u16], max_bit: u16) -> Vec<u8> {

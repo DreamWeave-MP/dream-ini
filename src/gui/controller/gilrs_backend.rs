@@ -6,14 +6,13 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use gilrs::{Axis, Button, EventType, Gilrs};
 
+use super::common::{ActionRepeater, AxisDirection, InputActions};
 use super::{ControllerAction, ControllerEvent, ControllerEventSender};
 
 const GILRS_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const GILRS_RETRY_INTERVAL: Duration = Duration::from_millis(500);
-const INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(350);
 const MAX_GILRS_EVENTS_PER_TICK: usize = 64;
 const MAX_WORKER_ACTIONS_PER_TICK: usize = 32;
-const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
 const STICK_DEADZONE: f32 = 0.5;
 
 pub(super) struct ControllerWorker {
@@ -187,33 +186,6 @@ fn run_worker(sender: &ControllerEventSender, context: &egui::Context, stop: &At
     }
 }
 
-#[derive(Debug, Default)]
-struct InputActions {
-    actions: Vec<ControllerAction>,
-    released: bool,
-}
-
-impl InputActions {
-    fn action(action: ControllerAction) -> Self {
-        Self {
-            actions: vec![action],
-            released: false,
-        }
-    }
-
-    fn released() -> Self {
-        Self {
-            actions: Vec::new(),
-            released: true,
-        }
-    }
-
-    fn extend(&mut self, other: Self) {
-        self.actions.extend(other.actions);
-        self.released |= other.released;
-    }
-}
-
 fn send_event(sender: &ControllerEventSender, event: ControllerEvent) -> bool {
     sender.send(event)
 }
@@ -226,174 +198,12 @@ struct AxisState {
     right_y: AxisDirection,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-enum AxisDirection {
-    Negative,
-    #[default]
-    Neutral,
-    Positive,
-}
-
-impl AxisDirection {
-    fn update(
-        &mut self,
-        next: Self,
-        action: impl Fn(Self) -> Option<ControllerAction>,
-        repeater: &mut ActionRepeater,
-        now: Instant,
-    ) -> InputActions {
-        if *self == next {
-            return InputActions::default();
-        }
-        let mut input = InputActions::default();
-        if let Some(action) = action(*self) {
-            repeater.stop(action);
-            input.released = true;
-        }
-        *self = next;
-        if let Some(action) = action(next) {
-            input.actions.extend(repeater.start(action, now));
-        }
-        input
-    }
-}
-
-#[derive(Debug, Default)]
-struct ActionRepeater {
-    up: HeldAction,
-    down: HeldAction,
-    left: HeldAction,
-    right: HeldAction,
-    scroll_preview_left: HeldAction,
-    scroll_preview_right: HeldAction,
-    scroll_preview_up: HeldAction,
-    scroll_preview_down: HeldAction,
-}
-
-impl ActionRepeater {
-    fn start(&mut self, action: ControllerAction, now: Instant) -> Vec<ControllerAction> {
-        let Some(held) = self.held_mut(action) else {
-            return vec![action];
-        };
-        held.start(now);
-        vec![action]
-    }
-
-    fn stop(&mut self, action: ControllerAction) {
-        if let Some(held) = self.held_mut(action) {
-            held.stop();
-        }
-    }
-
-    fn clear(&mut self) {
-        *self = Self::default();
-    }
-
-    fn poll(&mut self, now: Instant) -> Vec<ControllerAction> {
-        [
-            (ControllerAction::Up, &mut self.up),
-            (ControllerAction::Down, &mut self.down),
-            (ControllerAction::Left, &mut self.left),
-            (ControllerAction::Right, &mut self.right),
-            (
-                ControllerAction::ScrollPreviewLeft,
-                &mut self.scroll_preview_left,
-            ),
-            (
-                ControllerAction::ScrollPreviewRight,
-                &mut self.scroll_preview_right,
-            ),
-            (
-                ControllerAction::ScrollPreviewUp,
-                &mut self.scroll_preview_up,
-            ),
-            (
-                ControllerAction::ScrollPreviewDown,
-                &mut self.scroll_preview_down,
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(action, held)| held.poll(now).then_some(action))
-        .collect()
-    }
-
-    fn next_repeat(&self) -> Option<Instant> {
-        [
-            &self.up,
-            &self.down,
-            &self.left,
-            &self.right,
-            &self.scroll_preview_left,
-            &self.scroll_preview_right,
-            &self.scroll_preview_up,
-            &self.scroll_preview_down,
-        ]
-        .into_iter()
-        .filter_map(HeldAction::next_repeat)
-        .min()
-    }
-
-    fn held_mut(&mut self, action: ControllerAction) -> Option<&mut HeldAction> {
-        match action {
-            ControllerAction::Up => Some(&mut self.up),
-            ControllerAction::Down => Some(&mut self.down),
-            ControllerAction::Left => Some(&mut self.left),
-            ControllerAction::Right => Some(&mut self.right),
-            ControllerAction::ScrollPreviewLeft => Some(&mut self.scroll_preview_left),
-            ControllerAction::ScrollPreviewRight => Some(&mut self.scroll_preview_right),
-            ControllerAction::ScrollPreviewUp => Some(&mut self.scroll_preview_up),
-            ControllerAction::ScrollPreviewDown => Some(&mut self.scroll_preview_down),
-            ControllerAction::Accept
-            | ControllerAction::Cancel
-            | ControllerAction::ClearCurrent
-            | ControllerAction::SelectCurrent
-            | ControllerAction::ToggleHiddenDirectories => None,
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct HeldAction {
-    source_count: u8,
-    next_repeat: Option<Instant>,
-}
-
-impl HeldAction {
-    fn start(&mut self, now: Instant) {
-        self.source_count = self.source_count.saturating_add(1);
-        self.next_repeat = Some(now + INITIAL_REPEAT_DELAY);
-    }
-
-    fn stop(&mut self) {
-        self.source_count = self.source_count.saturating_sub(1);
-        if self.source_count == 0 {
-            self.next_repeat = None;
-        }
-    }
-
-    fn poll(&mut self, now: Instant) -> bool {
-        let Some(next_repeat) = self.next_repeat else {
-            return false;
-        };
-        if now < next_repeat {
-            return false;
-        }
-        self.next_repeat = Some(now + REPEAT_INTERVAL);
-        true
-    }
-
-    const fn next_repeat(&self) -> Option<Instant> {
-        self.next_repeat
-    }
-}
-
 fn button_pressed(button: Button, repeater: &mut ActionRepeater, now: Instant) -> InputActions {
     if let Some(action) = immediate_button_action(button) {
         return InputActions::action(action);
     }
-    repeatable_button_action(button).map_or_else(InputActions::default, |action| InputActions {
-        actions: repeater.start(action, now),
-        released: false,
+    repeatable_button_action(button).map_or_else(InputActions::default, |action| {
+        InputActions::repeated(repeater.start(action, now))
     })
 }
 
