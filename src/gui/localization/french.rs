@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use dream_ini::{ImportError, ImportEvent, ImportWarning};
 
 use super::UiText;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use crate::test_support::values;
 use crate::{
     ImportWarning, TextEncoding, parse_cfg_str, parse_ini_bytes, parse_ini_str,

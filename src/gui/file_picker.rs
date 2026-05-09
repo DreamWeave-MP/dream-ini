@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};

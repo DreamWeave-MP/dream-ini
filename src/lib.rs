@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Library support for importing Morrowind INI settings into OpenMW-style configuration data.
 //!
 //! The crate exposes the same core importer used by the `dream-ini` CLI. Configuration data is

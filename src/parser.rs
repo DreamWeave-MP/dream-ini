@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use crate::{ImportWarning, MultiMap, TextEncoding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

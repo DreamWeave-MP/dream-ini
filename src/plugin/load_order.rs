@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 pub(crate) fn dependency_sort(mut source: Vec<(String, Vec<String>)>) -> Vec<String> {
     let mut result = Vec::new();
     while let Some((element, _)) = source.first() {

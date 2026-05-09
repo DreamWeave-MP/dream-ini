@@ -202,4 +202,4 @@ The Criterion benchmark measures a large synthetic parse/import/serialize round 
 
 ## License
 
-`dream-ini` is licensed under GPL-3.0-or-later.
+`dream-ini` is licensed under GPL-3.0-only.

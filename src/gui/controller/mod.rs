@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Controller input for the GUI.
 //!
 //! Platform backends translate device-specific input into these actions.  The

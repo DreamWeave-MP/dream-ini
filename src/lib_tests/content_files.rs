@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::fs;
 
 use crate::test_support::{tes3_bytes, unique_test_dir, values};

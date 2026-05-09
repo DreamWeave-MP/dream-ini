@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 

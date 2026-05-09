@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 pub(crate) const MORROWIND_FALLBACK_KEYS: &[&str] = &[
     "LightAttenuation:UseConstant",
     "LightAttenuation:ConstantValue",

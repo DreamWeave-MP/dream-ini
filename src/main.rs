@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::process::ExitCode;
 
 use command::{CliError, MISSING_INI_EXIT_CODE};
