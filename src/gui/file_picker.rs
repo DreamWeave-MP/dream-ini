@@ -189,7 +189,7 @@ impl PathPickerState {
         ui: &mut egui::Ui,
         controller_actions: &[ControllerAction],
     ) -> EntryAction {
-        let mut entry_action = self.keyboard_entry_action(ui, controller_actions);
+        let mut entry_action = self.input_entry_action(ui, controller_actions);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -286,7 +286,7 @@ impl PathPickerState {
         EntryAction::None
     }
 
-    fn keyboard_entry_action(
+    fn input_entry_action(
         &mut self,
         ui: &egui::Ui,
         controller_actions: &[ControllerAction],
@@ -307,11 +307,53 @@ impl PathPickerState {
                 ControllerAction::Up => self.move_selection(SelectionStep::Previous),
                 ControllerAction::Down => self.move_selection(SelectionStep::Next),
                 ControllerAction::Accept => return self.selected_entry_action(),
+                ControllerAction::SelectCurrent => return self.current_target_action(),
                 ControllerAction::Cancel => return EntryAction::Cancel,
-                ControllerAction::Left | ControllerAction::Right => {}
+                ControllerAction::Left => return self.parent_entry_action(),
+                ControllerAction::Right => return self.right_entry_action(),
+                ControllerAction::ToggleHiddenDirectories => self.toggle_hidden_directories(),
             }
         }
         EntryAction::None
+    }
+
+    fn parent_entry_action(&self) -> EntryAction {
+        self.current_dir.parent().map_or(EntryAction::None, |path| {
+            EntryAction::Navigate(path.to_path_buf())
+        })
+    }
+
+    fn right_entry_action(&self) -> EntryAction {
+        let Some(index) = self.selected_entry_index() else {
+            return EntryAction::None;
+        };
+        let entry = &self.entries[index];
+        match entry.kind {
+            EntryKind::Directory => EntryAction::Navigate(entry.path.clone()),
+            EntryKind::File => EntryAction::Choose(entry.path.clone()),
+            EntryKind::Parent => EntryAction::None,
+        }
+    }
+
+    fn current_target_action(&self) -> EntryAction {
+        if self.target.is_directory_target() {
+            return EntryAction::Choose(self.current_dir.clone());
+        }
+        if self.target == PathTarget::OutputCfg {
+            return self
+                .chosen_path()
+                .map_or(EntryAction::None, EntryAction::Choose);
+        }
+        self.target
+            .expected_file_name()
+            .map(|file_name| self.current_dir.join(file_name))
+            .filter(|path| path.is_file())
+            .map_or(EntryAction::None, EntryAction::Choose)
+    }
+
+    fn toggle_hidden_directories(&mut self) {
+        self.show_hidden_directories = !self.show_hidden_directories;
+        self.refresh();
     }
 
     fn move_selection(&mut self, step: SelectionStep) {
@@ -748,6 +790,100 @@ mod tests {
                 panic!("selected current directory should be chosen")
             }
         }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn controller_start_chooses_expected_file_from_current_directory() {
+        let root = unique_temp_dir();
+        let cfg = root.join("openmw.cfg");
+        File::create(&cfg).unwrap();
+        let picker = PathPickerState::new(PathTarget::ExistingOpenmwCfg, Some(&root));
+
+        match picker.current_target_action() {
+            EntryAction::Choose(path) => assert_eq!(path, cfg),
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::Navigate(_)
+            | EntryAction::SelectFile(_) => {
+                panic!("current directory should choose expected cfg")
+            }
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn controller_left_enters_parent_directory() {
+        let root = unique_temp_dir();
+        let child = root.join("child");
+        fs::create_dir(&child).unwrap();
+        let picker = PathPickerState::new(PathTarget::UserDataDir, Some(&child));
+
+        match picker.parent_entry_action() {
+            EntryAction::Navigate(path) => assert_eq!(path, root),
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::SelectFile(_)
+            | EntryAction::Choose(_) => {
+                panic!("left should navigate to parent")
+            }
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn controller_right_enters_selected_directory_or_chooses_file() {
+        let root = unique_temp_dir();
+        let child = root.join("child");
+        let cfg = root.join("openmw.cfg");
+        fs::create_dir(&child).unwrap();
+        File::create(&cfg).unwrap();
+        let mut picker = PathPickerState::new(PathTarget::ExistingOpenmwCfg, Some(&root));
+
+        picker.selected = Some(child.clone());
+        match picker.right_entry_action() {
+            EntryAction::Navigate(path) => assert_eq!(path, child),
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::SelectFile(_)
+            | EntryAction::Choose(_) => panic!("right should navigate selected directory"),
+        }
+
+        picker.selected = Some(cfg.clone());
+        match picker.right_entry_action() {
+            EntryAction::Choose(path) => assert_eq!(path, cfg),
+            EntryAction::None
+            | EntryAction::Cancel
+            | EntryAction::Navigate(_)
+            | EntryAction::SelectFile(_) => panic!("right should choose selected cfg"),
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn controller_left_bumper_toggles_hidden_directories() {
+        let root = unique_temp_dir();
+        fs::create_dir(root.join(".hidden-dir")).unwrap();
+        let mut picker = PathPickerState::new(PathTarget::UserDataDir, Some(&root));
+        assert!(
+            !picker
+                .entries
+                .iter()
+                .any(|entry| entry.name == ".hidden-dir")
+        );
+
+        picker.toggle_hidden_directories();
+
+        assert!(
+            picker
+                .entries
+                .iter()
+                .any(|entry| entry.name == ".hidden-dir")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

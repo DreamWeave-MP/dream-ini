@@ -133,6 +133,8 @@ impl GuiApp {
                     self.run_import();
                 }
                 ControllerAction::Accept
+                | ControllerAction::SelectCurrent
+                | ControllerAction::ToggleHiddenDirectories
                 | ControllerAction::Up
                 | ControllerAction::Down
                 | ControllerAction::Left

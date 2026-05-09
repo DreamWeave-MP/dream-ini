@@ -28,6 +28,9 @@ const ABS_MAX: u16 = 0x3f;
 
 const BTN_SOUTH: u16 = 0x130;
 const BTN_EAST: u16 = 0x131;
+const BTN_TL: u16 = 0x136;
+const BTN_SELECT: u16 = 0x13a;
+const BTN_START: u16 = 0x13b;
 const BTN_DPAD_UP: u16 = 0x220;
 const BTN_DPAD_DOWN: u16 = 0x221;
 const BTN_DPAD_LEFT: u16 = 0x222;
@@ -569,7 +572,10 @@ impl ActionRepeater {
             ControllerAction::Down => Some(&mut self.down),
             ControllerAction::Left => Some(&mut self.left),
             ControllerAction::Right => Some(&mut self.right),
-            ControllerAction::Accept | ControllerAction::Cancel => None,
+            ControllerAction::Accept
+            | ControllerAction::Cancel
+            | ControllerAction::SelectCurrent
+            | ControllerAction::ToggleHiddenDirectories => None,
         }
     }
 }
@@ -711,6 +717,9 @@ fn read_controller_capabilities(fd: RawFd) -> Option<DeviceCapabilities> {
     let has_controller_button = [
         BTN_SOUTH,
         BTN_EAST,
+        BTN_TL,
+        BTN_SELECT,
+        BTN_START,
         BTN_DPAD_UP,
         BTN_DPAD_DOWN,
         BTN_DPAD_LEFT,
@@ -784,9 +793,15 @@ fn key_actions(
         return Vec::new();
     }
     match (key_action(code), value) {
-        (Some(ControllerAction::Accept | ControllerAction::Cancel), 1) => {
-            vec![key_action(code).expect("checked above")]
-        }
+        (
+            Some(
+                action @ (ControllerAction::Accept
+                | ControllerAction::Cancel
+                | ControllerAction::SelectCurrent
+                | ControllerAction::ToggleHiddenDirectories),
+            ),
+            1,
+        ) => vec![action],
         (Some(action), 1) => repeater.start(action, now),
         (Some(action), 0) => {
             repeater.stop(action);
@@ -806,7 +821,9 @@ fn is_dpad_key(code: u16) -> bool {
 fn key_action(code: u16) -> Option<ControllerAction> {
     match code {
         BTN_SOUTH => Some(ControllerAction::Accept),
-        BTN_EAST => Some(ControllerAction::Cancel),
+        BTN_EAST | BTN_SELECT => Some(ControllerAction::Cancel),
+        BTN_START => Some(ControllerAction::SelectCurrent),
+        BTN_TL => Some(ControllerAction::ToggleHiddenDirectories),
         BTN_DPAD_UP => Some(ControllerAction::Up),
         BTN_DPAD_DOWN => Some(ControllerAction::Down),
         BTN_DPAD_LEFT => Some(ControllerAction::Left),
@@ -847,6 +864,12 @@ mod tests {
     fn key_events_map_to_controller_actions() {
         assert_eq!(key_action(BTN_SOUTH), Some(ControllerAction::Accept));
         assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Cancel));
+        assert_eq!(key_action(BTN_SELECT), Some(ControllerAction::Cancel));
+        assert_eq!(key_action(BTN_START), Some(ControllerAction::SelectCurrent));
+        assert_eq!(
+            key_action(BTN_TL),
+            Some(ControllerAction::ToggleHiddenDirectories)
+        );
         assert_eq!(key_action(BTN_DPAD_UP), Some(ControllerAction::Up));
         assert_eq!(key_action(BTN_DPAD_DOWN), Some(ControllerAction::Down));
         assert_eq!(key_action(BTN_DPAD_LEFT), Some(ControllerAction::Left));

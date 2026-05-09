@@ -234,7 +234,10 @@ impl ActionRepeater {
             ControllerAction::Down => Some(&mut self.down),
             ControllerAction::Left => Some(&mut self.left),
             ControllerAction::Right => Some(&mut self.right),
-            ControllerAction::Accept | ControllerAction::Cancel => None,
+            ControllerAction::Accept
+            | ControllerAction::Cancel
+            | ControllerAction::SelectCurrent
+            | ControllerAction::ToggleHiddenDirectories => None,
         }
     }
 }
@@ -289,6 +292,9 @@ fn immediate_button_action(button: Button) -> Option<ControllerAction> {
     match button {
         Button::South => Some(ControllerAction::Accept),
         Button::East => Some(ControllerAction::Cancel),
+        Button::Select => Some(ControllerAction::Cancel),
+        Button::Start => Some(ControllerAction::SelectCurrent),
+        Button::LeftTrigger => Some(ControllerAction::ToggleHiddenDirectories),
         _ => None,
     }
 }
