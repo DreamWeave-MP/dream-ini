@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use super::ControllerAction;
 
 const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
+const INITIAL_REPEAT_DELAY: Duration = Duration::from_millis(350);
+const REPEAT_INTERVAL: Duration = Duration::from_millis(90);
 const STICK_DEADZONE: i32 = 16_384;
 
 const EV_KEY: u16 = 0x01;
@@ -57,6 +59,9 @@ impl ControllerBackend {
     }
 
     fn rescan_if_needed(&mut self) {
+        if !self.devices.is_empty() {
+            return;
+        }
         if self.last_scan.elapsed() < DEVICE_RESCAN_INTERVAL {
             return;
         }
@@ -70,6 +75,7 @@ impl ControllerBackend {
 struct InputDevice {
     file: File,
     axes: AxisState,
+    repeater: ActionRepeater,
 }
 
 impl InputDevice {
@@ -81,21 +87,21 @@ impl InputDevice {
         Ok(Self {
             file,
             axes: AxisState::default(),
+            repeater: ActionRepeater::default(),
         })
     }
 
     fn poll(&mut self) -> io::Result<Vec<ControllerAction>> {
         let mut buffer = [0_u8; input_event_size() * 32];
         let mut actions = Vec::new();
+        let now = Instant::now();
 
         loop {
             match self.file.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(bytes_read) => {
                     for event in parse_events(&buffer[..bytes_read]) {
-                        if let Some(action) = self.handle_event(event) {
-                            actions.push(action);
-                        }
+                        actions.extend(self.handle_event(event, now));
                     }
                     if bytes_read < buffer.len() {
                         break;
@@ -106,14 +112,17 @@ impl InputDevice {
             }
         }
 
+        actions.extend(self.repeater.poll(now));
         Ok(actions)
     }
 
-    fn handle_event(&mut self, event: InputEvent) -> Option<ControllerAction> {
+    fn handle_event(&mut self, event: InputEvent, now: Instant) -> Vec<ControllerAction> {
         match event.kind {
-            EV_KEY if event.value == 1 => key_action(event.code),
-            EV_ABS => self.axes.update(event.code, event.value),
-            _ => None,
+            EV_KEY => key_actions(event.code, event.value, &mut self.repeater, now),
+            EV_ABS => self
+                .axes
+                .update(event.code, event.value, &mut self.repeater, now),
+            _ => Vec::new(),
         }
     }
 }
@@ -127,15 +136,27 @@ struct AxisState {
 }
 
 impl AxisState {
-    fn update(&mut self, code: u16, value: i32) -> Option<ControllerAction> {
+    fn update(
+        &mut self,
+        code: u16,
+        value: i32,
+        repeater: &mut ActionRepeater,
+        now: Instant,
+    ) -> Vec<ControllerAction> {
         match code {
             ABS_X => self
                 .left_x
-                .update(stick_direction(value), horizontal_action),
-            ABS_Y => self.left_y.update(stick_direction(value), vertical_action),
-            ABS_HAT0X => self.hat_x.update(hat_direction(value), horizontal_action),
-            ABS_HAT0Y => self.hat_y.update(hat_direction(value), vertical_action),
-            _ => None,
+                .update(stick_direction(value), horizontal_action, repeater, now),
+            ABS_Y => self
+                .left_y
+                .update(stick_direction(value), vertical_action, repeater, now),
+            ABS_HAT0X => self
+                .hat_x
+                .update(hat_direction(value), horizontal_action, repeater, now),
+            ABS_HAT0Y => self
+                .hat_y
+                .update(hat_direction(value), vertical_action, repeater, now),
+            _ => Vec::new(),
         }
     }
 }
@@ -152,13 +173,95 @@ impl AxisDirection {
     fn update(
         &mut self,
         next: Self,
-        action: impl FnOnce(Self) -> Option<ControllerAction>,
-    ) -> Option<ControllerAction> {
+        action: impl Fn(Self) -> Option<ControllerAction>,
+        repeater: &mut ActionRepeater,
+        now: Instant,
+    ) -> Vec<ControllerAction> {
         if *self == next {
-            return None;
+            return Vec::new();
+        }
+        if let Some(action) = action(*self) {
+            repeater.stop(action);
         }
         *self = next;
-        action(next)
+        action(next).map_or_else(Vec::new, |action| repeater.start(action, now))
+    }
+}
+
+#[derive(Debug, Default)]
+struct ActionRepeater {
+    up: HeldAction,
+    down: HeldAction,
+    left: HeldAction,
+    right: HeldAction,
+}
+
+impl ActionRepeater {
+    fn start(&mut self, action: ControllerAction, now: Instant) -> Vec<ControllerAction> {
+        let Some(held) = self.held_mut(action) else {
+            return vec![action];
+        };
+        held.start(now);
+        vec![action]
+    }
+
+    fn stop(&mut self, action: ControllerAction) {
+        if let Some(held) = self.held_mut(action) {
+            held.stop();
+        }
+    }
+
+    fn poll(&mut self, now: Instant) -> Vec<ControllerAction> {
+        [
+            (ControllerAction::Up, &mut self.up),
+            (ControllerAction::Down, &mut self.down),
+            (ControllerAction::Left, &mut self.left),
+            (ControllerAction::Right, &mut self.right),
+        ]
+        .into_iter()
+        .filter_map(|(action, held)| held.poll(now).then_some(action))
+        .collect()
+    }
+
+    fn held_mut(&mut self, action: ControllerAction) -> Option<&mut HeldAction> {
+        match action {
+            ControllerAction::Up => Some(&mut self.up),
+            ControllerAction::Down => Some(&mut self.down),
+            ControllerAction::Left => Some(&mut self.left),
+            ControllerAction::Right => Some(&mut self.right),
+            ControllerAction::Accept | ControllerAction::Cancel => None,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct HeldAction {
+    source_count: u8,
+    next_repeat: Option<Instant>,
+}
+
+impl HeldAction {
+    fn start(&mut self, now: Instant) {
+        self.source_count = self.source_count.saturating_add(1);
+        self.next_repeat = Some(now + INITIAL_REPEAT_DELAY);
+    }
+
+    fn stop(&mut self) {
+        self.source_count = self.source_count.saturating_sub(1);
+        if self.source_count == 0 {
+            self.next_repeat = None;
+        }
+    }
+
+    fn poll(&mut self, now: Instant) -> bool {
+        let Some(next_repeat) = self.next_repeat else {
+            return false;
+        };
+        if now < next_repeat {
+            return false;
+        }
+        self.next_repeat = Some(now + REPEAT_INTERVAL);
+        true
     }
 }
 
@@ -246,6 +349,25 @@ const fn input_event_size() -> usize {
     std::mem::size_of::<libc::timeval>() + 8
 }
 
+fn key_actions(
+    code: u16,
+    value: i32,
+    repeater: &mut ActionRepeater,
+    now: Instant,
+) -> Vec<ControllerAction> {
+    match (key_action(code), value) {
+        (Some(ControllerAction::Accept | ControllerAction::Cancel), 1) => {
+            vec![key_action(code).expect("checked above")]
+        }
+        (Some(action), 1) => repeater.start(action, now),
+        (Some(action), 0) => {
+            repeater.stop(action);
+            Vec::new()
+        }
+        (Some(_) | None, _) => Vec::new(),
+    }
+}
+
 fn key_action(code: u16) -> Option<ControllerAction> {
     match code {
         BTN_SOUTH => Some(ControllerAction::Accept),
@@ -317,27 +439,85 @@ mod tests {
     #[test]
     fn stick_axes_are_edge_triggered() {
         let mut axes = AxisState::default();
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
 
         assert_eq!(
-            axes.update(ABS_X, STICK_DEADZONE + 1),
-            Some(ControllerAction::Right)
+            axes.update(ABS_X, STICK_DEADZONE + 1, &mut repeater, now),
+            vec![ControllerAction::Right]
         );
-        assert_eq!(axes.update(ABS_X, STICK_DEADZONE + 2), None);
-        assert_eq!(axes.update(ABS_X, 0), None);
         assert_eq!(
-            axes.update(ABS_X, -STICK_DEADZONE - 1),
-            Some(ControllerAction::Left)
+            axes.update(ABS_X, STICK_DEADZONE + 2, &mut repeater, now),
+            Vec::new()
+        );
+        assert_eq!(axes.update(ABS_X, 0, &mut repeater, now), Vec::new());
+        assert_eq!(
+            axes.update(ABS_X, -STICK_DEADZONE - 1, &mut repeater, now),
+            vec![ControllerAction::Left]
         );
     }
 
     #[test]
     fn hat_axes_map_directly() {
         let mut axes = AxisState::default();
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
 
-        assert_eq!(axes.update(ABS_HAT0Y, -1), Some(ControllerAction::Up));
-        assert_eq!(axes.update(ABS_HAT0Y, 1), Some(ControllerAction::Down));
-        assert_eq!(axes.update(ABS_HAT0X, -1), Some(ControllerAction::Left));
-        assert_eq!(axes.update(ABS_HAT0X, 1), Some(ControllerAction::Right));
+        assert_eq!(
+            axes.update(ABS_HAT0Y, -1, &mut repeater, now),
+            vec![ControllerAction::Up]
+        );
+        assert_eq!(
+            axes.update(ABS_HAT0Y, 1, &mut repeater, now),
+            vec![ControllerAction::Down]
+        );
+        assert_eq!(
+            axes.update(ABS_HAT0X, -1, &mut repeater, now),
+            vec![ControllerAction::Left]
+        );
+        assert_eq!(
+            axes.update(ABS_HAT0X, 1, &mut repeater, now),
+            vec![ControllerAction::Right]
+        );
+    }
+
+    #[test]
+    fn held_direction_repeats_after_initial_delay() {
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
+
+        assert_eq!(
+            repeater.start(ControllerAction::Down, now),
+            vec![ControllerAction::Down]
+        );
+        let before_initial_repeat = (now + INITIAL_REPEAT_DELAY)
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        assert!(repeater.poll(before_initial_repeat).is_empty());
+        assert_eq!(
+            repeater.poll(now + INITIAL_REPEAT_DELAY),
+            vec![ControllerAction::Down]
+        );
+        assert!(
+            repeater
+                .poll(now + INITIAL_REPEAT_DELAY + Duration::from_millis(1))
+                .is_empty()
+        );
+        assert_eq!(
+            repeater.poll(now + INITIAL_REPEAT_DELAY + REPEAT_INTERVAL),
+            vec![ControllerAction::Down]
+        );
+    }
+
+    #[test]
+    fn released_direction_stops_repeating() {
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
+
+        repeater.start(ControllerAction::Down, now);
+        repeater.stop(ControllerAction::Down);
+
+        assert!(repeater.poll(now + INITIAL_REPEAT_DELAY).is_empty());
     }
 
     #[test]
