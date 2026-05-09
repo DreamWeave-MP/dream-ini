@@ -157,14 +157,21 @@ impl WorkerState {
     }
 
     fn rescan_if_needed(&mut self) {
-        if !self.devices.is_empty() {
-            return;
-        }
         if self.last_scan.elapsed() < DEVICE_RESCAN_INTERVAL {
             return;
         }
 
-        self.devices = open_devices();
+        let known_paths = self
+            .devices
+            .iter()
+            .map(|device| device.path.clone())
+            .collect::<BTreeSet<_>>();
+        self.devices.extend(
+            candidate_device_paths()
+                .into_iter()
+                .filter(|path| !known_paths.contains(path))
+                .filter_map(|path| InputDevice::open(&path).ok()),
+        );
         self.last_scan = Instant::now();
     }
 }
@@ -265,6 +272,7 @@ impl Drop for WakeFd {
 
 #[derive(Debug)]
 struct InputDevice {
+    path: PathBuf,
     file: File,
     axes: AxisState,
     repeater: ActionRepeater,
@@ -277,6 +285,7 @@ impl InputDevice {
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)?;
         Ok(Self {
+            path: path.to_owned(),
             file,
             axes: AxisState::default(),
             repeater: ActionRepeater::default(),
