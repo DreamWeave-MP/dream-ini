@@ -76,7 +76,12 @@ impl ControllerEventQueue {
                 }
             }
             ControllerEvent::PurgeQueuedActions => {
-                events.retain(|queued| !matches!(queued, ControllerEvent::Action(_)));
+                events.retain(|queued| {
+                    !matches!(
+                        queued,
+                        ControllerEvent::Action(_) | ControllerEvent::PurgeQueuedActions
+                    )
+                });
                 if events.len() >= MAX_QUEUED_CONTROLLER_ACTIONS {
                     events.pop_front();
                 }
@@ -232,6 +237,7 @@ mod tests {
         assert!(sender.send(ControllerEvent::Available(true)));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Down)));
         assert!(sender.send(ControllerEvent::Action(ControllerAction::Up)));
+        assert!(sender.send(ControllerEvent::PurgeQueuedActions));
         assert!(sender.send(ControllerEvent::PurgeQueuedActions));
 
         assert_eq!(

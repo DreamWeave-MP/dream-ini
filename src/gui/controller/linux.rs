@@ -748,12 +748,26 @@ fn key_actions(
             1,
         ) => InputActions::action(action),
         (Some(action), 1) => InputActions::repeated(repeater.start(action, now)),
-        (Some(action), 0) => {
+        (Some(action), 0) if action_repeats(action) => {
             repeater.stop(action);
             InputActions::released()
         }
         (Some(_) | None, _) => InputActions::default(),
     }
+}
+
+const fn action_repeats(action: ControllerAction) -> bool {
+    matches!(
+        action,
+        ControllerAction::Up
+            | ControllerAction::Down
+            | ControllerAction::Left
+            | ControllerAction::Right
+            | ControllerAction::ScrollPreviewLeft
+            | ControllerAction::ScrollPreviewRight
+            | ControllerAction::ScrollPreviewUp
+            | ControllerAction::ScrollPreviewDown
+    )
 }
 
 fn is_dpad_key(code: u16) -> bool {
@@ -853,6 +867,17 @@ mod tests {
             key_actions(BTN_SOUTH, 1, true, &mut repeater, now).actions,
             vec![ControllerAction::Accept]
         );
+    }
+
+    #[test]
+    fn immediate_button_release_does_not_purge_queued_input() {
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
+
+        let input = key_actions(BTN_SOUTH, 0, false, &mut repeater, now);
+
+        assert!(input.actions.is_empty());
+        assert!(!input.released);
     }
 
     #[test]
