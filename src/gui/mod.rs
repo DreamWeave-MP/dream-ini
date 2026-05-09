@@ -21,6 +21,7 @@ use self::controller::{ControllerAction, ControllerEvent};
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
 use self::osk::{OskOutcome, OskState, show_osk_overlay};
+use self::path_helpers::{cfg_parent, optional_path, same_cfg_context};
 use self::path_widgets::{
     controller_marker_width, path_file_row, path_folder_row, path_label_width, path_save_file_row,
 };
@@ -31,6 +32,7 @@ mod controller;
 mod file_picker;
 mod localization;
 mod osk;
+mod path_helpers;
 mod path_widgets;
 #[cfg(feature = "portmaster-gui")]
 #[cfg_attr(feature = "gui", allow(dead_code))]
@@ -1817,27 +1819,6 @@ fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
             .to_owned(),
         GuiImportError::Import(error) => localizer.error_title(error),
     }
-}
-
-fn optional_path(value: &str) -> Option<PathBuf> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
-}
-
-fn same_cfg_context(left: &Path, right: &Path) -> bool {
-    equivalent_dirs(cfg_parent(left), cfg_parent(right))
-}
-
-fn cfg_parent(path: &Path) -> &Path {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-}
-
-fn equivalent_dirs(left: &Path, right: &Path) -> bool {
-    let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_owned());
-    let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_owned());
-    left == right
 }
 
 #[cfg(test)]
