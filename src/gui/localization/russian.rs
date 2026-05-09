@@ -67,8 +67,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
             "Выберите существующий openmw.cfg перед обновлением на месте."
         }
         UiText::CancelPicker => "Отмена",
-        UiText::ChoosePath => "Выбрать",
-        UiText::SelectPath => "Выбрать",
+        UiText::ChoosePath | UiText::SelectPath => "Выбрать",
         UiText::CurrentDirectory => "Текущий каталог:",
         UiText::ParentDirectory => "На уровень выше",
         UiText::RefreshDirectory => "Обновить",

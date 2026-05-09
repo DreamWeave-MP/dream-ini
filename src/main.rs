@@ -4,6 +4,7 @@ use command::{CliError, MISSING_INI_EXIT_CODE};
 
 mod cli;
 mod command;
+mod desktop_entry;
 mod generated;
 #[cfg(feature = "gui")]
 mod gui;

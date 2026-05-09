@@ -12,6 +12,7 @@ use eframe::egui;
 
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
+use crate::desktop_entry::{APP_ID, APP_NAME};
 
 mod file_picker;
 mod localization;
@@ -25,12 +26,14 @@ const OPENMW_CFG_LABEL: &str = "openmw.cfg";
 pub(crate) fn run() -> ExitCode {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_app_id(APP_ID)
             .with_inner_size([760.0, 860.0])
-            .with_min_inner_size([640.0, 600.0]),
+            .with_min_inner_size([640.0, 600.0])
+            .with_icon(window_icon()),
         ..Default::default()
     };
     let result = eframe::run_native(
-        "dream-ini",
+        APP_NAME,
         options,
         Box::new(|_creation_context| Ok(Box::new(GuiApp::default()))),
     );
@@ -41,6 +44,19 @@ pub(crate) fn run() -> ExitCode {
             eprintln!("ERROR: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn window_icon() -> egui::IconData {
+    let image = image::load_from_memory(include_bytes!("../../assets/logo.png"))
+        .expect("embedded DreamWeave logo must be a valid PNG")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+
+    egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
     }
 }
 
@@ -987,6 +1003,18 @@ mod tests {
     #[test]
     fn default_gui_encoding_is_not_an_override() {
         assert_eq!(ImportFormState::default().import_options().encoding, None);
+    }
+
+    #[test]
+    fn embedded_window_icon_is_valid_rgba() {
+        let icon = window_icon();
+
+        assert_eq!(icon.width, 512);
+        assert_eq!(icon.height, 512);
+        assert_eq!(
+            icon.rgba.len(),
+            icon.width as usize * icon.height as usize * 4
+        );
     }
 
     #[test]

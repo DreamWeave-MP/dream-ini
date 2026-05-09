@@ -9,7 +9,8 @@ use dream_ini::{
     serialize_preserved_cfg_document,
 };
 
-use crate::cli::Cli;
+use crate::cli::{Cli, CliCommand};
+use crate::desktop_entry;
 use crate::generated::handle_generated_output;
 
 pub(crate) const MISSING_INI_EXIT_CODE: u8 = 253;
@@ -50,6 +51,10 @@ fn run_with_writers(
     stderr: &mut dyn Write,
 ) -> Result<(), CliError> {
     if handle_generated_output(&cli, stdout)? {
+        return Ok(());
+    }
+    if let Some(command) = &cli.command {
+        handle_command(command, stdout)?;
         return Ok(());
     }
     validate_import_usage(&cli)?;
@@ -140,6 +145,18 @@ fn run_with_writers(
         stdout,
         stderr,
     )?;
+
+    Ok(())
+}
+
+fn handle_command(command: &CliCommand, stdout: &mut dyn Write) -> Result<(), CliError> {
+    match command {
+        CliCommand::InstallLauncher { data_home } => {
+            let paths = desktop_entry::install(data_home.as_deref())?;
+            writeln!(stdout, "installed launcher: {}", paths.launcher.display())?;
+            writeln!(stdout, "installed icon: {}", paths.icon.display())?;
+        }
+    }
 
     Ok(())
 }

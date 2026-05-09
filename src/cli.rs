@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, Subcommand};
 use clap_complete::Shell;
 
 #[derive(Debug, Parser)]
@@ -11,8 +11,10 @@ use clap_complete::Shell;
     version,
     disable_help_flag = true,
     disable_version_flag = true,
-    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage",
-    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to update the base cfg. Relative --data is resolved from the output cfg directory, from --cfg for stdout preview, or from the current directory and written absolute when stdout has no cfg context. Non-import modes (--help, --version, --generate-completion, and --generate-manpage) do not require --ini."
+    override_usage = "dream-ini --ini <FILE> [--cfg <FILE>] [--output <FILE>|--in-place] [options]\n       dream-ini --generate-completion <SHELL>\n       dream-ini --generate-manpage\n       dream-ini install-launcher",
+    after_help = "Import mode requires --ini <FILE>. Optional --cfg <FILE> is read as the base config; without it, import starts empty. Default output is cfg text on stdout with diagnostics on stderr. Use --output <FILE> to write a cfg file, or --in-place with --cfg <FILE> to update the base cfg. Relative --data is resolved from the output cfg directory, from --cfg for stdout preview, or from the current directory and written absolute when stdout has no cfg context. Non-import modes (--help, --version, --generate-completion, --generate-manpage, and install-launcher) do not require --ini.",
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true
 )]
 pub(crate) struct Cli {
     /// Verbose output
@@ -33,8 +35,8 @@ pub(crate) struct Cli {
         long,
         value_name = "FILE",
         display_order = 7,
-        required_unless_present_any = ["generate_completion", "generate_manpage"]
-    )]
+            required_unless_present_any = ["generate_completion", "generate_manpage"]
+        )]
     pub(crate) ini: Option<PathBuf>,
 
     /// openmw.cfg file
@@ -146,6 +148,19 @@ pub(crate) struct Cli {
     /// Character encoding for imported content-file names: win1250, win1251, or win1252
     #[arg(short, long, value_name = "ENCODING", display_order = 3)]
     pub(crate) encoding: Option<String>,
+
+    #[command(subcommand)]
+    pub(crate) command: Option<CliCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum CliCommand {
+    /// Install a desktop launcher and icon for the current user
+    InstallLauncher {
+        /// Platform data directory to install into
+        #[arg(long, value_name = "DIR", hide = true)]
+        data_home: Option<PathBuf>,
+    },
 }
 
 #[cfg(test)]
@@ -165,7 +180,7 @@ mod tests {
     fn rejects_positional_paths() {
         let error = Cli::try_parse_from(["dream-ini", "Morrowind.ini", "openmw.cfg"]).unwrap_err();
 
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]
@@ -309,6 +324,7 @@ mod tests {
         assert!(help.contains("--in-place"));
         assert!(help.contains("--generate-completion"));
         assert!(help.contains("--generate-manpage"));
+        assert!(help.contains("install-launcher"));
 
         let ordered_options = [
             "-c, --cfg",
@@ -373,5 +389,25 @@ mod tests {
 
         let short_manpage = Cli::parse_from(["dream-ini", "-M"]);
         assert!(short_manpage.generate_manpage);
+    }
+
+    #[test]
+    fn parses_launcher_command_without_ini() {
+        let cli = Cli::parse_from(["dream-ini", "install-launcher"]);
+
+        assert!(matches!(
+            cli.command,
+            Some(CliCommand::InstallLauncher { data_home: None })
+        ));
+        assert_eq!(cli.ini, None);
+    }
+
+    #[test]
+    fn launcher_command_conflicts_with_import_args() {
+        let error =
+            Cli::try_parse_from(["dream-ini", "--ini", "Morrowind.ini", "install-launcher"])
+                .unwrap_err();
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 }
