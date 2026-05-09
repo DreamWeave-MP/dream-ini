@@ -95,7 +95,7 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
         }
 
         phase = phase.wrapping_add(1);
-        framebuffer.draw_pattern(phase)?;
+        framebuffer.draw_pattern(phase, log)?;
         frame_count = frame_count.saturating_add(1);
 
         if start.elapsed() >= AUTO_EXIT_AFTER {
@@ -119,7 +119,7 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
 #[derive(Debug)]
 struct Framebuffer {
     path: PathBuf,
-    _file: File,
+    file: File,
     fix: FbFixScreeninfo,
     var: FbVarScreeninfo,
     memory: NonNull<u8>,
@@ -175,7 +175,7 @@ impl Framebuffer {
 
         Ok(Self {
             path: path.to_owned(),
-            _file: file,
+            file,
             fix,
             var,
             memory,
@@ -205,14 +205,21 @@ impl Framebuffer {
         write_log(
             log,
             format!(
-                "framebuffer variable xres={} yres={} xres_virtual={} yres_virtual={} bits_per_pixel={}",
+                "framebuffer variable xres={} yres={} xres_virtual={} yres_virtual={} xoffset={} yoffset={} bits_per_pixel={}",
                 self.var.xres,
                 self.var.yres,
                 self.var.xres_virtual,
                 self.var.yres_virtual,
+                self.var.xoffset,
+                self.var.yoffset,
                 self.var.bits_per_pixel
             ),
         );
+        log_derived_page_info(log, &self.var);
+        match visible_viewport(&self.fix, &self.var) {
+            Ok(viewport) => log_visible_viewport(log, &viewport),
+            Err(error) => write_log(log, format!("framebuffer viewport unavailable: {error}")),
+        }
         write_log(
             log,
             format!("framebuffer red {}", bitfield_info(&self.var.red)),
@@ -238,50 +245,61 @@ impl Framebuffer {
         );
     }
 
-    fn draw_pattern(&mut self, phase: u32) -> io::Result<()> {
+    fn draw_pattern(&mut self, phase: u32, log: Option<&SharedLog>) -> io::Result<()> {
+        self.var = get_var_info(&self.file).map_err(|error| {
+            write_log(
+                log,
+                format!("failed to refresh framebuffer variable info: {error}"),
+            );
+            error
+        })?;
         self.validate_format()?;
-        let bytes_per_pixel = usize::try_from(self.var.bits_per_pixel / 8)
-            .expect("supported bits per pixel fits usize");
-        let line_length = usize::try_from(self.fix.line_length)
-            .map_err(|_| io::Error::other("framebuffer line length does not fit usize"))?;
-        let width = self.var.xres.min(self.var.xres_virtual);
-        let height = self.var.yres.min(self.var.yres_virtual);
-        let width = usize::try_from(width)
-            .map_err(|_| io::Error::other("framebuffer width does not fit usize"))?;
-        let height = usize::try_from(height)
-            .map_err(|_| io::Error::other("framebuffer height does not fit usize"))?;
-        if width == 0 || height == 0 || line_length == 0 {
-            return Err(io::Error::other("framebuffer dimensions are empty"));
-        }
+        let viewport = visible_viewport(&self.fix, &self.var)?;
+        log_visible_viewport(log, &viewport);
+        log_derived_page_info(log, &self.var);
 
         // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
         let pixels =
             unsafe { std::slice::from_raw_parts_mut(self.memory.as_ptr(), self.memory_len.get()) };
-        let border = width.min(height).clamp(1, 10);
-        let bar_width = (width / 6).max(1);
-        for y in 0..height {
+        let border = viewport.width.min(viewport.height).clamp(1, 10);
+        let bar_width = (viewport.width / 6).max(1);
+        for y in 0..viewport.height {
             let row_offset = y
-                .checked_mul(line_length)
+                .checked_mul(viewport.line_length)
+                .and_then(|offset| viewport.base_offset.checked_add(offset))
                 .ok_or_else(|| io::Error::other("framebuffer row offset overflow"))?;
-            for x in 0..width {
+            for x in 0..viewport.width {
+                let x_offset = x
+                    .checked_mul(viewport.bytes_per_pixel)
+                    .ok_or_else(|| io::Error::other("framebuffer pixel offset overflow"))?;
                 let pixel_offset = row_offset
-                    .checked_add(
-                        x.checked_mul(bytes_per_pixel)
-                            .ok_or_else(|| io::Error::other("framebuffer pixel offset overflow"))?,
-                    )
+                    .checked_add(x_offset)
                     .ok_or_else(|| io::Error::other("framebuffer pixel offset overflow"))?;
                 let pixel_end = pixel_offset
-                    .checked_add(bytes_per_pixel)
+                    .checked_add(viewport.bytes_per_pixel)
                     .ok_or_else(|| io::Error::other("framebuffer pixel end overflow"))?;
-                if pixel_end > pixels.len() || x * bytes_per_pixel >= line_length {
+                let row_pixel_end = viewport
+                    .x_offset_bytes
+                    .checked_add(x_offset)
+                    .and_then(|offset| offset.checked_add(viewport.bytes_per_pixel))
+                    .ok_or_else(|| io::Error::other("framebuffer row pixel offset overflow"))?;
+                if pixel_end > pixels.len() || row_pixel_end > viewport.line_length {
                     continue;
                 }
 
-                let color = pattern_color(x, y, width, height, bar_width, border, phase);
+                let color = pattern_color(
+                    x,
+                    y,
+                    viewport.width,
+                    viewport.height,
+                    bar_width,
+                    border,
+                    phase,
+                );
                 let packed = pack_color(&self.var, color);
                 write_pixel(
                     &mut pixels[pixel_offset..pixel_end],
-                    bytes_per_pixel,
+                    viewport.bytes_per_pixel,
                     packed,
                 );
             }
@@ -427,6 +445,97 @@ fn bitfield_info(field: &FbBitfield) -> String {
         "offset={} length={} msb_right={}",
         field.offset, field.length, field.msb_right
     )
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+struct VisibleViewport {
+    xoffset: u32,
+    yoffset: u32,
+    width: usize,
+    height: usize,
+    line_length: usize,
+    bytes_per_pixel: usize,
+    x_offset_bytes: usize,
+    base_offset: usize,
+}
+
+#[cfg(target_os = "linux")]
+fn visible_viewport(fix: &FbFixScreeninfo, var: &FbVarScreeninfo) -> io::Result<VisibleViewport> {
+    let bytes_per_pixel = usize::try_from(var.bits_per_pixel / 8)
+        .map_err(|_| io::Error::other("framebuffer bytes per pixel does not fit usize"))?;
+    let line_length = usize::try_from(fix.line_length)
+        .map_err(|_| io::Error::other("framebuffer line length does not fit usize"))?;
+    let width = var.xres.min(var.xres_virtual.saturating_sub(var.xoffset));
+    let height = var.yres.min(var.yres_virtual.saturating_sub(var.yoffset));
+    let width = usize::try_from(width)
+        .map_err(|_| io::Error::other("framebuffer width does not fit usize"))?;
+    let height = usize::try_from(height)
+        .map_err(|_| io::Error::other("framebuffer height does not fit usize"))?;
+    if width == 0 || height == 0 || line_length == 0 || bytes_per_pixel == 0 {
+        return Err(io::Error::other("framebuffer dimensions are empty"));
+    }
+
+    let yoffset = usize::try_from(var.yoffset)
+        .map_err(|_| io::Error::other("framebuffer yoffset does not fit usize"))?;
+    let xoffset = usize::try_from(var.xoffset)
+        .map_err(|_| io::Error::other("framebuffer xoffset does not fit usize"))?;
+    let y_offset_bytes = yoffset
+        .checked_mul(line_length)
+        .ok_or_else(|| io::Error::other("framebuffer yoffset byte offset overflow"))?;
+    let x_offset_bytes = xoffset
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(|| io::Error::other("framebuffer xoffset byte offset overflow"))?;
+    let base_offset = y_offset_bytes
+        .checked_add(x_offset_bytes)
+        .ok_or_else(|| io::Error::other("framebuffer visible base offset overflow"))?;
+
+    Ok(VisibleViewport {
+        xoffset: var.xoffset,
+        yoffset: var.yoffset,
+        width,
+        height,
+        line_length,
+        bytes_per_pixel,
+        x_offset_bytes,
+        base_offset,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn log_visible_viewport(log: Option<&SharedLog>, viewport: &VisibleViewport) {
+    write_log(
+        log,
+        format!(
+            "framebuffer visible viewport xoffset={} yoffset={} width={} height={} base_offset={} line_length={} bytes_per_pixel={}",
+            viewport.xoffset,
+            viewport.yoffset,
+            viewport.width,
+            viewport.height,
+            viewport.base_offset,
+            viewport.line_length,
+            viewport.bytes_per_pixel
+        ),
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn log_derived_page_info(log: Option<&SharedLog>, var: &FbVarScreeninfo) {
+    if var.xoffset == 0
+        && var.yres > 0
+        && var.yres_virtual > 0
+        && var.yoffset.is_multiple_of(var.yres)
+        && var.yres_virtual.is_multiple_of(var.yres)
+    {
+        write_log(
+            log,
+            format!(
+                "framebuffer derived page info page_index={} page_count={}",
+                var.yoffset / var.yres,
+                var.yres_virtual / var.yres
+            ),
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -577,4 +686,57 @@ fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_viewport_uses_panned_page_base_offset() {
+        let fix = FbFixScreeninfo {
+            line_length: 2_560,
+            ..Default::default()
+        };
+        let var = FbVarScreeninfo {
+            xres: 640,
+            yres: 480,
+            xres_virtual: 640,
+            yres_virtual: 960,
+            yoffset: 480,
+            bits_per_pixel: 32,
+            ..Default::default()
+        };
+
+        let viewport = visible_viewport(&fix, &var).expect("visible viewport");
+
+        assert_eq!(viewport.width, 640);
+        assert_eq!(viewport.height, 480);
+        assert_eq!(viewport.bytes_per_pixel, 4);
+        assert_eq!(viewport.base_offset, 480 * 2_560);
+    }
+
+    #[test]
+    fn visible_viewport_clips_width_to_remaining_virtual_row() {
+        let fix = FbFixScreeninfo {
+            line_length: 3_200,
+            ..Default::default()
+        };
+        let var = FbVarScreeninfo {
+            xres: 640,
+            yres: 480,
+            xres_virtual: 800,
+            yres_virtual: 480,
+            xoffset: 200,
+            bits_per_pixel: 32,
+            ..Default::default()
+        };
+
+        let viewport = visible_viewport(&fix, &var).expect("visible viewport");
+
+        assert_eq!(viewport.width, 600);
+        assert_eq!(viewport.height, 480);
+        assert_eq!(viewport.x_offset_bytes, 800);
+        assert_eq!(viewport.base_offset, 800);
+    }
 }
