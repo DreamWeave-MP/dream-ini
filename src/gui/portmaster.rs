@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -38,6 +40,12 @@ const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
 #[cfg(target_os = "linux")]
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const MAX_RENDER_PIXELS: usize = 1024 * 768;
+#[cfg(target_os = "linux")]
+const MAX_TEXTURE_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const HEARTBEAT_RENDER_AFTER: Duration = Duration::from_millis(250);
 
 type SharedLog = Arc<Mutex<File>>;
 
@@ -70,50 +78,59 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
         ),
     );
 
-    let mut controller = Controller::new(egui::Context::default());
+    let egui_context = egui::Context::default();
+    let mut controller = Controller::new(egui_context.clone());
     write_log(log, "controller worker started");
 
     let start = Instant::now();
-    let mut phase = 0_u32;
     let mut input_count = 0_u64;
     let mut frame_count = 0_u64;
+    let mut rendered_frame_count = 0_u64;
     let mut snapshots = Vec::new();
+    let mut renderer = SoftwareRenderer::default();
+    let mut last_action = "none".to_owned();
+    let mut phase = 0_u32;
+    let mut dirty = true;
+    let mut last_render = Instant::now()
+        .checked_sub(HEARTBEAT_RENDER_AFTER)
+        .unwrap_or_else(Instant::now);
     let mut probe_error = None;
     let exit_reason = 'probe: loop {
-        for event in controller.drain_events() {
-            match event {
-                ControllerEvent::Action(action) => {
-                    input_count = input_count.saturating_add(1);
-                    phase = phase.wrapping_add(action_phase_step(action));
-                    write_log(
-                        log,
-                        format!(
-                            "controller action={} count={input_count}",
-                            action_name(action)
-                        ),
-                    );
-                    if action == ControllerAction::Cancel {
-                        write_log(log, "quit requested by cancel action");
-                        break 'probe "cancel";
-                    }
-                }
-                ControllerEvent::Available(available) => {
-                    write_log(
-                        log,
-                        format!("controller availability changed available={available}"),
-                    );
-                }
-                ControllerEvent::PurgeQueuedActions => {
-                    write_log(log, "controller purge queued actions");
-                }
-            }
+        if drain_controller_events(
+            &mut controller,
+            &mut input_count,
+            &mut phase,
+            &mut last_action,
+            &mut dirty,
+            log,
+        ) {
+            write_log(log, "quit requested by cancel action");
+            break 'probe "cancel";
         }
 
-        phase = phase.wrapping_add(1);
-        if draw_enabled && let Err(error) = framebuffer.draw_pattern(phase, &mut snapshots, log) {
-            write_log(log, format!("draw failed: {error}"));
-            probe_error = Some(error);
-            break 'probe "draw-error";
+        let heartbeat_due = last_render.elapsed() >= HEARTBEAT_RENDER_AFTER;
+        if draw_enabled && (dirty || heartbeat_due) {
+            rendered_frame_count = rendered_frame_count.saturating_add(1);
+            phase = phase.wrapping_add(1);
+            let state = ProbeUiState {
+                frame_count: rendered_frame_count,
+                last_action: &last_action,
+                phase,
+            };
+            if let Err(error) = framebuffer.draw_egui_probe(
+                &mut renderer,
+                &egui_context,
+                &state,
+                &mut snapshots,
+                log,
+                rendered_frame_count == 1 || heartbeat_due,
+            ) {
+                write_log(log, format!("draw failed: {error}"));
+                probe_error = Some(error);
+                break 'probe "draw-error";
+            }
+            dirty = false;
+            last_render = Instant::now();
         }
         frame_count = frame_count.saturating_add(1);
 
@@ -146,6 +163,49 @@ fn run_probe(log: Option<&SharedLog>) -> io::Result<()> {
     } else {
         restore_result
     }
+}
+
+#[cfg(target_os = "linux")]
+fn drain_controller_events(
+    controller: &mut Controller,
+    input_count: &mut u64,
+    phase: &mut u32,
+    last_action: &mut String,
+    dirty: &mut bool,
+    log: Option<&SharedLog>,
+) -> bool {
+    for event in controller.drain_events() {
+        match event {
+            ControllerEvent::Action(action) => {
+                *input_count = input_count.saturating_add(1);
+                *phase = phase.wrapping_add(action_phase_step(action));
+                action_name(action).clone_into(last_action);
+                *dirty = true;
+                write_log(
+                    log,
+                    format!(
+                        "controller action={} count={}",
+                        action_name(action),
+                        *input_count
+                    ),
+                );
+                if action == ControllerAction::Cancel {
+                    return true;
+                }
+            }
+            ControllerEvent::Available(available) => {
+                *dirty = true;
+                write_log(
+                    log,
+                    format!("controller availability changed available={available}"),
+                );
+            }
+            ControllerEvent::PurgeQueuedActions => {
+                write_log(log, "controller purge queued actions");
+            }
+        }
+    }
+    false
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -286,11 +346,14 @@ impl Framebuffer {
         );
     }
 
-    fn draw_pattern(
+    fn draw_egui_probe(
         &mut self,
-        phase: u32,
+        renderer: &mut SoftwareRenderer,
+        egui_context: &egui::Context,
+        state: &ProbeUiState<'_>,
         snapshots: &mut Vec<FramebufferSnapshot>,
         log: Option<&SharedLog>,
+        log_frame: bool,
     ) -> io::Result<()> {
         self.var = get_var_info(&self.file).map_err(|error| {
             write_log(
@@ -301,15 +364,36 @@ impl Framebuffer {
         })?;
         self.validate_format()?;
         let viewport = visible_viewport(&self.fix, &self.var)?;
-        log_visible_viewport(log, &viewport);
-        log_derived_page_info(log, &self.var);
+        if log_frame {
+            log_visible_viewport(log, &viewport);
+            log_derived_page_info(log, &self.var);
+        }
         self.capture_snapshot_if_needed(snapshots, &viewport, log)?;
+        renderer.render(
+            egui_context,
+            viewport.width,
+            viewport.height,
+            state,
+            log,
+            log_frame,
+        )?;
+        self.blit_rgba_surface(renderer.surface(), &viewport)
+    }
+
+    fn blit_rgba_surface(
+        &mut self,
+        surface: &SoftwareSurface,
+        viewport: &VisibleViewport,
+    ) -> io::Result<()> {
+        if surface.width != viewport.width || surface.height != viewport.height {
+            return Err(io::Error::other(
+                "software surface size does not match viewport",
+            ));
+        }
 
         // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
         let pixels =
             unsafe { std::slice::from_raw_parts_mut(self.memory.as_ptr(), self.memory_len.get()) };
-        let border = viewport.width.min(viewport.height).clamp(1, 10);
-        let bar_width = (viewport.width / 6).max(1);
         for y in 0..viewport.height {
             let row_offset = y
                 .checked_mul(viewport.line_length)
@@ -334,14 +418,15 @@ impl Framebuffer {
                     continue;
                 }
 
-                let color = pattern_color(
-                    x,
-                    y,
-                    viewport.width,
-                    viewport.height,
-                    bar_width,
-                    border,
-                    phase,
+                let source_offset = y
+                    .checked_mul(surface.width)
+                    .and_then(|offset| offset.checked_add(x))
+                    .and_then(|offset| offset.checked_mul(4))
+                    .ok_or_else(|| io::Error::other("software surface pixel offset overflow"))?;
+                let color = (
+                    surface.pixels[source_offset],
+                    surface.pixels[source_offset + 1],
+                    surface.pixels[source_offset + 2],
                 );
                 let packed = pack_color(&self.var, color);
                 write_pixel(
@@ -494,6 +579,532 @@ impl Drop for Framebuffer {
         // Framebuffer::open_path and have not been unmapped yet.
         let _ = unsafe { libc::munmap(self.memory.as_ptr().cast(), self.memory_len.get()) };
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Default)]
+struct SoftwareRenderer {
+    surface: SoftwareSurface,
+    textures: TextureStore,
+}
+
+#[cfg(target_os = "linux")]
+impl SoftwareRenderer {
+    fn render(
+        &mut self,
+        context: &egui::Context,
+        width: usize,
+        height: usize,
+        state: &ProbeUiState<'_>,
+        log: Option<&SharedLog>,
+        log_frame: bool,
+    ) -> io::Result<()> {
+        self.surface.resize(width, height)?;
+        self.surface.clear([17, 20, 28, 255]);
+
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(usize_to_f32(width), usize_to_f32(height)),
+            )),
+            max_texture_side: Some(1024),
+            ..Default::default()
+        };
+        let output = context.run_ui(raw_input, |ui| draw_probe_ui(ui, state));
+        self.textures.apply(&output.textures_delta)?;
+        let primitives = context.tessellate(output.shapes, 1.0);
+        if log_frame {
+            write_log(
+                log,
+                format!(
+                    "software renderer surface={}x{} bytes={} textures={} texture_bytes={} primitives={}",
+                    self.surface.width,
+                    self.surface.height,
+                    self.surface.pixels.len(),
+                    self.textures.len(),
+                    self.textures.bytes_used(),
+                    primitives.len()
+                ),
+            );
+        }
+        self.rasterize(&primitives)?;
+        for id in output.textures_delta.free {
+            self.textures.free(id);
+        }
+        Ok(())
+    }
+
+    const fn surface(&self) -> &SoftwareSurface {
+        &self.surface
+    }
+
+    fn rasterize(&mut self, primitives: &[egui::ClippedPrimitive]) -> io::Result<()> {
+        for primitive in primitives {
+            match &primitive.primitive {
+                egui::epaint::Primitive::Mesh(mesh) => {
+                    self.rasterize_mesh(mesh, primitive.clip_rect)?;
+                }
+                egui::epaint::Primitive::Callback(_) => {
+                    return Err(io::Error::other(
+                        "unsupported egui paint callback in software renderer",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn rasterize_mesh(&mut self, mesh: &egui::Mesh, clip_rect: egui::Rect) -> io::Result<()> {
+        let Some(texture) = self.textures.get(&mesh.texture_id) else {
+            return Ok(());
+        };
+        let clip = ClipBounds::new(clip_rect, self.surface.width, self.surface.height)?;
+        if clip.is_empty() {
+            return Ok(());
+        }
+        let surface = &mut self.surface;
+        for triangle in mesh.indices.chunks_exact(3) {
+            let i0 = usize::try_from(triangle[0])
+                .map_err(|_| io::Error::other("mesh index does not fit usize"))?;
+            let i1 = usize::try_from(triangle[1])
+                .map_err(|_| io::Error::other("mesh index does not fit usize"))?;
+            let i2 = usize::try_from(triangle[2])
+                .map_err(|_| io::Error::other("mesh index does not fit usize"))?;
+            let Some(v0) = mesh.vertices.get(i0) else {
+                continue;
+            };
+            let Some(v1) = mesh.vertices.get(i1) else {
+                continue;
+            };
+            let Some(v2) = mesh.vertices.get(i2) else {
+                continue;
+            };
+            rasterize_triangle(surface, v0, v1, v2, texture, clip);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Default)]
+struct SoftwareSurface {
+    width: usize,
+    height: usize,
+    pixels: Vec<u8>,
+}
+
+#[cfg(target_os = "linux")]
+impl SoftwareSurface {
+    fn resize(&mut self, width: usize, height: usize) -> io::Result<()> {
+        let pixels = width
+            .checked_mul(height)
+            .ok_or_else(|| io::Error::other("software surface pixel count overflow"))?;
+        if pixels > MAX_RENDER_PIXELS {
+            return Err(io::Error::other(format!(
+                "software surface pixel budget exceeded: {pixels} > {MAX_RENDER_PIXELS}"
+            )));
+        }
+        let bytes = pixels
+            .checked_mul(4)
+            .ok_or_else(|| io::Error::other("software surface byte count overflow"))?;
+        if self.width != width || self.height != height || self.pixels.len() != bytes {
+            self.pixels.resize(bytes, 0);
+            self.width = width;
+            self.height = height;
+        }
+        Ok(())
+    }
+
+    fn clear(&mut self, color: [u8; 4]) {
+        for pixel in self.pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&color);
+        }
+    }
+
+    fn blend_pixel(&mut self, x: usize, y: usize, color: [u8; 4]) {
+        let offset = (y * self.width + x) * 4;
+        alpha_blend(&mut self.pixels[offset..offset + 4], color);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Default)]
+struct TextureStore {
+    textures: HashMap<egui::TextureId, TextureImage>,
+}
+
+#[cfg(target_os = "linux")]
+impl TextureStore {
+    fn apply(&mut self, delta: &egui::TexturesDelta) -> io::Result<()> {
+        for (id, image_delta) in &delta.set {
+            self.set(*id, image_delta)?;
+        }
+        Ok(())
+    }
+
+    fn set(&mut self, id: egui::TextureId, delta: &egui::epaint::ImageDelta) -> io::Result<()> {
+        let image = TextureImage::from_image_data(&delta.image)?;
+        if let Some(pos) = delta.pos {
+            let bytes_used = self.bytes_used();
+            let old_len = self
+                .textures
+                .get(&id)
+                .map_or(0, |texture| texture.pixels.len());
+            let new_len = {
+                let texture = self.textures.get_mut(&id).ok_or_else(|| {
+                    io::Error::other("partial texture update for missing texture")
+                })?;
+                texture.update(pos, &image)?;
+                texture.pixels.len()
+            };
+            check_texture_budget(bytes_used, old_len, new_len)
+        } else {
+            let bytes_used = self.bytes_used();
+            let old_len = self
+                .textures
+                .get(&id)
+                .map_or(0, |texture| texture.pixels.len());
+            check_texture_budget(bytes_used, old_len, image.pixels.len())?;
+            self.textures.insert(id, image);
+            Ok(())
+        }
+    }
+
+    fn free(&mut self, id: egui::TextureId) {
+        self.textures.remove(&id);
+    }
+
+    fn get(&self, id: &egui::TextureId) -> Option<&TextureImage> {
+        self.textures.get(id)
+    }
+
+    fn len(&self) -> usize {
+        self.textures.len()
+    }
+
+    fn bytes_used(&self) -> usize {
+        self.textures
+            .values()
+            .map(|texture| texture.pixels.len())
+            .sum()
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+struct TextureImage {
+    width: usize,
+    height: usize,
+    pixels: Vec<u8>,
+}
+
+#[cfg(target_os = "linux")]
+impl TextureImage {
+    fn from_image_data(image: &egui::ImageData) -> io::Result<Self> {
+        match image {
+            egui::ImageData::Color(color_image) => {
+                let [width, height] = color_image.size;
+                let expected = width
+                    .checked_mul(height)
+                    .and_then(|pixels| pixels.checked_mul(4))
+                    .ok_or_else(|| io::Error::other("texture byte count overflow"))?;
+                let mut pixels = Vec::with_capacity(expected);
+                for color in &color_image.pixels {
+                    pixels.extend_from_slice(&[color.r(), color.g(), color.b(), color.a()]);
+                }
+                Ok(Self {
+                    width,
+                    height,
+                    pixels,
+                })
+            }
+        }
+    }
+
+    fn update(&mut self, pos: [usize; 2], image: &Self) -> io::Result<()> {
+        let x_end = pos[0]
+            .checked_add(image.width)
+            .ok_or_else(|| io::Error::other("partial texture x range overflow"))?;
+        let y_end = pos[1]
+            .checked_add(image.height)
+            .ok_or_else(|| io::Error::other("partial texture y range overflow"))?;
+        if x_end > self.width || y_end > self.height {
+            return Err(io::Error::other(
+                "partial texture update exceeds texture bounds",
+            ));
+        }
+        for row in 0..image.height {
+            let destination = ((pos[1] + row) * self.width + pos[0]) * 4;
+            let source = row * image.width * 4;
+            let byte_count = image.width * 4;
+            self.pixels[destination..destination + byte_count]
+                .copy_from_slice(&image.pixels[source..source + byte_count]);
+        }
+        Ok(())
+    }
+
+    fn sample_nearest(&self, uv: egui::Pos2) -> [u8; 4] {
+        if self.width == 0 || self.height == 0 {
+            return [255, 255, 255, 255];
+        }
+        let x = f32_to_usize_round_clamped(
+            uv.x.clamp(0.0, 1.0) * usize_to_f32(self.width.saturating_sub(1)),
+            self.width.saturating_sub(1),
+        );
+        let y = f32_to_usize_round_clamped(
+            uv.y.clamp(0.0, 1.0) * usize_to_f32(self.height.saturating_sub(1)),
+            self.height.saturating_sub(1),
+        );
+        let offset = (y * self.width + x) * 4;
+        [
+            self.pixels[offset],
+            self.pixels[offset + 1],
+            self.pixels[offset + 2],
+            self.pixels[offset + 3],
+        ]
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug)]
+struct ClipBounds {
+    min_x: usize,
+    min_y: usize,
+    max_x: usize,
+    max_y: usize,
+}
+
+#[cfg(target_os = "linux")]
+impl ClipBounds {
+    fn new(rect: egui::Rect, width: usize, height: usize) -> io::Result<Self> {
+        let min_x = clamp_rect_value(rect.min.x.floor(), width)?;
+        let min_y = clamp_rect_value(rect.min.y.floor(), height)?;
+        let max_x = clamp_rect_value(rect.max.x.ceil(), width)?;
+        let max_y = clamp_rect_value(rect.max.y.ceil(), height)?;
+        Ok(Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        })
+    }
+
+    const fn is_empty(self) -> bool {
+        self.min_x >= self.max_x || self.min_y >= self.max_y
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct ProbeUiState<'a> {
+    frame_count: u64,
+    last_action: &'a str,
+    phase: u32,
+}
+
+#[cfg(target_os = "linux")]
+fn draw_probe_ui(ui: &mut egui::Ui, state: &ProbeUiState<'_>) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::default().fill(egui::Color32::from_rgb(17, 20, 28)))
+        .show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(16.0);
+                ui.heading("Dream INI PortMaster");
+                ui.label("Framebuffer egui probe");
+                ui.add_space(8.0);
+                ui.label(format!("Frame: {}", state.frame_count));
+                ui.label(format!("Last controller action: {}", state.last_action));
+                ui.label("Press B/Cancel to exit");
+                ui.add_space(8.0);
+                let red = u8::try_from(80 + (state.phase % 120)).unwrap_or(80);
+                let color = egui::Color32::from_rgb(red, 140, 220);
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(96.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 5.0, color);
+            });
+        });
+}
+
+#[cfg(target_os = "linux")]
+fn clamp_rect_value(value: f32, max: usize) -> io::Result<usize> {
+    if !value.is_finite() {
+        return Err(io::Error::other("non-finite clip rectangle value"));
+    }
+    Ok(f32_to_usize_floor_clamped(value, max))
+}
+
+#[cfg(target_os = "linux")]
+fn usize_to_f32(value: usize) -> f32 {
+    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
+}
+
+#[cfg(target_os = "linux")]
+fn f32_to_usize_floor_clamped(value: f32, max: usize) -> usize {
+    f32_to_usize_threshold_clamped(value.floor(), max)
+}
+
+#[cfg(target_os = "linux")]
+fn f32_to_usize_ceil_clamped(value: f32, max: usize) -> usize {
+    f32_to_usize_threshold_clamped(value.ceil(), max)
+}
+
+#[cfg(target_os = "linux")]
+fn f32_to_usize_round_clamped(value: f32, max: usize) -> usize {
+    f32_to_usize_threshold_clamped(value.round(), max)
+}
+
+#[cfg(target_os = "linux")]
+fn f32_to_usize_threshold_clamped(value: f32, max: usize) -> usize {
+    if value <= 0.0 {
+        return 0;
+    }
+    if value >= usize_to_f32(max) {
+        return max;
+    }
+    let mut low = 0_usize;
+    let mut high = max;
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if usize_to_f32(mid) <= value {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+#[cfg(target_os = "linux")]
+fn f32_to_u8_round_clamped(value: f32) -> u8 {
+    let value = value.round().clamp(0.0, 255.0);
+    let mut low = 0_u8;
+    let mut high = u8::MAX;
+    while low < high {
+        let mid = low + (high - low).div_ceil(2);
+        if f32::from(mid) <= value {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+#[cfg(target_os = "linux")]
+fn edge(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
+    (c.x - a.x).mul_add(b.y - a.y, -((c.y - a.y) * (b.x - a.x)))
+}
+
+#[cfg(target_os = "linux")]
+fn rasterize_triangle(
+    surface: &mut SoftwareSurface,
+    v0: &egui::epaint::Vertex,
+    v1: &egui::epaint::Vertex,
+    v2: &egui::epaint::Vertex,
+    texture: &TextureImage,
+    clip: ClipBounds,
+) {
+    let area = edge(v0.pos, v1.pos, v2.pos);
+    if area.abs() <= f32::EPSILON {
+        return;
+    }
+    let min_x = f32_to_usize_floor_clamped(v0.pos.x.min(v1.pos.x).min(v2.pos.x), clip.max_x)
+        .max(clip.min_x);
+    let max_x =
+        f32_to_usize_ceil_clamped(v0.pos.x.max(v1.pos.x).max(v2.pos.x), clip.max_x).min(clip.max_x);
+    let min_y = f32_to_usize_floor_clamped(v0.pos.y.min(v1.pos.y).min(v2.pos.y), clip.max_y)
+        .max(clip.min_y);
+    let max_y =
+        f32_to_usize_ceil_clamped(v0.pos.y.max(v1.pos.y).max(v2.pos.y), clip.max_y).min(clip.max_y);
+    if min_x >= max_x || min_y >= max_y {
+        return;
+    }
+
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            let point = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
+            let w0 = edge(v1.pos, v2.pos, point) / area;
+            let w1 = edge(v2.pos, v0.pos, point) / area;
+            let w2 = edge(v0.pos, v1.pos, point) / area;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                continue;
+            }
+            let uv = egui::pos2(
+                v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
+                v0.uv.y.mul_add(w0, v1.uv.y.mul_add(w1, v2.uv.y * w2)),
+            );
+            let vertex_color = interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2);
+            let texture_color = texture.sample_nearest(uv);
+            let color = modulate_color(vertex_color, texture_color);
+            surface.blend_pixel(x, y, color);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn check_texture_budget(bytes_used: usize, old_len: usize, new_len: usize) -> io::Result<()> {
+    let used = bytes_used
+        .checked_sub(old_len)
+        .and_then(|bytes| bytes.checked_add(new_len))
+        .ok_or_else(|| io::Error::other("texture byte budget overflow"))?;
+    if used > MAX_TEXTURE_BYTES {
+        return Err(io::Error::other(format!(
+            "texture byte budget exceeded: {used} > {MAX_TEXTURE_BYTES}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn interpolate_color(
+    c0: egui::Color32,
+    c1: egui::Color32,
+    c2: egui::Color32,
+    w0: f32,
+    w1: f32,
+    w2: f32,
+) -> [u8; 4] {
+    [
+        interpolate_channel(c0.r(), c1.r(), c2.r(), w0, w1, w2),
+        interpolate_channel(c0.g(), c1.g(), c2.g(), w0, w1, w2),
+        interpolate_channel(c0.b(), c1.b(), c2.b(), w0, w1, w2),
+        interpolate_channel(c0.a(), c1.a(), c2.a(), w0, w1, w2),
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn interpolate_channel(c0: u8, c1: u8, c2: u8, w0: f32, w1: f32, w2: f32) -> u8 {
+    let value = f32::from(c0).mul_add(w0, f32::from(c1).mul_add(w1, f32::from(c2) * w2));
+    f32_to_u8_round_clamped(value)
+}
+
+#[cfg(target_os = "linux")]
+fn modulate_color(vertex: [u8; 4], texture: [u8; 4]) -> [u8; 4] {
+    [
+        multiply_u8(vertex[0], texture[0]),
+        multiply_u8(vertex[1], texture[1]),
+        multiply_u8(vertex[2], texture[2]),
+        multiply_u8(vertex[3], texture[3]),
+    ]
+}
+
+#[cfg(target_os = "linux")]
+fn multiply_u8(a: u8, b: u8) -> u8 {
+    u8::try_from((u16::from(a) * u16::from(b) + 127) / 255).unwrap_or(u8::MAX)
+}
+
+#[cfg(target_os = "linux")]
+fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {
+    let inverse_alpha = u16::from(u8::MAX - source[3]);
+    destination[0] = blend_channel(source[0], destination[0], inverse_alpha);
+    destination[1] = blend_channel(source[1], destination[1], inverse_alpha);
+    destination[2] = blend_channel(source[2], destination[2], inverse_alpha);
+    destination[3] = u8::MAX;
+}
+
+#[cfg(target_os = "linux")]
+fn blend_channel(source: u8, destination: u8, inverse_alpha: u16) -> u8 {
+    u8::try_from(u16::from(source) + ((u16::from(destination) * inverse_alpha + 127) / 255))
+        .unwrap_or(u8::MAX)
 }
 
 #[cfg(target_os = "linux")]
@@ -776,31 +1387,6 @@ fn framebuffer_draw_enabled() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn pattern_color(
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
-    bar_width: usize,
-    border: usize,
-    phase: u32,
-) -> (u8, u8, u8) {
-    if x < border || y < border || width - x <= border || height - y <= border {
-        return (255, 255, 255);
-    }
-
-    let pulse = u8::try_from((phase.wrapping_mul(3)) & 0xff).expect("pulse is masked to u8");
-    match ((x / bar_width) + usize::try_from(phase / 30).unwrap_or(0)) % 6 {
-        0 => (255, pulse / 3, pulse / 3),
-        1 => (pulse / 3, 255, pulse / 3),
-        2 => (pulse / 3, pulse / 3, 255),
-        3 => (255, 255, pulse / 4),
-        4 => (pulse / 4, 255, 255),
-        _ => (255, pulse / 4, 255),
-    }
-}
-
-#[cfg(target_os = "linux")]
 fn pack_color(var: &FbVarScreeninfo, (red, green, blue): (u8, u8, u8)) -> u32 {
     pack_channel(red, &var.red) | pack_channel(green, &var.green) | pack_channel(blue, &var.blue)
 }
@@ -1017,6 +1603,99 @@ mod tests {
         assert_eq!(snapshot_bytes_used(&snapshots).expect("bytes used"), 40);
     }
 
+    #[test]
+    fn alpha_blend_places_half_alpha_over_opaque_destination() {
+        let mut destination = [20, 40, 60, 255];
+
+        alpha_blend(&mut destination, [100, 50, 25, 128]);
+
+        assert_eq!(destination, [110, 70, 55, 255]);
+    }
+
+    #[test]
+    fn software_surface_rejects_pixel_budget_overflow() {
+        let mut surface = SoftwareSurface::default();
+
+        let error = surface
+            .resize(MAX_RENDER_PIXELS + 1, 1)
+            .expect_err("oversized surface");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "software surface pixel budget exceeded: {} > {MAX_RENDER_PIXELS}",
+                MAX_RENDER_PIXELS + 1
+            )
+        );
+    }
+
+    #[test]
+    fn texture_partial_update_checks_bounds() {
+        let mut texture = TextureImage {
+            width: 2,
+            height: 2,
+            pixels: vec![0; 16],
+        };
+        let patch = TextureImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255; 8],
+        };
+
+        let error = texture
+            .update([1, 1], &patch)
+            .expect_err("patch crosses bounds");
+
+        assert_eq!(
+            error.to_string(),
+            "partial texture update exceeds texture bounds"
+        );
+    }
+
+    #[test]
+    fn texture_budget_rejects_excess_bytes() {
+        let error = check_texture_budget(MAX_TEXTURE_BYTES, 0, 4).expect_err("over budget");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "texture byte budget exceeded: {} > {MAX_TEXTURE_BYTES}",
+                MAX_TEXTURE_BYTES + 4
+            )
+        );
+    }
+
+    #[test]
+    fn triangle_rasterizer_draws_into_tiny_surface() {
+        let mut surface = SoftwareSurface::default();
+        surface.resize(2, 2).expect("surface");
+        surface.clear([0, 0, 0, 255]);
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let v0 = test_vertex(0.0, 0.0);
+        let v1 = test_vertex(2.0, 0.0);
+        let v2 = test_vertex(0.0, 2.0);
+
+        rasterize_triangle(
+            &mut surface,
+            &v0,
+            &v1,
+            &v2,
+            &texture,
+            ClipBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: 2,
+                max_y: 2,
+            },
+        );
+
+        assert!(surface.pixels.chunks_exact(4).any(|pixel| pixel[0] == 255));
+    }
+
     fn test_viewport(base_offset: usize) -> VisibleViewport {
         VisibleViewport {
             xoffset: 0,
@@ -1027,6 +1706,14 @@ mod tests {
             bytes_per_pixel: 4,
             x_offset_bytes: 0,
             base_offset,
+        }
+    }
+
+    fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
+        egui::epaint::Vertex {
+            pos: egui::pos2(x, y),
+            color: egui::Color32::WHITE,
+            uv: egui::Pos2::ZERO,
         }
     }
 }
