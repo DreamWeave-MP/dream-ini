@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +37,7 @@ const ABS_HAT0Y: u16 = 0x11;
 
 pub(super) struct ControllerWorker {
     stop: Arc<AtomicBool>,
+    wake: WakeFd,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -45,6 +46,7 @@ impl std::fmt::Debug for ControllerWorker {
         formatter
             .debug_struct("ControllerWorker")
             .field("stop_requested", &self.stop.load(Ordering::Relaxed))
+            .field("wake_fd", &self.wake.as_raw_fd())
             .field("running", &self.handle.is_some())
             .finish()
     }
@@ -54,13 +56,15 @@ impl ControllerWorker {
     pub(super) fn spawn(sender: SyncSender<ControllerAction>, context: egui::Context) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+        let (worker_wake, wake) = WakeFd::new_pair().expect("Linux controller wake fd should open");
         let handle = thread::Builder::new()
             .name("dream-ini-linux-controller".to_owned())
-            .spawn(move || run_worker(&sender, &context, &worker_stop))
+            .spawn(move || run_worker(&sender, &context, &worker_stop, worker_wake))
             .expect("Linux controller worker thread should spawn");
 
         Self {
             stop,
+            wake,
             handle: Some(handle),
         }
     }
@@ -69,6 +73,7 @@ impl ControllerWorker {
 impl Drop for ControllerWorker {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.wake.wake();
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
@@ -79,22 +84,22 @@ impl Drop for ControllerWorker {
 struct WorkerState {
     devices: Vec<InputDevice>,
     last_scan: Instant,
-}
-
-impl Default for WorkerState {
-    fn default() -> Self {
-        Self {
-            devices: open_devices(),
-            last_scan: Instant::now(),
-        }
-    }
+    wake: WakeFd,
 }
 
 impl WorkerState {
+    fn new(wake: WakeFd) -> Self {
+        Self {
+            devices: open_devices(),
+            last_scan: Instant::now(),
+            wake,
+        }
+    }
+
     fn poll(&mut self) -> Vec<ControllerAction> {
         self.rescan_if_needed();
         if self.devices.is_empty() {
-            sleep_for(IDLE_POLL_TIMEOUT);
+            self.wait_for_input();
             return Vec::new();
         }
 
@@ -114,24 +119,29 @@ impl WorkerState {
     fn wait_for_input(&self) {
         let timeout = self.next_repeat_delay().unwrap_or(IDLE_POLL_TIMEOUT);
         let timeout_ms = duration_to_poll_timeout(timeout);
-        let mut poll_fds = self
-            .devices
-            .iter()
-            .map(|device| libc::pollfd {
-                fd: device.file.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            })
-            .collect::<Vec<_>>();
+        let mut poll_fds = Vec::with_capacity(self.devices.len() + 1);
+        poll_fds.push(libc::pollfd {
+            fd: self.wake.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        });
+        poll_fds.extend(self.devices.iter().map(|device| libc::pollfd {
+            fd: device.file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }));
         // SAFETY: poll_fds points to a valid mutable array for the duration of
         // the call. poll(2) only writes revents fields in that array.
-        let _ = unsafe {
+        let result = unsafe {
             libc::poll(
                 poll_fds.as_mut_ptr(),
                 poll_fds.len() as libc::nfds_t,
                 timeout_ms,
             )
         };
+        if result > 0 && poll_fds[0].revents & libc::POLLIN != 0 {
+            self.wake.drain();
+        }
     }
 
     fn next_repeat_delay(&self) -> Option<Duration> {
@@ -156,8 +166,13 @@ impl WorkerState {
     }
 }
 
-fn run_worker(sender: &SyncSender<ControllerAction>, context: &egui::Context, stop: &AtomicBool) {
-    let mut state = WorkerState::default();
+fn run_worker(
+    sender: &SyncSender<ControllerAction>,
+    context: &egui::Context,
+    stop: &AtomicBool,
+    wake: WakeFd,
+) {
+    let mut state = WorkerState::new(wake);
     while !stop.load(Ordering::Relaxed) {
         let actions = state.poll();
         if actions.is_empty() {
@@ -183,8 +198,66 @@ fn duration_to_poll_timeout(duration: Duration) -> i32 {
     i32::try_from(milliseconds).expect("duration was clamped to i32::MAX")
 }
 
-fn sleep_for(duration: Duration) {
-    thread::sleep(duration);
+#[derive(Debug)]
+struct WakeFd {
+    fd: RawFd,
+}
+
+impl WakeFd {
+    fn new_pair() -> io::Result<(Self, Self)> {
+        // SAFETY: eventfd creates a new file descriptor or returns -1 with errno.
+        let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd is a valid file descriptor here. dup either creates a new
+        // descriptor referring to the same eventfd or returns -1 with errno.
+        let duplicate = unsafe { libc::dup(fd) };
+        if duplicate < 0 {
+            // SAFETY: fd was opened by eventfd above and has not been moved.
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok((Self { fd }, Self { fd: duplicate }))
+    }
+
+    const fn as_raw_fd(&self) -> RawFd {
+        self.fd
+    }
+
+    fn wake(&self) {
+        let value = 1_u64.to_ne_bytes();
+        // SAFETY: value points to a valid u64-sized buffer as required by eventfd.
+        let _ = unsafe { libc::write(self.fd, value.as_ptr().cast(), value.len()) };
+    }
+
+    fn drain(&self) {
+        let mut value = [0_u8; std::mem::size_of::<u64>()];
+        loop {
+            // SAFETY: value points to a valid u64-sized buffer as required by eventfd.
+            let result = unsafe { libc::read(self.fd, value.as_mut_ptr().cast(), value.len()) };
+            if result < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::WouldBlock {
+                    return;
+                }
+                return;
+            }
+            if result == 0 {
+                return;
+            }
+        }
+    }
+}
+
+impl Drop for WakeFd {
+    fn drop(&mut self) {
+        // SAFETY: fd is owned by this WakeFd and is closed exactly once here.
+        let _ = unsafe { libc::close(self.fd) };
+    }
 }
 
 #[derive(Debug)]

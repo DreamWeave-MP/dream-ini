@@ -50,6 +50,7 @@ impl Drop for ControllerWorker {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
+            handle.thread().unpark();
             let _ = handle.join();
         }
     }
@@ -73,7 +74,7 @@ impl WorkerState {
     fn poll(&mut self) -> Vec<ControllerAction> {
         let Some(gilrs) = &mut self.gilrs else {
             self.gilrs = Gilrs::new().ok();
-            thread::sleep(GILRS_RETRY_INTERVAL);
+            thread::park_timeout(GILRS_RETRY_INTERVAL);
             return Vec::new();
         };
 
@@ -125,7 +126,7 @@ fn run_worker(sender: &SyncSender<ControllerAction>, context: &egui::Context, st
     while !stop.load(Ordering::Relaxed) {
         let actions = state.poll();
         if actions.is_empty() {
-            thread::sleep(state.sleep_duration());
+            thread::park_timeout(state.sleep_duration());
             continue;
         }
 
