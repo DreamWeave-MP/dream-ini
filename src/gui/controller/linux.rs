@@ -826,7 +826,17 @@ fn is_dpad_key(code: u16) -> bool {
     )
 }
 
+#[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
 fn key_action(code: u16) -> Option<ControllerAction> {
+    portmaster_key_action(code)
+}
+
+#[cfg(not(all(feature = "portmaster-gui", not(feature = "gui"))))]
+fn key_action(code: u16) -> Option<ControllerAction> {
+    default_key_action(code)
+}
+
+const fn default_key_action(code: u16) -> Option<ControllerAction> {
     match code {
         BTN_SOUTH => Some(ControllerAction::Accept),
         BTN_EAST | BTN_SELECT => Some(ControllerAction::Cancel),
@@ -839,6 +849,20 @@ fn key_action(code: u16) -> Option<ControllerAction> {
         BTN_DPAD_LEFT => Some(ControllerAction::Left),
         BTN_DPAD_RIGHT => Some(ControllerAction::Right),
         _ => None,
+    }
+}
+
+#[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
+const fn portmaster_key_action(code: u16) -> Option<ControllerAction> {
+    // Anbernic PortMaster images report the menu buttons and rear triggers through
+    // each other's evdev codes. Keep this scoped to the fbdev PortMaster build;
+    // desktop Linux controllers are not obliged to share that charming lie.
+    match code {
+        BTN_SELECT => Some(ControllerAction::ToggleHiddenDirectories),
+        BTN_START => Some(ControllerAction::PagePreviewDown),
+        BTN_TL => Some(ControllerAction::Cancel),
+        BTN_TR => Some(ControllerAction::SelectCurrent),
+        _ => default_key_action(code),
     }
 }
 
@@ -911,17 +935,53 @@ mod tests {
         assert_eq!(key_action(BTN_SOUTH), Some(ControllerAction::Accept));
         assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Cancel));
         assert_eq!(key_action(BTN_WEST), Some(ControllerAction::ClearCurrent));
-        assert_eq!(key_action(BTN_SELECT), Some(ControllerAction::Cancel));
-        assert_eq!(key_action(BTN_START), Some(ControllerAction::SelectCurrent));
-        assert_eq!(
-            key_action(BTN_TL),
-            Some(ControllerAction::ToggleHiddenDirectories)
-        );
-        assert_eq!(key_action(BTN_TR), Some(ControllerAction::PagePreviewDown));
+        #[cfg(not(all(feature = "portmaster-gui", not(feature = "gui"))))]
+        {
+            assert_eq!(key_action(BTN_SELECT), Some(ControllerAction::Cancel));
+            assert_eq!(key_action(BTN_START), Some(ControllerAction::SelectCurrent));
+            assert_eq!(
+                key_action(BTN_TL),
+                Some(ControllerAction::ToggleHiddenDirectories)
+            );
+            assert_eq!(key_action(BTN_TR), Some(ControllerAction::PagePreviewDown));
+        }
+        #[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
+        {
+            assert_eq!(
+                key_action(BTN_SELECT),
+                Some(ControllerAction::ToggleHiddenDirectories)
+            );
+            assert_eq!(
+                key_action(BTN_START),
+                Some(ControllerAction::PagePreviewDown)
+            );
+            assert_eq!(key_action(BTN_TL), Some(ControllerAction::Cancel));
+            assert_eq!(key_action(BTN_TR), Some(ControllerAction::SelectCurrent));
+        }
         assert_eq!(key_action(BTN_DPAD_UP), Some(ControllerAction::Up));
         assert_eq!(key_action(BTN_DPAD_DOWN), Some(ControllerAction::Down));
         assert_eq!(key_action(BTN_DPAD_LEFT), Some(ControllerAction::Left));
         assert_eq!(key_action(BTN_DPAD_RIGHT), Some(ControllerAction::Right));
+    }
+
+    #[test]
+    fn default_key_events_map_to_controller_actions() {
+        assert_eq!(
+            default_key_action(BTN_SELECT),
+            Some(ControllerAction::Cancel)
+        );
+        assert_eq!(
+            default_key_action(BTN_START),
+            Some(ControllerAction::SelectCurrent)
+        );
+        assert_eq!(
+            default_key_action(BTN_TL),
+            Some(ControllerAction::ToggleHiddenDirectories)
+        );
+        assert_eq!(
+            default_key_action(BTN_TR),
+            Some(ControllerAction::PagePreviewDown)
+        );
     }
 
     #[test]
