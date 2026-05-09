@@ -81,6 +81,12 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectDataLocalDir => "Выберите каталог data-local",
         UiText::SelectResourcesDir => "Выберите каталог resources",
         UiText::SelectUserDataDir => "Выберите каталог пользовательских данных",
+        UiText::ControllerHelp => {
+            "Контроллер: D-pad/левый стик — перемещение • A — переключить/выбрать • B — выйти • X — очистить выбранный путь • Start — импорт, когда всё готово • влево/вправо — изменить параметры • правый стик — прокрутка cfg"
+        }
+        UiText::PickerControllerHelp => {
+            "Контроллер: D-pad/левый стик — перемещение • A/Enter — открыть или выбрать • B — отмена • Влево — родительский каталог • Вправо — войти • Start — выбрать текущий/ожидаемый путь • LB — переключить скрытые каталоги"
+        }
     }
 }
 

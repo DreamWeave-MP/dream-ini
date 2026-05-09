@@ -32,6 +32,25 @@ dream-ini -C bash > dream-ini.bash
 dream-ini -M > dream-ini.1
 ```
 
+## GUI
+
+When built with the default `gui` feature, running `dream-ini` with no arguments opens the graphical importer. The GUI uses the same explicit import model as the CLI: choose `Morrowind.ini`, optionally choose an existing `openmw.cfg`, pick import options, then either preview, save as a separate cfg, or update the existing cfg.
+
+Controller navigation is available in the GUI on Linux, Windows, and macOS:
+
+- D-pad or left stick: move between fields, picker entries, and result tabs.
+- A / South: activate the selected field, toggle checkboxes, open directories, or choose files.
+- B / East or Select: cancel the picker; on the main form it exits the GUI.
+- X / West: clear the selected path field.
+- Start: import from the main form, or choose the current/expected picker path.
+- Left / Right: adjust options; in the picker, Left enters the parent directory and Right enters the selected directory or chooses the selected file.
+- LB / left shoulder: toggle hidden directories in the picker. This is useful for OpenMW paths under `~/.config/openmw` or `~/.local/share/openmw`.
+- Right stick: scroll the generated cfg preview vertically and horizontally.
+
+On Linux, controller support reads `/dev/input` event devices directly. If your desktop session does not grant read permission for those devices, the GUI will still run but controller navigation will not appear.
+
+Path reminder: `Data Files directory` is the Morrowind content/archive search path used during import. Classic Morrowind usually points at one `Data Files` folder; OpenMW can later use many `data=` directories. `data-local`, `resources`, and `user-data` are OpenMW cfg singleton outputs; they are not used as importer search paths.
+
 ## Options
 
 - `-c, --cfg <FILE>`: optional openmw.cfg input/base path. It is only overwritten when `--in-place` is supplied.

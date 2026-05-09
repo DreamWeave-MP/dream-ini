@@ -619,6 +619,50 @@ fn sparse_game_file_indices_are_imported() {
 }
 
 #[test]
+fn game_file_indices_sort_numerically_and_preserve_duplicate_order() {
+    let dir = unique_test_dir("game-files-numeric-order");
+    fs::create_dir_all(&dir).unwrap();
+
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str(concat!(
+        "[Game Files]\n",
+        "GameFile10=Ten.esp\n",
+        "GameFile2=Two.esp\n",
+        "GameFile0=Zero.esm\n",
+        "GameFileFoo=Ignored.esp\n",
+        "GameFile-1=IgnoredToo.esp\n",
+        "GameFile 1=Spaced.esp\n",
+        "GameFile0=ZeroPatch.esp\n",
+    ));
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    let error = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap_err();
+
+    match error {
+        ImportError::MissingContentFiles { files, .. } => {
+            assert_eq!(
+                files,
+                vec![
+                    "Zero.esm".to_owned(),
+                    "ZeroPatch.esp".to_owned(),
+                    "Two.esp".to_owned(),
+                    "Ten.esp".to_owned(),
+                ]
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    assert_eq!(values(&cfg, "content"), &[] as &[String]);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn game_file_values_are_trimmed_before_resolution() {
     let dir = unique_test_dir("game-files-trimmed");
     let data_dir = dir.join("Data Files");
@@ -664,6 +708,50 @@ fn content_file_paths_are_rejected() {
     assert!(error.contains("invalid content file name: ../Data Files/Base.esm"));
     assert_eq!(values(&cfg, "content"), &[] as &[String]);
     assert_eq!(values(&cfg, "data"), &[] as &[String]);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_paths_are_rejected_without_mutating_cfg() {
+    let dir = unique_test_dir("archives-path-entry");
+    fs::create_dir_all(&dir).unwrap();
+
+    let mut cfg = parse_cfg_str("fallback-archive=old.bsa\n");
+    let ini = parse_ini_str("[Archives]\nArchive 0=../Data Files/Tribunal.bsa\n");
+    let importer = IniImporter::new(ImportOptions::default());
+
+    let error = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ImportError::InvalidArchiveName(file) if file == "../Data Files/Tribunal.bsa"
+    ));
+    assert_eq!(values(&cfg, "fallback-archive"), &["old.bsa".to_owned()]);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_values_are_trimmed_and_match_suffix_case_insensitively() {
+    let dir = unique_test_dir("archives-trimmed-case");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Morrowind.bsa"), []).unwrap();
+    fs::write(data_dir.join("Tribunal.BSA"), []).unwrap();
+
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str("[Archives]\nArchive 0=Tribunal.BSA \n");
+    let importer = IniImporter::new(ImportOptions::default());
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "fallback-archive"),
+        &["Morrowind.bsa".to_owned(), "Tribunal.BSA".to_owned()]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
