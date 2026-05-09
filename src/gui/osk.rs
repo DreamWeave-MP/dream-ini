@@ -77,7 +77,7 @@ impl OskState {
     }
 
     #[cfg(test)]
-    pub(super) fn select_key_for_test(&mut self, key: OskKey) {
+    fn select_key_for_test(&mut self, key: OskKey) {
         for (row_index, row) in OSK_LAYOUT.iter().enumerate() {
             if let Some(col_index) = row.iter().position(|candidate| *candidate == key) {
                 self.selected_row = row_index;
@@ -86,6 +86,16 @@ impl OskState {
             }
         }
         panic!("OSK key {key:?} not present");
+    }
+
+    #[cfg(test)]
+    pub(super) fn select_ok_for_test(&mut self) {
+        self.select_key_for_test(OskKey::Ok);
+    }
+
+    #[cfg(test)]
+    pub(super) fn select_clear_for_test(&mut self) {
+        self.select_key_for_test(OskKey::Clear);
     }
 
     fn move_selection(&mut self, direction: OskDirection) {
@@ -157,7 +167,7 @@ enum OskDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OskKey {
+enum OskKey {
     Char(char),
     Shift,
     Caps,

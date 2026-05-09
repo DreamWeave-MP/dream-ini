@@ -20,8 +20,6 @@ use dream_ini::{
 use self::controller::{ControllerAction, ControllerEvent};
 use self::file_picker::{PathPickerState, PathTarget, PickOutcome};
 use self::localization::{Localizer, UiLanguage, UiText};
-#[cfg(test)]
-use self::osk::OskKey;
 use self::osk::{OskOutcome, OskState, show_osk_overlay};
 #[cfg(feature = "gui")]
 use crate::desktop_entry::{APP_ID, APP_NAME};
@@ -2209,7 +2207,7 @@ mod tests {
         app.open_osk_for_path(PathTarget::DataLocalDir);
         if let GuiMode::Osk(osk) = &mut app.mode {
             osk.set_buffer_for_test("data-local".to_owned());
-            osk.select_key_for_test(OskKey::Ok);
+            osk.select_ok_for_test();
         }
 
         app.handle_controller_actions(
@@ -2236,7 +2234,7 @@ mod tests {
         );
         if let GuiMode::Osk(osk) = &mut app.mode {
             assert_eq!(osk.buffer_for_test(), "origina");
-            osk.select_key_for_test(OskKey::Clear);
+            osk.select_clear_for_test();
         }
         app.handle_controller_actions(
             &mut shell,
