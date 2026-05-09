@@ -17,7 +17,6 @@ use dream_ini::{
 
 use super::localization::UiText;
 use super::path_helpers::{cfg_parent, optional_path, same_cfg_context};
-use super::result_panels::ResultPanel;
 
 #[derive(Debug, Clone)]
 pub(super) struct ImportFormState {
@@ -274,15 +273,6 @@ pub(super) enum GuiImportResult {
     Error {
         error: GuiImportError,
     },
-}
-
-impl GuiImportResult {
-    pub(super) const fn default_panel(&self) -> ResultPanel {
-        match self {
-            Self::Success { .. } => ResultPanel::GeneratedCfg,
-            Self::Error { .. } => ResultPanel::Errors,
-        }
-    }
 }
 
 #[derive(Debug)]

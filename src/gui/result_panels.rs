@@ -18,6 +18,13 @@ pub(super) enum ResultPanel {
     GeneratedCfg,
 }
 
+pub(super) const fn default_result_panel(result: &GuiImportResult) -> ResultPanel {
+    match result {
+        GuiImportResult::Success { .. } => ResultPanel::GeneratedCfg,
+        GuiImportResult::Error { .. } => ResultPanel::Errors,
+    }
+}
+
 pub(super) fn result_tab(
     ui: &mut egui::Ui,
     selected: &mut ResultPanel,

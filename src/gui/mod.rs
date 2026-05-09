@@ -25,8 +25,8 @@ use self::path_widgets::{
     controller_marker_width, path_file_row, path_folder_row, path_label_width, path_save_file_row,
 };
 use self::result_panels::{
-    ResultPanel, cycled_result_panel, result_tab, show_error_panel, show_event_panel,
-    show_generated_cfg_panel, show_warning_panel,
+    ResultPanel, cycled_result_panel, default_result_panel, result_tab, show_error_panel,
+    show_event_panel, show_generated_cfg_panel, show_warning_panel,
 };
 #[cfg(test)]
 use self::scroll::{CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS, CONTROLLER_PREVIEW_SCROLL_PIXELS};
@@ -771,7 +771,7 @@ impl GuiApp {
 
     fn run_import(&mut self) {
         let result = self.state.run_import();
-        self.selected_result_panel = result.default_panel();
+        self.selected_result_panel = default_result_panel(&result);
         self.result = Some(result);
     }
 
