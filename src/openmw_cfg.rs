@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -263,28 +263,59 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let temp_path = temporary_path_for(path);
-    let write_result = (|| {
-        let mut file = OpenOptions::new()
+
+    for _ in 0..16 {
+        let temp_path = temporary_path_for(path);
+        let file = match OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temp_path)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temp_path, path)?;
-        sync_parent_dir(parent);
-        Ok(())
-    })();
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(ImportError::Io {
+                    path: path.to_owned(),
+                    source,
+                });
+            }
+        };
 
-    if let Err(source) = write_result {
-        let _ = fs::remove_file(&temp_path);
-        return Err(ImportError::Io {
-            path: path.to_owned(),
-            source,
-        });
+        if let Err(source) = finish_atomic_write(path, parent, &temp_path, file, bytes) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(ImportError::Io {
+                path: path.to_owned(),
+                source,
+            });
+        }
+
+        return Ok(());
     }
 
+    Err(ImportError::Io {
+        path: path.to_owned(),
+        source: io::Error::new(
+            ErrorKind::AlreadyExists,
+            "could not create a unique temporary cfg file",
+        ),
+    })
+}
+
+fn finish_atomic_write(
+    path: &Path,
+    parent: &Path,
+    temp_path: &Path,
+    mut file: fs::File,
+    bytes: &[u8],
+) -> io::Result<()> {
+    if let Ok(metadata) = fs::metadata(path) {
+        file.set_permissions(metadata.permissions())?;
+    }
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(temp_path, path)?;
+    sync_parent_dir(parent);
     Ok(())
 }
 

@@ -108,6 +108,25 @@ fn save_resolved_cfg_replaces_existing_file_and_cleans_temp_file() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn save_resolved_cfg_preserves_existing_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_test_dir("atomic-resolved-save-permissions");
+    fs::create_dir_all(&dir).unwrap();
+    let output = dir.join("openmw.cfg");
+    fs::write(&output, "stale=true\n").unwrap();
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o600)).unwrap();
+    let cfg = parse_cfg_str("encoding=win1252\n");
+
+    save_resolved_cfg_to_path(&cfg, &output).unwrap();
+
+    let mode = fs::metadata(&output).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn font_import_is_option_gated() {
     let ini = parse_ini_str("[Fonts]\nFont 0=magic\n[Movies]\nNew Game=intro.bik\n");
