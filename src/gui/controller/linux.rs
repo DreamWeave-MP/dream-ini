@@ -83,6 +83,7 @@ impl Drop for ControllerWorker {
 #[derive(Debug)]
 struct WorkerState {
     devices: Vec<InputDevice>,
+    poll_fds: Vec<libc::pollfd>,
     last_scan: Instant,
     wake: WakeFd,
 }
@@ -91,6 +92,7 @@ impl WorkerState {
     fn new(wake: WakeFd) -> Self {
         Self {
             devices: open_devices(),
+            poll_fds: Vec::new(),
             last_scan: Instant::now(),
             wake,
         }
@@ -116,30 +118,31 @@ impl WorkerState {
         deduplicate(actions)
     }
 
-    fn wait_for_input(&self) {
+    fn wait_for_input(&mut self) {
         let timeout = self.next_repeat_delay().unwrap_or(IDLE_POLL_TIMEOUT);
         let timeout_ms = duration_to_poll_timeout(timeout);
-        let mut poll_fds = Vec::with_capacity(self.devices.len() + 1);
-        poll_fds.push(libc::pollfd {
+        self.poll_fds.clear();
+        self.poll_fds.push(libc::pollfd {
             fd: self.wake.as_raw_fd(),
             events: libc::POLLIN,
             revents: 0,
         });
-        poll_fds.extend(self.devices.iter().map(|device| libc::pollfd {
-            fd: device.file.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        }));
+        self.poll_fds
+            .extend(self.devices.iter().map(|device| libc::pollfd {
+                fd: device.file.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            }));
         // SAFETY: poll_fds points to a valid mutable array for the duration of
         // the call. poll(2) only writes revents fields in that array.
         let result = unsafe {
             libc::poll(
-                poll_fds.as_mut_ptr(),
-                poll_fds.len() as libc::nfds_t,
+                self.poll_fds.as_mut_ptr(),
+                self.poll_fds.len() as libc::nfds_t,
                 timeout_ms,
             )
         };
-        if result > 0 && poll_fds[0].revents & libc::POLLIN != 0 {
+        if result > 0 && self.poll_fds[0].revents & libc::POLLIN != 0 {
             self.wake.drain();
         }
     }
