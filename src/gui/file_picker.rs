@@ -704,8 +704,11 @@ fn compare_names(left: &str, right: &str) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn lists_directories_and_expected_file_for_file_targets() {
@@ -1032,9 +1035,11 @@ mod tests {
     fn unique_temp_dir() -> PathBuf {
         let temp_dir = std::env::temp_dir();
         let temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
+        let counter = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
         let root = temp_dir.join(format!(
-            "dream-ini-picker-{}-{}",
+            "dream-ini-picker-{}-{}-{}",
             std::process::id(),
+            counter,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
