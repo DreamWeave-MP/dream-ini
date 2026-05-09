@@ -393,6 +393,43 @@ fn same_context_existing_cfg_output_does_not_flatten_config_chain() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn same_context_existing_cfg_output_preserves_absolute_symlink_cfg_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = unique_test_dir("same-context-symlink-cfg");
+    let real_dir = dir.join("real");
+    let link_dir = dir.join("link");
+    fs::create_dir_all(&real_dir).unwrap();
+    fs::create_dir_all(&link_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = real_dir.join("openmw.cfg");
+    let symlink_cfg = link_dir.join("openmw.cfg");
+    let output_cfg = link_dir.join("out.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "# preserved through symlink spelling\ndata=mods\n").unwrap();
+    symlink(&cfg, &symlink_cfg).unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&symlink_cfg)
+        .args(["--output"])
+        .arg(&output_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(output_cfg).unwrap();
+    assert!(written.contains("# preserved through symlink spelling\n"));
+    assert!(written.contains("data=mods\n"));
+    assert!(written.contains("no-sound=1\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn relocated_existing_cfg_output_uses_resolved_paths() {
     let dir = unique_test_dir("relocated-existing-cfg");

@@ -77,7 +77,8 @@ pub fn serialize_preserved_cfg_document(
     update: &PreservedCfgUpdate,
     changed_keys: &BTreeSet<String>,
 ) -> String {
-    let source_path = source_identity_path(source_path);
+    let source_path = source_path.to_path_buf();
+    let canonical_source_path = fs::canonicalize(&source_path).ok();
     let mut write_keys = changed_keys.clone();
     if update.data_local.is_some() {
         write_keys.insert("data-local".to_owned());
@@ -93,16 +94,15 @@ pub fn serialize_preserved_cfg_document(
     for setting in config.settings_matching(|setting| {
         let source = setting.meta().source_config();
         source == source_path.as_path()
+            || canonical_source_path
+                .as_deref()
+                .is_some_and(|canonical_source_path| source == canonical_source_path)
             || (source == user_config_path
                 && setting_key(setting).is_some_and(|key| write_keys.contains(&key)))
     }) {
         document.push_str(&setting.to_string());
     }
     document
-}
-
-fn source_identity_path(source_path: &Path) -> PathBuf {
-    fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf())
 }
 
 fn setting_key(setting: &impl ToString) -> Option<String> {
