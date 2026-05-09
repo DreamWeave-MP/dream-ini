@@ -3,6 +3,7 @@ use dream_ini::{ImportError, ImportEvent, ImportWarning};
 mod english;
 mod french;
 mod german;
+mod russian;
 mod spanish;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -11,6 +12,7 @@ pub(super) enum UiLanguage {
     English,
     French,
     German,
+    Russian,
     Spanish,
 }
 
@@ -20,6 +22,7 @@ pub(super) enum UiText {
     EnglishLanguage,
     FrenchLanguage,
     GermanLanguage,
+    RussianLanguage,
     SpanishLanguage,
     SourceSection,
     Existing,
@@ -98,6 +101,7 @@ impl Localizer {
             UiLanguage::English => english::text(key),
             UiLanguage::French => french::text(key),
             UiLanguage::German => german::text(key),
+            UiLanguage::Russian => russian::text(key),
             UiLanguage::Spanish => spanish::text(key),
         }
     }
@@ -107,6 +111,7 @@ impl Localizer {
             UiLanguage::English => english::warning_title(warning),
             UiLanguage::French => french::warning_title(warning),
             UiLanguage::German => german::warning_title(warning),
+            UiLanguage::Russian => russian::warning_title(warning),
             UiLanguage::Spanish => spanish::warning_title(warning),
         }
     }
@@ -116,6 +121,7 @@ impl Localizer {
             UiLanguage::English => english::event_title(event),
             UiLanguage::French => french::event_title(event),
             UiLanguage::German => german::event_title(event),
+            UiLanguage::Russian => russian::event_title(event),
             UiLanguage::Spanish => spanish::event_title(event),
         }
     }
@@ -125,6 +131,7 @@ impl Localizer {
             UiLanguage::English => english::error_title(error),
             UiLanguage::French => french::error_title(error),
             UiLanguage::German => german::error_title(error),
+            UiLanguage::Russian => russian::error_title(error),
             UiLanguage::Spanish => spanish::error_title(error),
         }
     }
@@ -151,6 +158,10 @@ mod tests {
         let mut german = Localizer::default();
         german.set_language(UiLanguage::German);
         assert_eq!(german.text(UiText::SourceSection), "Eingabedateien");
+
+        let mut russian = Localizer::default();
+        russian.set_language(UiLanguage::Russian);
+        assert_eq!(russian.text(UiText::SourceSection), "Исходные файлы");
     }
 
     #[test]
