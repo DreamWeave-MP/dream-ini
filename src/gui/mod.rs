@@ -25,6 +25,10 @@ use self::path_helpers::{cfg_parent, optional_path, same_cfg_context};
 use self::path_widgets::{
     controller_marker_width, path_file_row, path_folder_row, path_label_width, path_save_file_row,
 };
+use self::result_panels::{
+    ResultPanel, cycled_result_panel, result_tab, show_error_panel, show_event_panel,
+    show_generated_cfg_panel, show_warning_panel,
+};
 #[cfg(test)]
 use self::scroll::{CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS, CONTROLLER_PREVIEW_SCROLL_PIXELS};
 use self::scroll::{
@@ -43,6 +47,7 @@ mod path_widgets;
 #[cfg(feature = "portmaster-gui")]
 #[cfg_attr(feature = "gui", allow(dead_code))]
 mod portmaster;
+mod result_panels;
 mod scroll;
 
 const CFG_KEY_DATA_LOCAL: &str = "data-local";
@@ -1310,19 +1315,6 @@ fn cycled_output_mode(
     }
 }
 
-fn cycled_result_panel(panel: ResultPanel, adjustment: FormAdjustment) -> ResultPanel {
-    cycle_item(
-        &[
-            ResultPanel::Errors,
-            ResultPanel::Warnings,
-            ResultPanel::Events,
-            ResultPanel::GeneratedCfg,
-        ],
-        panel,
-        adjustment,
-    )
-}
-
 fn cycle_item<T: Copy + PartialEq>(items: &[T], current: T, adjustment: FormAdjustment) -> T {
     let Some(index) = items.iter().position(|item| *item == current) else {
         return current;
@@ -1607,21 +1599,6 @@ enum GuiImportError {
     Import(ImportError),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum ResultPanel {
-    Errors,
-    Warnings,
-    Events,
-    #[default]
-    GeneratedCfg,
-}
-
-fn result_tab(ui: &mut egui::Ui, selected: &mut ResultPanel, panel: ResultPanel, label: &str) {
-    if ui.selectable_label(*selected == panel, label).clicked() {
-        *selected = panel;
-    }
-}
-
 fn encoding_dropdown(
     ui: &mut egui::Ui,
     localizer: Localizer,
@@ -1663,108 +1640,6 @@ const fn encoding_label(encoding: TextEncoding) -> &'static str {
         TextEncoding::Win1250 => "win1250",
         TextEncoding::Win1251 => "win1251",
         TextEncoding::Win1252 => "win1252",
-    }
-}
-
-fn show_error_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
-    match result {
-        GuiImportResult::Success { .. } => {
-            ui.label(localizer.text(UiText::NoErrors));
-        }
-        GuiImportResult::Error { error } => {
-            ui.colored_label(egui::Color32::RED, error_title(localizer, error));
-        }
-    }
-}
-
-fn show_warning_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
-    let GuiImportResult::Success { warnings, .. } = result else {
-        ui.label(localizer.text(UiText::NoWarnings));
-        return;
-    };
-    if warnings.is_empty() {
-        ui.label(localizer.text(UiText::NoWarnings));
-        return;
-    }
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for warning in warnings {
-            ui.label(localizer.warning_title(warning));
-        }
-    });
-}
-
-fn show_event_panel(ui: &mut egui::Ui, localizer: Localizer, result: &GuiImportResult) {
-    let GuiImportResult::Success { events, .. } = result else {
-        ui.label(localizer.text(UiText::NoEvents));
-        return;
-    };
-    if events.is_empty() {
-        ui.label(localizer.text(UiText::NoEvents));
-        return;
-    }
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for event in events {
-            ui.label(localizer.event_title(event));
-        }
-    });
-}
-
-fn show_generated_cfg_panel(
-    ui: &mut egui::Ui,
-    localizer: Localizer,
-    result: &mut GuiImportResult,
-    controller_scroll_delta: egui::Vec2,
-) {
-    let GuiImportResult::Success { cfg_text, .. } = result else {
-        ui.label(localizer.text(UiText::NoGeneratedCfg));
-        return;
-    };
-    ui.scope(|ui| {
-        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
-        egui::ScrollArea::both()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if controller_scroll_delta != egui::Vec2::ZERO {
-                    ui.scroll_with_delta(controller_scroll_delta);
-                }
-                show_numbered_cfg(ui, cfg_text);
-            });
-    });
-}
-
-fn show_numbered_cfg(ui: &mut egui::Ui, cfg_text: &str) {
-    let line_count = cfg_text.split('\n').count().max(1);
-    let number_width = line_count.to_string().len();
-    egui::Grid::new("generated-cfg-preview")
-        .num_columns(2)
-        .spacing([8.0, 0.0])
-        .striped(false)
-        .show(ui, |ui| {
-            for (index, line) in cfg_text.split('\n').enumerate() {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(format!("{:>number_width$}", index + 1)).monospace(),
-                    )
-                    .selectable(false),
-                );
-                ui.monospace(line);
-                ui.end_row();
-            }
-        });
-}
-
-fn error_title(localizer: Localizer, error: &GuiImportError) -> String {
-    match error {
-        GuiImportError::MissingMorrowindIni => localizer
-            .text(UiText::SelectMorrowindIniBeforeImporting)
-            .to_owned(),
-        GuiImportError::MissingOutputPath => localizer
-            .text(UiText::SelectOutputPathBeforeImporting)
-            .to_owned(),
-        GuiImportError::MissingExistingCfgForUpdate => localizer
-            .text(UiText::SelectExistingCfgBeforeUpdating)
-            .to_owned(),
-        GuiImportError::Import(error) => localizer.error_title(error),
     }
 }
 
