@@ -1594,7 +1594,8 @@ fn show_osk_overlay(ui: &mut egui::Ui, localizer: Localizer, osk: &mut OskState)
     let mut outcome = OskOutcome::None;
     let modal_id = egui::Id::new("path-osk-modal");
     let modal_area = egui::Modal::default_area(modal_id)
-        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -OSK_MARGIN));
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -OSK_MARGIN))
+        .fade_in(false);
 
     egui::Modal::new(modal_id)
         .area(modal_area)
