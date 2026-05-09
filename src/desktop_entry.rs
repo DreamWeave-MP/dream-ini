@@ -165,9 +165,9 @@ mod windows_shortcut {
         CoUninitialize, IPersistFile,
     };
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
-    use windows::core::HSTRING;
+    use windows::core::{HSTRING, Interface};
 
-    use super::{APP_COMMENT, APP_NAME};
+    use super::APP_COMMENT;
 
     pub(super) fn create(
         executable: &Path,
@@ -270,6 +270,7 @@ fn escape_quoted_exec_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -343,6 +344,7 @@ mod tests {
         assert_eq!(paths.icon, app_data.join(APP_NAME).join("logo.ico"));
     }
 
+    #[cfg(target_os = "linux")]
     fn unique_test_dir(name: &str) -> PathBuf {
         let temp_dir = env::temp_dir();
         let temp_dir = temp_dir.canonicalize().unwrap_or(temp_dir);
