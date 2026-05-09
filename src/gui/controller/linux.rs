@@ -283,6 +283,7 @@ impl Drop for WakeFd {
 struct InputDevice {
     identity: PathBuf,
     file: File,
+    capabilities: DeviceCapabilities,
     axes: AxisState,
     repeater: ActionRepeater,
 }
@@ -293,16 +294,17 @@ impl InputDevice {
             .read(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)?;
-        if !has_controller_capabilities(file.as_raw_fd()) {
+        let Some(capabilities) = read_controller_capabilities(file.as_raw_fd()) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "input device does not expose controller capabilities",
             ));
-        }
+        };
         let axes = AxisState::new(AxisCalibration::read(file.as_raw_fd()));
         Ok(Self {
             identity: device_identity(path),
             file,
+            capabilities,
             axes,
             repeater: ActionRepeater::default(),
         })
@@ -343,13 +345,24 @@ impl InputDevice {
 
     fn handle_event(&mut self, event: InputEvent, now: Instant) -> Vec<ControllerAction> {
         match event.kind {
-            EV_KEY => key_actions(event.code, event.value, &mut self.repeater, now),
+            EV_KEY => key_actions(
+                event.code,
+                event.value,
+                self.capabilities.has_hat_axes,
+                &mut self.repeater,
+                now,
+            ),
             EV_ABS => self
                 .axes
                 .update(event.code, event.value, &mut self.repeater, now),
             _ => Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeviceCapabilities {
+    has_hat_axes: bool,
 }
 
 #[derive(Debug)]
@@ -688,10 +701,10 @@ const fn input_event_size() -> usize {
     std::mem::size_of::<libc::timeval>() + 8
 }
 
-fn has_controller_capabilities(fd: RawFd) -> bool {
+fn read_controller_capabilities(fd: RawFd) -> Option<DeviceCapabilities> {
     let event_bits = ioctl_bitset(fd, 0, 1).unwrap_or_default();
     if !test_bit(&event_bits, EV_KEY) {
-        return false;
+        return None;
     }
 
     let key_bits = ioctl_bitset(fd, EV_KEY, KEY_MAX).unwrap_or_default();
@@ -705,16 +718,16 @@ fn has_controller_capabilities(fd: RawFd) -> bool {
     ]
     .into_iter()
     .any(|code| test_bit(&key_bits, code));
-    if has_controller_button {
-        return true;
-    }
+    let abs_bits = if test_bit(&event_bits, EV_ABS) {
+        ioctl_bitset(fd, EV_ABS, ABS_MAX).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let has_stick_axes = test_bit(&abs_bits, ABS_X) && test_bit(&abs_bits, ABS_Y);
+    let has_hat_axes = test_bit(&abs_bits, ABS_HAT0X) && test_bit(&abs_bits, ABS_HAT0Y);
 
-    if !test_bit(&event_bits, EV_ABS) {
-        return false;
-    }
-    let abs_bits = ioctl_bitset(fd, EV_ABS, ABS_MAX).unwrap_or_default();
-    (test_bit(&abs_bits, ABS_X) && test_bit(&abs_bits, ABS_Y))
-        || (test_bit(&abs_bits, ABS_HAT0X) && test_bit(&abs_bits, ABS_HAT0Y))
+    (has_controller_button || has_stick_axes || has_hat_axes)
+        .then_some(DeviceCapabilities { has_hat_axes })
 }
 
 fn ioctl_bitset(fd: RawFd, event_type: u16, max_bit: u16) -> io::Result<Vec<u8>> {
@@ -763,9 +776,13 @@ const fn ioc(direction: u8, ioctl_type: u8, number: u16, size: usize) -> libc::c
 fn key_actions(
     code: u16,
     value: i32,
+    ignore_dpad_keys: bool,
     repeater: &mut ActionRepeater,
     now: Instant,
 ) -> Vec<ControllerAction> {
+    if ignore_dpad_keys && is_dpad_key(code) {
+        return Vec::new();
+    }
     match (key_action(code), value) {
         (Some(ControllerAction::Accept | ControllerAction::Cancel), 1) => {
             vec![key_action(code).expect("checked above")]
@@ -777,6 +794,13 @@ fn key_actions(
         }
         (Some(_) | None, _) => Vec::new(),
     }
+}
+
+fn is_dpad_key(code: u16) -> bool {
+    matches!(
+        code,
+        BTN_DPAD_UP | BTN_DPAD_DOWN | BTN_DPAD_LEFT | BTN_DPAD_RIGHT
+    )
 }
 
 fn key_action(code: u16) -> Option<ControllerAction> {
@@ -827,6 +851,18 @@ mod tests {
         assert_eq!(key_action(BTN_DPAD_DOWN), Some(ControllerAction::Down));
         assert_eq!(key_action(BTN_DPAD_LEFT), Some(ControllerAction::Left));
         assert_eq!(key_action(BTN_DPAD_RIGHT), Some(ControllerAction::Right));
+    }
+
+    #[test]
+    fn dpad_key_events_are_ignored_when_hat_axes_are_present() {
+        let mut repeater = ActionRepeater::default();
+        let now = Instant::now();
+
+        assert!(key_actions(BTN_DPAD_DOWN, 1, true, &mut repeater, now).is_empty());
+        assert_eq!(
+            key_actions(BTN_SOUTH, 1, true, &mut repeater, now),
+            vec![ControllerAction::Accept]
+        );
     }
 
     #[test]
