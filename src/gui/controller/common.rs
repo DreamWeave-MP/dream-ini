@@ -104,6 +104,7 @@ impl ActionRepeater {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     pub(super) fn clear(&mut self) {
         *self = Self::default();
     }

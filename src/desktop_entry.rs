@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const APP_ID: &str = "io.github.DreamWeave-MP.dream-ini";
 pub(crate) const APP_NAME: &str = "Dream INI";
+#[cfg(any(target_os = "linux", windows, test))]
 const APP_COMMENT: &str = "Import Morrowind.ini settings into OpenMW configuration files";
+#[cfg(target_os = "linux")]
 const PNG_ICON_BYTES: &[u8] = include_bytes!("../assets/logo.png");
 #[cfg(windows)]
 const ICO_ICON_BYTES: &[u8] = include_bytes!("../assets/logo.ico");
@@ -139,6 +141,7 @@ fn xdg_data_home() -> io::Result<PathBuf> {
     Ok(PathBuf::from(home).join(".local/share"))
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn desktop_entry(executable: &Path) -> String {
     let executable = desktop_exec_path(executable);
     format!(
@@ -239,6 +242,7 @@ mod windows_shortcut {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn desktop_exec_path(path: &Path) -> String {
     let path = path.to_string_lossy();
     if path.contains([' ', '\t', '\n', '"', '\\', '`', '$']) {
@@ -248,6 +252,7 @@ fn desktop_exec_path(path: &Path) -> String {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn escape_quoted_exec_path(path: &str) -> String {
     let mut escaped = String::with_capacity(path.len());
     for character in path.chars() {

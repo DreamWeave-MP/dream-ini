@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Write};
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -400,8 +402,6 @@ fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
 
