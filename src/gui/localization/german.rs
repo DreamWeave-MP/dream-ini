@@ -90,11 +90,16 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::SelectResourcesDir => "resources-Verzeichnis auswählen",
         UiText::SelectUserDataDir => "user-data-Verzeichnis auswählen",
         UiText::ControllerHelp => {
-            "Controller: Steuerkreuz/linker Stick bewegt • A schaltet/wählt • B beendet • X leert ausgewählten Pfad • Start importiert, wenn bereit • links/rechts passt Optionen an • rechter Stick scrollt die generierte cfg • LB/RB blättert durch generierte cfg"
+            "Controller: Steuerkreuz/linker Stick bewegt • A schaltet/wählt • X leert ausgewählten Pfad • Start importiert, wenn bereit • Select beendet • links/rechts passt Optionen an • rechter Stick scrollt die generierte cfg • LB/RB blättert durch generierte cfg"
         }
         UiText::PickerControllerHelp => {
-            "Controller: Steuerkreuz/linker Stick bewegt • A/Enter öffnet oder wählt • B bricht ab • Links geht zum übergeordneten Verzeichnis • Rechts öffnet • Start wählt den aktuellen/erwarteten Pfad • LB schaltet versteckte Verzeichnisse um"
+            "Controller: Steuerkreuz/linker Stick bewegt • A/Enter öffnet oder wählt • B/Links geht zum übergeordneten Verzeichnis • Rechts öffnet • Start wählt den aktuellen/erwarteten Pfad • Select bricht ab • LB schaltet versteckte Verzeichnisse um"
         }
+        UiText::OskTitle => "Pfad-Tastatur",
+        UiText::OskControllerHelp => {
+            "Controller: Steuerkreuz/linker Stick bewegt • A drückt Taste • B schaltet Shift • Y Leerzeichen • X löscht rückwärts • Select/Escape bricht ab • Start/OK übernimmt"
+        }
+        UiText::OskOk => "OK",
     }
 }
 

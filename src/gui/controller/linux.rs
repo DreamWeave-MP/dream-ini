@@ -30,6 +30,7 @@ const ABS_MAX: u16 = 0x3f;
 const BTN_SOUTH: u16 = 0x130;
 const BTN_EAST: u16 = 0x131;
 const BTN_WEST: u16 = 0x133;
+const BTN_NORTH: u16 = 0x134;
 const BTN_TL: u16 = 0x136;
 const BTN_TR: u16 = 0x137;
 const BTN_TL2: u16 = 0x138;
@@ -793,6 +794,8 @@ fn key_actions(
                 action @ (ControllerAction::Accept
                 | ControllerAction::Cancel
                 | ControllerAction::ClearCurrent
+                | ControllerAction::Secondary
+                | ControllerAction::Space
                 | ControllerAction::SelectCurrent
                 | ControllerAction::PagePreviewDown
                 | ControllerAction::ToggleHiddenDirectories),
@@ -839,8 +842,10 @@ fn key_action(code: u16) -> Option<ControllerAction> {
 const fn default_key_action(code: u16) -> Option<ControllerAction> {
     match code {
         BTN_SOUTH => Some(ControllerAction::Accept),
-        BTN_EAST | BTN_SELECT => Some(ControllerAction::Cancel),
+        BTN_EAST => Some(ControllerAction::Secondary),
+        BTN_SELECT => Some(ControllerAction::Cancel),
         BTN_WEST => Some(ControllerAction::ClearCurrent),
+        BTN_NORTH => Some(ControllerAction::Space),
         BTN_START => Some(ControllerAction::SelectCurrent),
         BTN_TL => Some(ControllerAction::ToggleHiddenDirectories),
         BTN_TR => Some(ControllerAction::PagePreviewDown),
@@ -871,6 +876,7 @@ const fn key_name(code: u16) -> &'static str {
         BTN_SOUTH => "BTN_SOUTH",
         BTN_EAST => "BTN_EAST",
         BTN_WEST => "BTN_WEST",
+        BTN_NORTH => "BTN_NORTH",
         BTN_TL => "BTN_TL",
         BTN_TR => "BTN_TR",
         BTN_TL2 => "BTN_TL2",
@@ -933,8 +939,9 @@ mod tests {
     #[test]
     fn key_events_map_to_controller_actions() {
         assert_eq!(key_action(BTN_SOUTH), Some(ControllerAction::Accept));
-        assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Cancel));
+        assert_eq!(key_action(BTN_EAST), Some(ControllerAction::Secondary));
         assert_eq!(key_action(BTN_WEST), Some(ControllerAction::ClearCurrent));
+        assert_eq!(key_action(BTN_NORTH), Some(ControllerAction::Space));
         #[cfg(not(all(feature = "portmaster-gui", not(feature = "gui"))))]
         {
             assert_eq!(key_action(BTN_SELECT), Some(ControllerAction::Cancel));
@@ -967,6 +974,11 @@ mod tests {
     #[test]
     fn default_key_events_map_to_controller_actions() {
         assert_eq!(
+            default_key_action(BTN_EAST),
+            Some(ControllerAction::Secondary)
+        );
+        assert_eq!(default_key_action(BTN_NORTH), Some(ControllerAction::Space));
+        assert_eq!(
             default_key_action(BTN_SELECT),
             Some(ControllerAction::Cancel)
         );
@@ -988,6 +1000,7 @@ mod tests {
     fn key_names_cover_trigger_and_menu_codes() {
         assert_eq!(key_name(BTN_TL2), "BTN_TL2");
         assert_eq!(key_name(BTN_TR2), "BTN_TR2");
+        assert_eq!(key_name(BTN_NORTH), "BTN_NORTH");
         assert_eq!(key_name(BTN_SELECT), "BTN_SELECT");
         assert_eq!(key_name(BTN_START), "BTN_START");
     }

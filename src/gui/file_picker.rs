@@ -323,6 +323,7 @@ impl PathPickerState {
                 ControllerAction::Down => self.move_selection(SelectionStep::Next),
                 ControllerAction::Accept => return self.selected_entry_action(),
                 ControllerAction::ClearCurrent
+                | ControllerAction::Space
                 | ControllerAction::PagePreviewDown
                 | ControllerAction::ScrollPreviewLeft
                 | ControllerAction::ScrollPreviewRight
@@ -330,7 +331,9 @@ impl PathPickerState {
                 | ControllerAction::ScrollPreviewDown => {}
                 ControllerAction::SelectCurrent => return self.current_target_action(),
                 ControllerAction::Cancel => return EntryAction::Cancel,
-                ControllerAction::Left => return self.parent_entry_action(),
+                ControllerAction::Left | ControllerAction::Secondary => {
+                    return self.parent_entry_action();
+                }
                 ControllerAction::Right => return self.right_entry_action(),
                 ControllerAction::ToggleHiddenDirectories => self.toggle_hidden_directories(),
             }
