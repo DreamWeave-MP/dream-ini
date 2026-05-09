@@ -327,12 +327,13 @@ fn existing_cfg_output_preserves_comments_and_relative_paths() {
     .unwrap();
 
     let output = Command::new(BIN)
+        .current_dir(&dir)
         .args(["--no-archives", "--ini"])
-        .arg(&ini)
+        .arg("Morrowind.ini")
         .args(["--cfg"])
-        .arg(&cfg)
+        .arg("openmw.cfg")
         .args(["--output"])
-        .arg(&output_cfg)
+        .arg("out.cfg")
         .output()
         .unwrap();
 
@@ -371,12 +372,13 @@ fn same_context_existing_cfg_output_does_not_flatten_config_chain() {
     .unwrap();
 
     let output = Command::new(BIN)
+        .current_dir(&dir)
         .args(["--no-archives", "--ini"])
-        .arg(&ini)
+        .arg("Morrowind.ini")
         .args(["--cfg"])
-        .arg(&cfg)
+        .arg("openmw.cfg")
         .args(["--output"])
-        .arg(&output_cfg)
+        .arg("out.cfg")
         .output()
         .unwrap();
 

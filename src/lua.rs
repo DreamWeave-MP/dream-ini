@@ -70,7 +70,15 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
         lua.create_function(|lua, options: Table| {
             let ini_path = required_string(&options, "ini")?;
             let cfg_path = option_string(Some(&options), "cfg")?;
-            let result = IniImporter::new(options_from_table(Some(options))?)
+            let mut import_options = options_from_table(Some(options))?;
+            if !import_options.data_dirs.is_empty() && import_options.data_dir_base.is_none() {
+                import_options.data_dir_base = cfg_path
+                    .as_deref()
+                    .map(Path::new)
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf);
+            }
+            let result = IniImporter::new(import_options)
                 .import_optional_cfg_path(Path::new(&ini_path), cfg_path.as_deref().map(Path::new))
                 .map_err(LuaError::external)?;
             import_result_to_table(lua, &result.cfg, &result.warnings, &result.events)
@@ -344,10 +352,13 @@ mod tests {
     #[test]
     fn lua_import_paths_uses_explicit_data_dirs() {
         let dir = unique_test_dir("import-paths");
-        let data_dir = dir.join("Data Files");
+        let cfg_dir = dir.join("config");
+        let data_dir = cfg_dir.join("Data Files");
         fs::create_dir_all(&data_dir).unwrap();
         let ini = dir.join("Morrowind.ini");
+        let cfg = cfg_dir.join("openmw.cfg");
         fs::write(&ini, "[Game Files]\nGameFile0=Base.esm\n").unwrap();
+        fs::write(&cfg, "encoding=win1252\n").unwrap();
         fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
 
         let lua = Lua::new();
@@ -355,12 +366,11 @@ mod tests {
         let module = lua.globals().get::<Table>("dream_ini").unwrap();
         let options = lua.create_table().unwrap();
         options.set("ini", ini.to_string_lossy().as_ref()).unwrap();
+        options.set("cfg", cfg.to_string_lossy().as_ref()).unwrap();
         options.set("game_files", true).unwrap();
         options.set("archives", false).unwrap();
         let data_dirs = lua.create_table().unwrap();
-        data_dirs
-            .set(1, data_dir.to_string_lossy().as_ref())
-            .unwrap();
+        data_dirs.set(1, "Data Files").unwrap();
         options.set("data_dirs", data_dirs).unwrap();
 
         let result: Table = module
@@ -370,7 +380,7 @@ mod tests {
             .unwrap();
         let text: String = result.get("text").unwrap();
         assert!(text.contains("content=Base.esm\n"));
-        assert!(text.contains(&format!("data={}\n", data_dir.display())));
+        assert!(text.contains("data=Data Files\n"));
         let events: Table = result.get("events").unwrap();
         let event: Table = events.get(1).unwrap();
         assert_eq!(
