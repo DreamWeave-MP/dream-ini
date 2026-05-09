@@ -25,6 +25,12 @@ use self::path_helpers::{cfg_parent, optional_path, same_cfg_context};
 use self::path_widgets::{
     controller_marker_width, path_file_row, path_folder_row, path_label_width, path_save_file_row,
 };
+#[cfg(test)]
+use self::scroll::{CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS, CONTROLLER_PREVIEW_SCROLL_PIXELS};
+use self::scroll::{
+    PreviewPageScroll, PreviewScroll, generated_cfg_page_scroll_delta, generated_cfg_scroll_delta,
+    path_picker_scroll_delta,
+};
 #[cfg(feature = "gui")]
 use crate::desktop_entry::{APP_ID, APP_NAME};
 
@@ -37,14 +43,13 @@ mod path_widgets;
 #[cfg(feature = "portmaster-gui")]
 #[cfg_attr(feature = "gui", allow(dead_code))]
 mod portmaster;
+mod scroll;
 
 const CFG_KEY_DATA_LOCAL: &str = "data-local";
 const CFG_KEY_RESOURCES: &str = "resources";
 const CFG_KEY_USERDATA: &str = "user-data";
 const MORROWIND_INI_LABEL: &str = "Morrowind.ini";
 const OPENMW_CFG_LABEL: &str = "openmw.cfg";
-const CONTROLLER_PREVIEW_SCROLL_PIXELS: f32 = 72.0;
-const CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS: f32 = 480.0;
 
 #[cfg(all(feature = "portmaster-gui", not(feature = "gui")))]
 pub(crate) use portmaster::run as run_portmaster_gui;
@@ -234,20 +239,6 @@ enum FormSelectionStep {
 enum FormAdjustment {
     Previous,
     Next,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PreviewScroll {
-    Left,
-    Right,
-    Up,
-    Down,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PreviewPageScroll {
-    Up,
-    Down,
 }
 
 impl GuiApp {
@@ -1332,50 +1323,6 @@ fn cycled_result_panel(panel: ResultPanel, adjustment: FormAdjustment) -> Result
     )
 }
 
-fn generated_cfg_scroll_delta(direction: PreviewScroll) -> egui::Vec2 {
-    match direction {
-        PreviewScroll::Left => egui::vec2(CONTROLLER_PREVIEW_SCROLL_PIXELS, 0.0),
-        PreviewScroll::Right => egui::vec2(-CONTROLLER_PREVIEW_SCROLL_PIXELS, 0.0),
-        PreviewScroll::Up => egui::vec2(0.0, CONTROLLER_PREVIEW_SCROLL_PIXELS),
-        PreviewScroll::Down => egui::vec2(0.0, -CONTROLLER_PREVIEW_SCROLL_PIXELS),
-    }
-}
-
-fn generated_cfg_page_scroll_delta(direction: PreviewPageScroll) -> egui::Vec2 {
-    match direction {
-        PreviewPageScroll::Up => egui::vec2(0.0, CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS),
-        PreviewPageScroll::Down => egui::vec2(0.0, -CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS),
-    }
-}
-
-fn path_picker_scroll_delta(actions: &[ControllerAction]) -> egui::Vec2 {
-    actions.iter().fold(egui::Vec2::ZERO, |delta, action| {
-        delta
-            + match action {
-                ControllerAction::ScrollPreviewUp => {
-                    egui::vec2(0.0, CONTROLLER_PREVIEW_SCROLL_PIXELS)
-                }
-                ControllerAction::ScrollPreviewDown => {
-                    egui::vec2(0.0, -CONTROLLER_PREVIEW_SCROLL_PIXELS)
-                }
-                ControllerAction::ScrollPreviewLeft
-                | ControllerAction::ScrollPreviewRight
-                | ControllerAction::Up
-                | ControllerAction::Down
-                | ControllerAction::Left
-                | ControllerAction::Right
-                | ControllerAction::Accept
-                | ControllerAction::Cancel
-                | ControllerAction::ClearCurrent
-                | ControllerAction::Secondary
-                | ControllerAction::Space
-                | ControllerAction::PagePreviewDown
-                | ControllerAction::SelectCurrent
-                | ControllerAction::ToggleHiddenDirectories => egui::Vec2::ZERO,
-            }
-    })
-}
-
 fn cycle_item<T: Copy + PartialEq>(items: &[T], current: T, adjustment: FormAdjustment) -> T {
     let Some(index) = items.iter().position(|item| *item == current) else {
         return current;
@@ -2313,22 +2260,6 @@ mod tests {
         );
 
         assert!(app.generated_cfg_scroll_delta.length_sq() < f32::EPSILON);
-    }
-
-    #[test]
-    fn path_picker_scroll_delta_uses_only_vertical_preview_scroll_actions() {
-        let delta = path_picker_scroll_delta(&[
-            ControllerAction::ScrollPreviewDown,
-            ControllerAction::ScrollPreviewRight,
-            ControllerAction::Down,
-            ControllerAction::ScrollPreviewUp,
-            ControllerAction::ScrollPreviewUp,
-            ControllerAction::PagePreviewDown,
-            ControllerAction::ToggleHiddenDirectories,
-        ]);
-
-        assert!(delta.x.abs() < f32::EPSILON);
-        assert!((delta.y - CONTROLLER_PREVIEW_SCROLL_PIXELS).abs() < f32::EPSILON);
     }
 
     #[test]
