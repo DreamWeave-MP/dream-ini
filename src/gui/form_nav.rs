@@ -262,6 +262,46 @@ mod tests {
     }
 
     #[test]
+    fn visible_controls_keep_full_rich_state_order() {
+        assert_eq!(
+            visible_form_controls(
+                GuiOutputMode::SaveAs,
+                ExistingCfgVisibility::Present,
+                ImportVisibility::Enabled,
+                ResultVisibility::Success,
+            ),
+            vec![
+                FormControl::Language,
+                FormControl::MorrowindIni,
+                FormControl::MorrowindIniBrowse,
+                FormControl::ExistingCfg,
+                FormControl::ExistingCfgBrowse,
+                FormControl::Encoding,
+                FormControl::ImportFonts,
+                FormControl::ImportArchives,
+                FormControl::ImportContentFiles,
+                FormControl::ExplicitSearchPath,
+                FormControl::ExplicitSearchPathBrowse,
+                FormControl::DataLocal,
+                FormControl::DataLocalBrowse,
+                FormControl::Resources,
+                FormControl::ResourcesBrowse,
+                FormControl::UserData,
+                FormControl::UserDataBrowse,
+                FormControl::OutputPreview,
+                FormControl::OutputSaveAs,
+                FormControl::OutputPath,
+                FormControl::OutputPathBrowse,
+                FormControl::OutputUpdateExisting,
+                FormControl::Import,
+                FormControl::ResultTabs,
+                FormControl::ClearResult,
+                FormControl::CopyResult,
+            ]
+        );
+    }
+
+    #[test]
     fn next_previous_selection_wraps() {
         let controls = [
             FormControl::Language,
@@ -296,6 +336,18 @@ mod tests {
         assert_eq!(
             cycled_output_mode(GuiOutputMode::PreviewOnly, FormAdjustment::Previous, false),
             GuiOutputMode::SaveAs
+        );
+    }
+
+    #[test]
+    fn cycled_output_mode_includes_update_existing_with_existing_cfg() {
+        assert_eq!(
+            cycled_output_mode(GuiOutputMode::SaveAs, FormAdjustment::Next, true),
+            GuiOutputMode::UpdateExistingCfg
+        );
+        assert_eq!(
+            cycled_output_mode(GuiOutputMode::PreviewOnly, FormAdjustment::Previous, true),
+            GuiOutputMode::UpdateExistingCfg
         );
     }
 }
