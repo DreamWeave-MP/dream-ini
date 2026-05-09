@@ -14,7 +14,7 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::Browse => "Browse…",
         UiText::ImportOptions => "Import options",
         UiText::Encoding => "Encoding",
-        UiText::EncodingUseCfgDefault => "cfg/default",
+        UiText::EncodingAuto => "Auto",
         UiText::ImportFallbacks => "Import bitmap fonts",
         UiText::ImportArchives => "Import archives",
         UiText::ImportContentFiles => "Import content files / load order",
@@ -34,7 +34,9 @@ pub(super) const fn text(key: UiText) -> &'static str {
         UiText::GeneratedCfg => "Generated cfg",
         UiText::Copy => "Copy",
         UiText::Clear => "Clear",
-        UiText::EncodingTooltip => "Character encoding used when reading Morrowind.ini text.",
+        UiText::EncodingTooltip => {
+            "Character encoding used when reading content/plugin text. Auto uses the existing cfg encoding, or win1252 if none is set."
+        }
         UiText::ImportArchivesTooltip => {
             "Import fallback-archive entries and resolve referenced .bsa files."
         }

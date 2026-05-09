@@ -26,7 +26,7 @@ pub(super) enum UiText {
     Browse,
     ImportOptions,
     Encoding,
-    EncodingUseCfgDefault,
+    EncodingAuto,
     ImportFallbacks,
     ImportArchives,
     ImportContentFiles,

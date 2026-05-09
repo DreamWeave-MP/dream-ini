@@ -731,11 +731,7 @@ fn encoding_dropdown(ui: &mut egui::Ui, localizer: Localizer, encoding: &mut Opt
         egui::ComboBox::from_id_salt("import-encoding")
             .selected_text(optional_encoding_label(localizer, *encoding))
             .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    encoding,
-                    None,
-                    localizer.text(UiText::EncodingUseCfgDefault),
-                );
+                ui.selectable_value(encoding, None, localizer.text(UiText::EncodingAuto));
                 ui.selectable_value(
                     encoding,
                     Some(TextEncoding::Win1250),
@@ -756,10 +752,7 @@ fn encoding_dropdown(ui: &mut egui::Ui, localizer: Localizer, encoding: &mut Opt
 }
 
 fn optional_encoding_label(localizer: Localizer, encoding: Option<TextEncoding>) -> &'static str {
-    encoding.map_or_else(
-        || localizer.text(UiText::EncodingUseCfgDefault),
-        encoding_label,
-    )
+    encoding.map_or_else(|| localizer.text(UiText::EncodingAuto), encoding_label)
 }
 
 const fn encoding_label(encoding: TextEncoding) -> &'static str {
