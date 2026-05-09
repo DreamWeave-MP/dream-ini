@@ -582,6 +582,50 @@ fn in_place_preserves_existing_cfg_comments_and_relative_paths() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn in_place_follows_symlinked_cfg_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = unique_test_dir("in-place-symlink");
+    let real_dir = dir.join("real");
+    let link_dir = dir.join("link");
+    fs::create_dir_all(&real_dir).unwrap();
+    fs::create_dir_all(&link_dir).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let real_cfg = real_dir.join("openmw.cfg");
+    let link_cfg = link_dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(
+        &real_cfg,
+        "# update the target, not the link\nencoding=win1252\n",
+    )
+    .unwrap();
+    symlink(&real_cfg, &link_cfg).unwrap();
+
+    let output = Command::new(BIN)
+        .args(["--in-place", "--no-archives", "--ini"])
+        .arg(&ini)
+        .args(["--cfg"])
+        .arg(&link_cfg)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        fs::symlink_metadata(&link_cfg)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let written = fs::read_to_string(&real_cfg).unwrap();
+    assert!(written.contains("# update the target, not the link\n"));
+    assert!(written.contains("encoding=win1252\n"));
+    assert!(written.contains("no-sound=1\n"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn in_place_writes_back_to_cfg() {
     let dir = unique_test_dir("in-place");

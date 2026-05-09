@@ -63,11 +63,16 @@ pub fn save_preserved_cfg_document_to_path(
     update: &PreservedCfgUpdate,
     changed_keys: &BTreeSet<String>,
 ) -> Result<(), ImportError> {
+    let write_path = write_target_path(output_path);
     write_atomic(
-        output_path,
+        &write_path,
         serialize_preserved_cfg_document(config, source_path, update, changed_keys).as_bytes(),
     )?;
     Ok(())
+}
+
+fn write_target_path(output_path: &Path) -> PathBuf {
+    fs::canonicalize(output_path).unwrap_or_else(|_| output_path.to_owned())
 }
 
 #[must_use]
