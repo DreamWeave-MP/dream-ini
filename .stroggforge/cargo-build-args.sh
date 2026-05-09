@@ -28,7 +28,11 @@ case "${platform_os}-${platform_arch}" in
     printf '%s\n' --features
     printf '%s\n' gui
     ;;
-  Android-ARM64|Portmaster-ARM64)
+  Portmaster-ARM64)
+    printf '%s\n' --features
+    printf '%s\n' gui
+    ;;
+  Android-ARM64)
     printf '%s\n' --no-default-features
     ;;
   *)
