@@ -1,13 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use gilrs::{Axis, Button, EventType, Gilrs};
 
-use super::{ControllerAction, ControllerEvent};
+use super::{ControllerAction, ControllerEvent, ControllerEventSender};
 
 const GILRS_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const GILRS_RETRY_INTERVAL: Duration = Duration::from_millis(500);
@@ -33,10 +32,7 @@ impl std::fmt::Debug for ControllerWorker {
 }
 
 impl ControllerWorker {
-    pub(super) fn spawn(
-        sender: SyncSender<ControllerEvent>,
-        context: egui::Context,
-    ) -> Option<Self> {
+    pub(super) fn spawn(sender: ControllerEventSender, context: egui::Context) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let handle = thread::Builder::new()
@@ -76,27 +72,27 @@ impl WorkerState {
         }
     }
 
-    fn poll(&mut self) -> Vec<ControllerAction> {
+    fn poll(&mut self) -> InputActions {
         let Some(gilrs) = &mut self.gilrs else {
             self.gilrs = Gilrs::new().ok();
             thread::park_timeout(GILRS_RETRY_INTERVAL);
-            return Vec::new();
+            return InputActions::default();
         };
 
         let now = Instant::now();
-        let mut actions = Vec::new();
+        let mut input = InputActions::default();
         for _ in 0..MAX_GILRS_EVENTS_PER_TICK {
             let Some(event) = gilrs.next_event() else {
                 break;
             };
-            actions.extend(self.handle_event(event.event, now));
-            if actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
+            input.extend(self.handle_event(event.event, now));
+            if input.actions.len() >= MAX_WORKER_ACTIONS_PER_TICK {
                 break;
             }
         }
-        actions.extend(self.repeater.poll(now));
-        actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
-        actions
+        input.actions.extend(self.repeater.poll(now));
+        input.actions.truncate(MAX_WORKER_ACTIONS_PER_TICK);
+        input
     }
 
     fn has_gamepads(&self) -> bool {
@@ -105,15 +101,17 @@ impl WorkerState {
             .is_some_and(|gilrs| gilrs.gamepads().any(|(_, gamepad)| gamepad.is_connected()))
     }
 
-    fn handle_event(&mut self, event: EventType, now: Instant) -> Vec<ControllerAction> {
+    fn handle_event(&mut self, event: EventType, now: Instant) -> InputActions {
         match event {
             EventType::ButtonPressed(button, _) => button_pressed(button, &mut self.repeater, now),
-            EventType::Connected | EventType::Disconnected => Vec::new(),
+            EventType::Connected => InputActions::default(),
+            EventType::Disconnected => InputActions::released(),
             EventType::ButtonReleased(button, _) => {
                 if let Some(action) = repeatable_button_action(button) {
                     self.repeater.stop(action);
+                    return InputActions::released();
                 }
-                Vec::new()
+                InputActions::default()
             }
             EventType::AxisChanged(Axis::LeftStickX, value, _) => self.axes.left_x.update(
                 stick_direction(value),
@@ -139,7 +137,7 @@ impl WorkerState {
                 &mut self.repeater,
                 now,
             ),
-            _ => Vec::new(),
+            _ => InputActions::default(),
         }
     }
 
@@ -152,11 +150,11 @@ impl WorkerState {
     }
 }
 
-fn run_worker(sender: &SyncSender<ControllerEvent>, context: &egui::Context, stop: &AtomicBool) {
+fn run_worker(sender: &ControllerEventSender, context: &egui::Context, stop: &AtomicBool) {
     let mut state = WorkerState::new();
     let mut last_availability = state.has_gamepads();
     while !stop.load(Ordering::Relaxed) {
-        let actions = state.poll();
+        let input = state.poll();
         let available = state.has_gamepads();
         if available != last_availability {
             if send_event(sender, ControllerEvent::Available(available)) {
@@ -164,13 +162,17 @@ fn run_worker(sender: &SyncSender<ControllerEvent>, context: &egui::Context, sto
             }
             last_availability = available;
         }
-        if actions.is_empty() {
+        if input.released {
+            sender.purge_actions();
+            send_event(sender, ControllerEvent::PurgeQueuedActions);
+        }
+        if input.actions.is_empty() {
             thread::park_timeout(state.sleep_duration());
             continue;
         }
 
         let mut sent_action = false;
-        for action in actions {
+        for action in input.actions {
             if send_event(sender, ControllerEvent::Action(action)) {
                 sent_action = true;
             }
@@ -181,11 +183,35 @@ fn run_worker(sender: &SyncSender<ControllerEvent>, context: &egui::Context, sto
     }
 }
 
-fn send_event(sender: &SyncSender<ControllerEvent>, event: ControllerEvent) -> bool {
-    match sender.try_send(event) {
-        Ok(()) => true,
-        Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+#[derive(Debug, Default)]
+struct InputActions {
+    actions: Vec<ControllerAction>,
+    released: bool,
+}
+
+impl InputActions {
+    fn action(action: ControllerAction) -> Self {
+        Self {
+            actions: vec![action],
+            released: false,
+        }
     }
+
+    fn released() -> Self {
+        Self {
+            actions: Vec::new(),
+            released: true,
+        }
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.actions.extend(other.actions);
+        self.released |= other.released;
+    }
+}
+
+fn send_event(sender: &ControllerEventSender, event: ControllerEvent) -> bool {
+    sender.send(event)
 }
 
 #[derive(Debug, Default)]
@@ -211,15 +237,20 @@ impl AxisDirection {
         action: impl Fn(Self) -> Option<ControllerAction>,
         repeater: &mut ActionRepeater,
         now: Instant,
-    ) -> Vec<ControllerAction> {
+    ) -> InputActions {
         if *self == next {
-            return Vec::new();
+            return InputActions::default();
         }
+        let mut input = InputActions::default();
         if let Some(action) = action(*self) {
             repeater.stop(action);
+            input.released = true;
         }
         *self = next;
-        action(next).map_or_else(Vec::new, |action| repeater.start(action, now))
+        if let Some(action) = action(next) {
+            input.actions.extend(repeater.start(action, now));
+        }
+        input
     }
 }
 
@@ -348,15 +379,14 @@ impl HeldAction {
     }
 }
 
-fn button_pressed(
-    button: Button,
-    repeater: &mut ActionRepeater,
-    now: Instant,
-) -> Vec<ControllerAction> {
+fn button_pressed(button: Button, repeater: &mut ActionRepeater, now: Instant) -> InputActions {
     if let Some(action) = immediate_button_action(button) {
-        return vec![action];
+        return InputActions::action(action);
     }
-    repeatable_button_action(button).map_or_else(Vec::new, |action| repeater.start(action, now))
+    repeatable_button_action(button).map_or_else(InputActions::default, |action| InputActions {
+        actions: repeater.start(action, now),
+        released: false,
+    })
 }
 
 fn immediate_button_action(button: Button) -> Option<ControllerAction> {

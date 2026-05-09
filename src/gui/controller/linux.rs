@@ -6,13 +6,12 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::{ControllerAction, ControllerEvent};
+use super::{ControllerAction, ControllerEvent, ControllerEventSender};
 
 const DEVICE_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(500);
@@ -62,10 +61,7 @@ impl std::fmt::Debug for ControllerWorker {
 }
 
 impl ControllerWorker {
-    pub(super) fn spawn(
-        sender: SyncSender<ControllerEvent>,
-        context: egui::Context,
-    ) -> Option<Self> {
+    pub(super) fn spawn(sender: ControllerEventSender, context: egui::Context) -> Option<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let (worker_wake, wake) = WakeFd::new_pair().ok()?;
@@ -110,25 +106,25 @@ impl WorkerState {
         }
     }
 
-    fn poll(&mut self) -> Vec<ControllerAction> {
+    fn poll(&mut self) -> InputActions {
         self.rescan_if_needed();
         if self.devices.is_empty() {
             self.wait_for_input();
-            return Vec::new();
+            return InputActions::default();
         }
 
         self.wait_for_input();
-        let mut actions = Vec::new();
+        let mut input = InputActions::default();
         self.devices.retain_mut(|device| match device.poll() {
-            Ok(device_actions) => {
-                actions.extend(device_actions);
-                actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
+            Ok(device_input) => {
+                input.extend(device_input);
+                input.actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
                 true
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
             Err(_) => false,
         });
-        actions
+        input
     }
 
     fn has_devices(&self) -> bool {
@@ -199,7 +195,7 @@ impl WorkerState {
 }
 
 fn run_worker(
-    sender: &SyncSender<ControllerEvent>,
+    sender: &ControllerEventSender,
     context: &egui::Context,
     stop: &AtomicBool,
     wake: WakeFd,
@@ -207,7 +203,7 @@ fn run_worker(
     let mut state = WorkerState::new(wake);
     let mut last_availability = state.has_devices();
     while !stop.load(Ordering::Relaxed) {
-        let actions = state.poll();
+        let input = state.poll();
         let available = state.has_devices();
         if available != last_availability {
             if send_event(sender, ControllerEvent::Available(available)) {
@@ -215,12 +211,16 @@ fn run_worker(
             }
             last_availability = available;
         }
-        if actions.is_empty() {
+        if input.released {
+            sender.purge_actions();
+            send_event(sender, ControllerEvent::PurgeQueuedActions);
+        }
+        if input.actions.is_empty() {
             continue;
         }
 
         let mut sent_action = false;
-        for action in actions {
+        for action in input.actions {
             if send_event(sender, ControllerEvent::Action(action)) {
                 sent_action = true;
             }
@@ -231,11 +231,8 @@ fn run_worker(
     }
 }
 
-fn send_event(sender: &SyncSender<ControllerEvent>, event: ControllerEvent) -> bool {
-    match sender.try_send(event) {
-        Ok(()) => true,
-        Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
-    }
+fn send_event(sender: &ControllerEventSender, event: ControllerEvent) -> bool {
+    sender.send(event)
 }
 
 fn duration_to_poll_timeout(duration: Duration) -> i32 {
@@ -314,6 +311,33 @@ struct InputDevice {
     repeater: ActionRepeater,
 }
 
+#[derive(Debug, Default)]
+struct InputActions {
+    actions: Vec<ControllerAction>,
+    released: bool,
+}
+
+impl InputActions {
+    fn action(action: ControllerAction) -> Self {
+        Self {
+            actions: vec![action],
+            released: false,
+        }
+    }
+
+    fn released() -> Self {
+        Self {
+            actions: Vec::new(),
+            released: true,
+        }
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.actions.extend(other.actions);
+        self.released |= other.released;
+    }
+}
+
 impl InputDevice {
     fn open(path: &Path) -> io::Result<Self> {
         let file = OpenOptions::new()
@@ -336,9 +360,9 @@ impl InputDevice {
         })
     }
 
-    fn poll(&mut self) -> io::Result<Vec<ControllerAction>> {
+    fn poll(&mut self) -> io::Result<InputActions> {
         let mut buffer = [0_u8; input_event_size() * 32];
-        let mut actions = Vec::new();
+        let mut input = InputActions::default();
         let now = Instant::now();
 
         for _ in 0..MAX_DEVICE_READ_BATCHES {
@@ -346,12 +370,12 @@ impl InputDevice {
                 Ok(0) => break,
                 Ok(bytes_read) => {
                     for event in parse_events(&buffer[..bytes_read]) {
-                        actions.extend(self.handle_event(event, now));
+                        input.extend(self.handle_event(event, now));
                     }
                     if bytes_read < buffer.len() {
                         break;
                     }
-                    if actions.len() >= MAX_WORKER_ACTIONS_PER_POLL {
+                    if input.actions.len() >= MAX_WORKER_ACTIONS_PER_POLL {
                         break;
                     }
                 }
@@ -360,16 +384,16 @@ impl InputDevice {
             }
         }
 
-        actions.extend(self.repeater.poll(now));
-        actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
-        Ok(actions)
+        input.actions.extend(self.repeater.poll(now));
+        input.actions.truncate(MAX_WORKER_ACTIONS_PER_POLL);
+        Ok(input)
     }
 
     fn next_repeat(&self) -> Option<Instant> {
         self.repeater.next_repeat()
     }
 
-    fn handle_event(&mut self, event: InputEvent, now: Instant) -> Vec<ControllerAction> {
+    fn handle_event(&mut self, event: InputEvent, now: Instant) -> InputActions {
         match event.kind {
             EV_KEY => key_actions(
                 event.code,
@@ -381,7 +405,7 @@ impl InputDevice {
             EV_ABS => self
                 .axes
                 .update(event.code, event.value, &mut self.repeater, now),
-            _ => Vec::new(),
+            _ => InputActions::default(),
         }
     }
 }
@@ -421,7 +445,7 @@ impl AxisState {
         value: i32,
         repeater: &mut ActionRepeater,
         now: Instant,
-    ) -> Vec<ControllerAction> {
+    ) -> InputActions {
         match code {
             ABS_X => self.left_x.update(
                 self.calibration.x.direction(value),
@@ -453,7 +477,7 @@ impl AxisState {
             ABS_HAT0Y => self
                 .hat_y
                 .update(hat_direction(value), vertical_action, repeater, now),
-            _ => Vec::new(),
+            _ => InputActions::default(),
         }
     }
 }
@@ -555,15 +579,20 @@ impl AxisDirection {
         action: impl Fn(Self) -> Option<ControllerAction>,
         repeater: &mut ActionRepeater,
         now: Instant,
-    ) -> Vec<ControllerAction> {
+    ) -> InputActions {
         if *self == next {
-            return Vec::new();
+            return InputActions::default();
         }
+        let mut input = InputActions::default();
         if let Some(action) = action(*self) {
             repeater.stop(action);
+            input.released = true;
         }
         *self = next;
-        action(next).map_or_else(Vec::new, |action| repeater.start(action, now))
+        if let Some(action) = action(next) {
+            input.actions.extend(repeater.start(action, now));
+        }
+        input
     }
 }
 
@@ -879,9 +908,9 @@ fn key_actions(
     ignore_dpad_keys: bool,
     repeater: &mut ActionRepeater,
     now: Instant,
-) -> Vec<ControllerAction> {
+) -> InputActions {
     if ignore_dpad_keys && is_dpad_key(code) {
-        return Vec::new();
+        return InputActions::default();
     }
     match (key_action(code), value) {
         (
@@ -893,13 +922,16 @@ fn key_actions(
                 | ControllerAction::ToggleHiddenDirectories),
             ),
             1,
-        ) => vec![action],
-        (Some(action), 1) => repeater.start(action, now),
+        ) => InputActions::action(action),
+        (Some(action), 1) => InputActions {
+            actions: repeater.start(action, now),
+            released: false,
+        },
         (Some(action), 0) => {
             repeater.stop(action);
-            Vec::new()
+            InputActions::released()
         }
-        (Some(_) | None, _) => Vec::new(),
+        (Some(_) | None, _) => InputActions::default(),
     }
 }
 
@@ -991,9 +1023,13 @@ mod tests {
         let mut repeater = ActionRepeater::default();
         let now = Instant::now();
 
-        assert!(key_actions(BTN_DPAD_DOWN, 1, true, &mut repeater, now).is_empty());
+        assert!(
+            key_actions(BTN_DPAD_DOWN, 1, true, &mut repeater, now)
+                .actions
+                .is_empty()
+        );
         assert_eq!(
-            key_actions(BTN_SOUTH, 1, true, &mut repeater, now),
+            key_actions(BTN_SOUTH, 1, true, &mut repeater, now).actions,
             vec![ControllerAction::Accept]
         );
     }
@@ -1032,13 +1068,19 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            axes.update(ABS_X, 20_000, &mut repeater, now),
+            axes.update(ABS_X, 20_000, &mut repeater, now).actions,
             vec![ControllerAction::Right]
         );
-        assert_eq!(axes.update(ABS_X, 20_001, &mut repeater, now), Vec::new());
-        assert_eq!(axes.update(ABS_X, 0, &mut repeater, now), Vec::new());
         assert_eq!(
-            axes.update(ABS_X, -20_000, &mut repeater, now),
+            axes.update(ABS_X, 20_001, &mut repeater, now).actions,
+            Vec::new()
+        );
+        assert_eq!(
+            axes.update(ABS_X, 0, &mut repeater, now).actions,
+            Vec::new()
+        );
+        assert_eq!(
+            axes.update(ABS_X, -20_000, &mut repeater, now).actions,
             vec![ControllerAction::Left]
         );
     }
@@ -1050,12 +1092,15 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            axes.update(ABS_RY, 20_000, &mut repeater, now),
+            axes.update(ABS_RY, 20_000, &mut repeater, now).actions,
             vec![ControllerAction::ScrollPreviewDown]
         );
-        assert_eq!(axes.update(ABS_RY, 0, &mut repeater, now), Vec::new());
         assert_eq!(
-            axes.update(ABS_RY, -20_000, &mut repeater, now),
+            axes.update(ABS_RY, 0, &mut repeater, now).actions,
+            Vec::new()
+        );
+        assert_eq!(
+            axes.update(ABS_RY, -20_000, &mut repeater, now).actions,
             vec![ControllerAction::ScrollPreviewUp]
         );
     }
@@ -1067,12 +1112,15 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            axes.update(ABS_RX, 20_000, &mut repeater, now),
+            axes.update(ABS_RX, 20_000, &mut repeater, now).actions,
             vec![ControllerAction::ScrollPreviewRight]
         );
-        assert_eq!(axes.update(ABS_RX, 0, &mut repeater, now), Vec::new());
         assert_eq!(
-            axes.update(ABS_RX, -20_000, &mut repeater, now),
+            axes.update(ABS_RX, 0, &mut repeater, now).actions,
+            Vec::new()
+        );
+        assert_eq!(
+            axes.update(ABS_RX, -20_000, &mut repeater, now).actions,
             vec![ControllerAction::ScrollPreviewLeft]
         );
     }
@@ -1084,19 +1132,19 @@ mod tests {
         let now = Instant::now();
 
         assert_eq!(
-            axes.update(ABS_HAT0Y, -1, &mut repeater, now),
+            axes.update(ABS_HAT0Y, -1, &mut repeater, now).actions,
             vec![ControllerAction::Up]
         );
         assert_eq!(
-            axes.update(ABS_HAT0Y, 1, &mut repeater, now),
+            axes.update(ABS_HAT0Y, 1, &mut repeater, now).actions,
             vec![ControllerAction::Down]
         );
         assert_eq!(
-            axes.update(ABS_HAT0X, -1, &mut repeater, now),
+            axes.update(ABS_HAT0X, -1, &mut repeater, now).actions,
             vec![ControllerAction::Left]
         );
         assert_eq!(
-            axes.update(ABS_HAT0X, 1, &mut repeater, now),
+            axes.update(ABS_HAT0X, 1, &mut repeater, now).actions,
             vec![ControllerAction::Right]
         );
     }

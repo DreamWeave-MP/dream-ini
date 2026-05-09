@@ -180,8 +180,13 @@ impl GuiApp {
     fn drain_controller_actions(&mut self) -> Vec<ControllerAction> {
         let mut actions = Vec::new();
         for event in self.controller.drain_events() {
-            if let Some(action) = self.handle_controller_event(event) {
-                actions.push(action);
+            match event {
+                ControllerEvent::PurgeQueuedActions => actions.clear(),
+                event => {
+                    if let Some(action) = self.handle_controller_event(event) {
+                        actions.push(action);
+                    }
+                }
             }
         }
         actions
@@ -198,6 +203,7 @@ impl GuiApp {
                 None
             }
             ControllerEvent::Available(true) => None,
+            ControllerEvent::PurgeQueuedActions => None,
         }
     }
 
