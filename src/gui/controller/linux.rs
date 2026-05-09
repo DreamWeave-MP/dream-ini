@@ -689,12 +689,12 @@ const fn input_event_size() -> usize {
 }
 
 fn has_controller_capabilities(fd: RawFd) -> bool {
-    let event_bits = ioctl_bitset(fd, EVIOCGBIT_EV, 1).unwrap_or_default();
+    let event_bits = ioctl_bitset(fd, 0, 1).unwrap_or_default();
     if !test_bit(&event_bits, EV_KEY) {
         return false;
     }
 
-    let key_bits = ioctl_bitset(fd, EVIOCGBIT_KEY, KEY_MAX).unwrap_or_default();
+    let key_bits = ioctl_bitset(fd, EV_KEY, KEY_MAX).unwrap_or_default();
     let has_controller_button = [
         BTN_SOUTH,
         BTN_EAST,
@@ -712,21 +712,16 @@ fn has_controller_capabilities(fd: RawFd) -> bool {
     if !test_bit(&event_bits, EV_ABS) {
         return false;
     }
-    let abs_bits = ioctl_bitset(fd, EVIOCGBIT_ABS, ABS_MAX).unwrap_or_default();
+    let abs_bits = ioctl_bitset(fd, EV_ABS, ABS_MAX).unwrap_or_default();
     (test_bit(&abs_bits, ABS_X) && test_bit(&abs_bits, ABS_Y))
         || (test_bit(&abs_bits, ABS_HAT0X) && test_bit(&abs_bits, ABS_HAT0Y))
 }
 
-fn ioctl_bitset(fd: RawFd, request_base: libc::c_ulong, max_bit: u16) -> io::Result<Vec<u8>> {
+fn ioctl_bitset(fd: RawFd, event_type: u16, max_bit: u16) -> io::Result<Vec<u8>> {
     let mut bits = vec![0_u8; usize::from(max_bit / 8 + 1)];
+    let request = eviocgbit(event_type, bits.len());
     // SAFETY: bits points to a valid mutable buffer of the size encoded in the request.
-    let result = unsafe {
-        libc::ioctl(
-            fd,
-            request_base + bits.len() as libc::c_ulong,
-            bits.as_mut_ptr(),
-        )
-    };
+    let result = unsafe { libc::ioctl(fd, request, bits.as_mut_ptr()) };
     if result < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -739,17 +734,14 @@ fn test_bit(bits: &[u8], bit: u16) -> bool {
     bits.get(byte).is_some_and(|value| value & mask != 0)
 }
 
-const EVIOCGBIT_EV: libc::c_ulong = eviocgbit(0);
-const EVIOCGBIT_KEY: libc::c_ulong = eviocgbit(EV_KEY);
-const EVIOCGBIT_ABS: libc::c_ulong = eviocgbit(EV_ABS);
 const IOC_READ: u8 = 2;
 const IOC_NRSHIFT: u8 = 0;
 const IOC_TYPESHIFT: u8 = 8;
 const IOC_SIZESHIFT: u8 = 16;
 const IOC_DIRSHIFT: u8 = 30;
 
-const fn eviocgbit(event_type: u16) -> libc::c_ulong {
-    ioc(IOC_READ, b'E', 0x20 + event_type, 0)
+const fn eviocgbit(event_type: u16, size: usize) -> libc::c_ulong {
+    ioc(IOC_READ, b'E', 0x20 + event_type, size)
 }
 
 const fn eviocgabs(axis: u16) -> libc::c_ulong {
