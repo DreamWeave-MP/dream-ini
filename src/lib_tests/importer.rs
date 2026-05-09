@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::test_support::{unique_test_dir, values};
 use crate::{
-    ImportError, ImportOptions, IniImporter, MultiMap, parse_cfg_str, parse_ini_str, serialize_cfg,
-    serialize_resolved_cfg,
+    ImportError, ImportOptions, IniImporter, MultiMap, parse_cfg_str, parse_ini_str,
+    save_resolved_cfg_to_path, serialize_cfg, serialize_resolved_cfg,
 };
 
 #[test]
@@ -79,6 +79,31 @@ fn resolved_cfg_serialization_does_not_persist_composed_data_local_data_dir() {
 
     assert!(written.contains(&format!("data-local={}\n", local.display())));
     assert!(!written.contains(&format!("data={}\n", local.display())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn save_resolved_cfg_replaces_existing_file_and_cleans_temp_file() {
+    let dir = unique_test_dir("atomic-resolved-save");
+    let resources = dir.join("resources");
+    fs::create_dir_all(resources.join("vfs")).unwrap();
+    let output = dir.join("openmw.cfg");
+    fs::write(&output, "stale=true\n").unwrap();
+    let cfg = parse_cfg_str(&format!("resources={}\n", resources.display()));
+
+    save_resolved_cfg_to_path(&cfg, &output).unwrap();
+
+    let written = fs::read_to_string(&output).unwrap();
+    assert!(!written.contains("stale=true\n"));
+    assert!(written.contains(&format!("resources={}\n", resources.display())));
+    assert!(!written.contains(&format!("data={}\n", resources.join("vfs").display())));
+    let temp_entries = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".dream-ini-"))
+        .count();
+    assert_eq!(temp_entries, 0);
 
     fs::remove_dir_all(dir).unwrap();
 }

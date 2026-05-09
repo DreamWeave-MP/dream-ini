@@ -1,10 +1,14 @@
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use openmw_config::{EncodingSetting, OpenMWConfiguration};
 
 use crate::{ImportError, MultiMap};
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Serializes cfg entries with `OpenMW` directory semantics and resolved directory paths.
 ///
@@ -41,12 +45,10 @@ pub fn save_resolved_configuration_to_path(
     config: &OpenMWConfiguration,
     output_path: &Path,
 ) -> Result<(), ImportError> {
-    fs::write(output_path, serialize_resolved_configuration(config)).map_err(|source| {
-        ImportError::Io {
-            path: output_path.to_owned(),
-            source,
-        }
-    })?;
+    write_atomic(
+        output_path,
+        serialize_resolved_configuration(config).as_bytes(),
+    )?;
     Ok(())
 }
 
@@ -255,6 +257,56 @@ fn set_encoding(config: &mut OpenMWConfiguration, encoding: &str) -> Result<(), 
     config.set_encoding(Some(setting));
     Ok(())
 }
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let temp_path = temporary_path_for(path);
+    let write_result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp_path, path)?;
+        sync_parent_dir(parent);
+        Ok(())
+    })();
+
+    if let Err(source) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ImportError::Io {
+            path: path.to_owned(),
+            source,
+        });
+    }
+
+    Ok(())
+}
+
+fn temporary_path_for(path: &Path) -> PathBuf {
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("openmw.cfg");
+    let temp_name = format!(
+        ".{file_name}.dream-ini-{}-{counter}.tmp",
+        std::process::id()
+    );
+    path.with_file_name(temp_name)
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(parent: &Path) {
+    if let Ok(directory) = fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_parent: &Path) {}
 
 fn clear_preserved_key(config: &mut OpenMWConfiguration, key: &str) {
     let prefix = format!("{key}=");
