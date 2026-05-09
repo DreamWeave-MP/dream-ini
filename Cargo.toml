@@ -22,14 +22,14 @@ openmw-config = "1.0.5"
 windows = { version = "0.62.2", features = ["Win32_System_Com", "Win32_UI_Shell"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
-gilrs = "0.11"
+gilrs = { version = "0.11", optional = true }
 
 [features]
 default = ["gui"]
-gui = ["dep:eframe", "dep:image"]
+gui = ["dep:eframe", "dep:gilrs", "dep:image", "dep:libc"]
 lua = ["dep:mlua"]
 
 [dev-dependencies]
