@@ -368,7 +368,6 @@ impl Framebuffer {
             log_visible_viewport(log, &viewport);
             log_derived_page_info(log, &self.var);
         }
-        self.capture_snapshot_if_needed(snapshots, &viewport, log)?;
         renderer.render(
             egui_context,
             viewport.width,
@@ -377,6 +376,7 @@ impl Framebuffer {
             log,
             log_frame,
         )?;
+        self.capture_snapshot_if_needed(snapshots, &viewport, log)?;
         self.blit_rgba_surface(renderer.surface(), &viewport)
     }
 
@@ -743,28 +743,26 @@ impl TextureStore {
     }
 
     fn set(&mut self, id: egui::TextureId, delta: &egui::epaint::ImageDelta) -> io::Result<()> {
-        let image = TextureImage::from_image_data(&delta.image)?;
+        let metadata = TextureImageMetadata::from_image_data(&delta.image)?;
         if let Some(pos) = delta.pos {
-            let bytes_used = self.bytes_used();
-            let old_len = self
-                .textures
+            self.textures
                 .get(&id)
-                .map_or(0, |texture| texture.pixels.len());
-            let new_len = {
-                let texture = self.textures.get_mut(&id).ok_or_else(|| {
-                    io::Error::other("partial texture update for missing texture")
-                })?;
-                texture.update(pos, &image)?;
-                texture.pixels.len()
-            };
-            check_texture_budget(bytes_used, old_len, new_len)
+                .ok_or_else(|| io::Error::other("partial texture update for missing texture"))?
+                .validate_update_bounds(pos, metadata.width, metadata.height)?;
+            let image = TextureImage::from_image_data(&delta.image, metadata);
+            let texture = self
+                .textures
+                .get_mut(&id)
+                .ok_or_else(|| io::Error::other("partial texture update for missing texture"))?;
+            texture.update(pos, &image)
         } else {
             let bytes_used = self.bytes_used();
             let old_len = self
                 .textures
                 .get(&id)
                 .map_or(0, |texture| texture.pixels.len());
-            check_texture_budget(bytes_used, old_len, image.pixels.len())?;
+            check_texture_budget(bytes_used, old_len, metadata.byte_len)?;
+            let image = TextureImage::from_image_data(&delta.image, metadata);
             self.textures.insert(id, image);
             Ok(())
         }
@@ -791,6 +789,42 @@ impl TextureStore {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+struct TextureImageMetadata {
+    width: usize,
+    height: usize,
+    byte_len: usize,
+}
+
+#[cfg(target_os = "linux")]
+impl TextureImageMetadata {
+    fn from_image_data(image: &egui::ImageData) -> io::Result<Self> {
+        match image {
+            egui::ImageData::Color(color_image) => {
+                let [width, height] = color_image.size;
+                let pixel_count = width
+                    .checked_mul(height)
+                    .ok_or_else(|| io::Error::other("texture pixel count overflow"))?;
+                if color_image.pixels.len() != pixel_count {
+                    return Err(io::Error::other(format!(
+                        "texture pixel count mismatch: {} != {pixel_count}",
+                        color_image.pixels.len()
+                    )));
+                }
+                let byte_len = pixel_count
+                    .checked_mul(4)
+                    .ok_or_else(|| io::Error::other("texture byte count overflow"))?;
+                Ok(Self {
+                    width,
+                    height,
+                    byte_len,
+                })
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone)]
 struct TextureImage {
     width: usize,
@@ -800,45 +834,50 @@ struct TextureImage {
 
 #[cfg(target_os = "linux")]
 impl TextureImage {
-    fn from_image_data(image: &egui::ImageData) -> io::Result<Self> {
+    fn from_image_data(image: &egui::ImageData, metadata: TextureImageMetadata) -> Self {
         match image {
             egui::ImageData::Color(color_image) => {
-                let [width, height] = color_image.size;
-                let expected = width
-                    .checked_mul(height)
-                    .and_then(|pixels| pixels.checked_mul(4))
-                    .ok_or_else(|| io::Error::other("texture byte count overflow"))?;
-                let mut pixels = Vec::with_capacity(expected);
+                let mut pixels = Vec::with_capacity(metadata.byte_len);
                 for color in &color_image.pixels {
                     pixels.extend_from_slice(&[color.r(), color.g(), color.b(), color.a()]);
                 }
-                Ok(Self {
-                    width,
-                    height,
+                Self {
+                    width: metadata.width,
+                    height: metadata.height,
                     pixels,
-                })
+                }
             }
         }
     }
 
     fn update(&mut self, pos: [usize; 2], image: &Self) -> io::Result<()> {
-        let x_end = pos[0]
-            .checked_add(image.width)
-            .ok_or_else(|| io::Error::other("partial texture x range overflow"))?;
-        let y_end = pos[1]
-            .checked_add(image.height)
-            .ok_or_else(|| io::Error::other("partial texture y range overflow"))?;
-        if x_end > self.width || y_end > self.height {
-            return Err(io::Error::other(
-                "partial texture update exceeds texture bounds",
-            ));
-        }
+        self.validate_update_bounds(pos, image.width, image.height)?;
         for row in 0..image.height {
             let destination = ((pos[1] + row) * self.width + pos[0]) * 4;
             let source = row * image.width * 4;
             let byte_count = image.width * 4;
             self.pixels[destination..destination + byte_count]
                 .copy_from_slice(&image.pixels[source..source + byte_count]);
+        }
+        Ok(())
+    }
+
+    fn validate_update_bounds(
+        &self,
+        pos: [usize; 2],
+        width: usize,
+        height: usize,
+    ) -> io::Result<()> {
+        let x_end = pos[0]
+            .checked_add(width)
+            .ok_or_else(|| io::Error::other("partial texture x range overflow"))?;
+        let y_end = pos[1]
+            .checked_add(height)
+            .ok_or_else(|| io::Error::other("partial texture y range overflow"))?;
+        if x_end > self.width || y_end > self.height {
+            return Err(io::Error::other(
+                "partial texture update exceeds texture bounds",
+            ));
         }
         Ok(())
     }
@@ -1094,17 +1133,20 @@ fn multiply_u8(a: u8, b: u8) -> u8 {
 
 #[cfg(target_os = "linux")]
 fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {
+    let alpha = u16::from(source[3]);
     let inverse_alpha = u16::from(u8::MAX - source[3]);
-    destination[0] = blend_channel(source[0], destination[0], inverse_alpha);
-    destination[1] = blend_channel(source[1], destination[1], inverse_alpha);
-    destination[2] = blend_channel(source[2], destination[2], inverse_alpha);
+    destination[0] = blend_channel(source[0], destination[0], alpha, inverse_alpha);
+    destination[1] = blend_channel(source[1], destination[1], alpha, inverse_alpha);
+    destination[2] = blend_channel(source[2], destination[2], alpha, inverse_alpha);
     destination[3] = u8::MAX;
 }
 
 #[cfg(target_os = "linux")]
-fn blend_channel(source: u8, destination: u8, inverse_alpha: u16) -> u8 {
-    u8::try_from(u16::from(source) + ((u16::from(destination) * inverse_alpha + 127) / 255))
-        .unwrap_or(u8::MAX)
+fn blend_channel(source: u8, destination: u8, alpha: u16, inverse_alpha: u16) -> u8 {
+    u8::try_from(
+        ((u16::from(source) * alpha) + (u16::from(destination) * inverse_alpha) + 127) / 255,
+    )
+    .unwrap_or(u8::MAX)
 }
 
 #[cfg(target_os = "linux")]
@@ -1388,7 +1430,10 @@ fn framebuffer_draw_enabled() -> bool {
 
 #[cfg(target_os = "linux")]
 fn pack_color(var: &FbVarScreeninfo, (red, green, blue): (u8, u8, u8)) -> u32 {
-    pack_channel(red, &var.red) | pack_channel(green, &var.green) | pack_channel(blue, &var.blue)
+    pack_channel(red, &var.red)
+        | pack_channel(green, &var.green)
+        | pack_channel(blue, &var.blue)
+        | pack_channel(u8::MAX, &var.transp)
 }
 
 #[cfg(target_os = "linux")]
@@ -1514,6 +1559,7 @@ fn unix_timestamp() -> u64 {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn visible_viewport_uses_panned_page_base_offset() {
@@ -1604,12 +1650,12 @@ mod tests {
     }
 
     #[test]
-    fn alpha_blend_places_half_alpha_over_opaque_destination() {
-        let mut destination = [20, 40, 60, 255];
+    fn alpha_blend_places_straight_half_alpha_over_opaque_destination() {
+        let mut destination = [0, 0, 255, 255];
 
-        alpha_blend(&mut destination, [100, 50, 25, 128]);
+        alpha_blend(&mut destination, [255, 0, 0, 128]);
 
-        assert_eq!(destination, [110, 70, 55, 255]);
+        assert_eq!(destination, [128, 0, 127, 255]);
     }
 
     #[test]
@@ -1663,6 +1709,70 @@ mod tests {
                 MAX_TEXTURE_BYTES + 4
             )
         );
+    }
+
+    #[test]
+    fn texture_preflight_rejects_mismatched_pixel_count() {
+        let image = egui::ImageData::Color(Arc::new(egui::ColorImage {
+            size: [2, 2],
+            source_size: egui::vec2(2.0, 2.0),
+            pixels: vec![egui::Color32::WHITE; 3],
+        }));
+
+        let error = TextureImageMetadata::from_image_data(&image).expect_err("mismatched pixels");
+
+        assert_eq!(error.to_string(), "texture pixel count mismatch: 3 != 4");
+    }
+
+    #[test]
+    fn texture_store_rejects_over_budget_before_storing() {
+        let mut store = TextureStore::default();
+        let pixel_count = (MAX_TEXTURE_BYTES / 4) + 1;
+        let image =
+            egui::ColorImage::new([pixel_count, 1], vec![egui::Color32::WHITE; pixel_count]);
+        let delta = egui::epaint::ImageDelta::full(image, egui::TextureOptions::NEAREST);
+
+        let error = store
+            .set(egui::TextureId::Managed(0), &delta)
+            .expect_err("over-budget texture");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "texture byte budget exceeded: {} > {MAX_TEXTURE_BYTES}",
+                MAX_TEXTURE_BYTES + 4
+            )
+        );
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn pack_color_sets_opaque_transparency_bits() {
+        let var = FbVarScreeninfo {
+            red: FbBitfield {
+                offset: 16,
+                length: 8,
+                ..Default::default()
+            },
+            green: FbBitfield {
+                offset: 8,
+                length: 8,
+                ..Default::default()
+            },
+            blue: FbBitfield {
+                offset: 0,
+                length: 8,
+                ..Default::default()
+            },
+            transp: FbBitfield {
+                offset: 24,
+                length: 8,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(pack_color(&var, (0x12, 0x34, 0x56)), 0xff12_3456);
     }
 
     #[test]
