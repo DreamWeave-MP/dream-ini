@@ -77,14 +77,22 @@ impl SoftwareRenderer {
         let stage_start = log_frame.then(Instant::now);
         let mut primitive_stats = log_frame.then(PrimitiveStats::default);
         let mut raster_stats = log_frame.then(RasterStats::default);
-        let rasterize_result =
-            self.rasterize(&primitives, primitive_stats.as_mut(), raster_stats.as_mut());
+        let mut raster_timings = log_frame.then(RasterTimings::default);
+        let rasterize_result = self.rasterize(
+            &primitives,
+            primitive_stats.as_mut(),
+            raster_stats.as_mut(),
+            raster_timings.as_mut(),
+        );
         let rasterize_elapsed = elapsed_micros(stage_start);
         if let Some(stats) = primitive_stats {
             write_log(frame.log, stats.log_line());
         }
         if let Some(stats) = raster_stats {
             write_log(frame.log, stats.log_line());
+        }
+        if let Some(timings) = raster_timings {
+            write_log(frame.log, timings.log_line());
         }
         rasterize_result?;
 
@@ -115,6 +123,7 @@ impl SoftwareRenderer {
         primitives: &[egui::ClippedPrimitive],
         mut stats: Option<&mut PrimitiveStats>,
         mut raster_stats: Option<&mut RasterStats>,
+        mut raster_timings: Option<&mut RasterTimings>,
     ) -> io::Result<()> {
         for primitive in primitives {
             match &primitive.primitive {
@@ -127,6 +136,7 @@ impl SoftwareRenderer {
                         primitive.clip_rect,
                         borrow_optional_mut(&mut stats),
                         borrow_optional_mut(&mut raster_stats),
+                        borrow_optional_mut(&mut raster_timings),
                     )?;
                 }
                 egui::epaint::Primitive::Callback(_) => {
@@ -148,6 +158,7 @@ impl SoftwareRenderer {
         clip_rect: egui::Rect,
         mut stats: Option<&mut PrimitiveStats>,
         mut raster_stats: Option<&mut RasterStats>,
+        mut raster_timings: Option<&mut RasterTimings>,
     ) -> io::Result<()> {
         if let Some(stats) = borrow_optional_mut(&mut stats) {
             stats.mesh_indices += mesh.indices.len();
@@ -170,14 +181,18 @@ impl SoftwareRenderer {
         while index_offset + 2 < mesh.indices.len() {
             if index_offset + 5 < mesh.indices.len() {
                 let quad = &mesh.indices[index_offset..index_offset + 6];
+                let mut instrumentation = RasterInstrumentation {
+                    primitive_stats: borrow_optional_mut(&mut stats),
+                    raster_stats: borrow_optional_mut(&mut raster_stats),
+                    timings: borrow_optional_mut(&mut raster_timings),
+                };
                 if try_rasterize_quad_window(
                     surface,
                     mesh,
                     texture,
                     clip,
                     quad,
-                    borrow_optional_mut(&mut stats),
-                    borrow_optional_mut(&mut raster_stats),
+                    &mut instrumentation,
                 )? {
                     index_offset += 6;
                     continue;
@@ -203,6 +218,10 @@ impl SoftwareRenderer {
             if let Some(stats) = borrow_optional_mut(&mut stats) {
                 stats.record_generic_triangle(v0, v1, v2, texture, clip);
             }
+            let triangle_classification = raster_timings
+                .as_ref()
+                .map(|_| classify_triangle(v0, v1, v2, texture));
+            let triangle_start = raster_timings.as_ref().map(|_| Instant::now());
             rasterize_triangle(
                 surface,
                 v0,
@@ -212,9 +231,40 @@ impl SoftwareRenderer {
                 clip,
                 borrow_optional_mut(&mut raster_stats),
             );
+            if let (Some(start), Some(classification), Some(timings)) = (
+                triangle_start,
+                triangle_classification,
+                borrow_optional_mut(&mut raster_timings),
+            ) {
+                timings.record_generic_triangle(classification, start.elapsed().as_micros());
+            }
             index_offset += 3;
         }
         Ok(())
+    }
+}
+
+struct RasterInstrumentation<'a> {
+    primitive_stats: Option<&'a mut PrimitiveStats>,
+    raster_stats: Option<&'a mut RasterStats>,
+    timings: Option<&'a mut RasterTimings>,
+}
+
+impl RasterInstrumentation<'_> {
+    fn primitive_stats(&mut self) -> Option<&mut PrimitiveStats> {
+        borrow_optional_mut(&mut self.primitive_stats)
+    }
+
+    fn raster_stats(&mut self) -> Option<&mut RasterStats> {
+        borrow_optional_mut(&mut self.raster_stats)
+    }
+
+    fn timings(&mut self) -> Option<&mut RasterTimings> {
+        borrow_optional_mut(&mut self.timings)
+    }
+
+    fn timing_start(&self) -> Option<Instant> {
+        self.timings.as_ref().map(|_| Instant::now())
     }
 }
 
@@ -224,20 +274,21 @@ fn try_rasterize_quad_window(
     texture: &TextureImage,
     clip: ClipBounds,
     quad: &[u32],
-    mut stats: Option<&mut PrimitiveStats>,
-    mut raster_stats: Option<&mut RasterStats>,
+    instrumentation: &mut RasterInstrumentation<'_>,
 ) -> io::Result<bool> {
-    if let Some(stats) = borrow_optional_mut(&mut stats) {
+    let probe_start = instrumentation.timing_start();
+    if let Some(stats) = instrumentation.primitive_stats() {
         stats.quad_windows += 1;
     }
     if has_four_unique_indices(quad) {
-        if let Some(stats) = borrow_optional_mut(&mut stats) {
+        if let Some(stats) = instrumentation.primitive_stats() {
             stats.four_unique_quad_windows += 1;
         }
     } else {
-        if let Some(stats) = borrow_optional_mut(&mut stats) {
+        if let Some(stats) = instrumentation.primitive_stats() {
             stats.quad_windows_not_four_unique_indices += 1;
         }
+        record_quad_probe_elapsed(instrumentation, probe_start);
         return Ok(false);
     }
 
@@ -255,46 +306,149 @@ fn try_rasterize_quad_window(
         mesh.vertices.get(i4),
         mesh.vertices.get(i5),
     ) else {
-        if let Some(stats) = borrow_optional_mut(&mut stats) {
+        if let Some(stats) = instrumentation.primitive_stats() {
             stats.quad_window_vertex_lookup_failures += 1;
         }
+        record_quad_probe_elapsed(instrumentation, probe_start);
         return Ok(false);
     };
 
     let vertices = [v0, v1, v2, v3, v4, v5];
-    if let Some(stats) = borrow_optional_mut(&mut stats) {
+    if let Some(stats) = instrumentation.primitive_stats() {
         stats.record_quad_window(vertices, texture);
     }
+    record_quad_probe_elapsed(instrumentation, probe_start);
+
+    let solid_start = instrumentation.timing_start();
     if rasterize_axis_aligned_solid_quad(
         surface,
         vertices,
         texture,
         clip,
-        borrow_optional_mut(&mut raster_stats),
+        instrumentation.raster_stats(),
     ) {
-        if let Some(stats) = borrow_optional_mut(&mut stats) {
+        record_solid_quad_elapsed(instrumentation, solid_start);
+        if let Some(stats) = instrumentation.primitive_stats() {
             stats.solid_quad_fast_path_hits += 1;
         }
         return Ok(true);
     }
+    record_solid_quad_reject_elapsed(instrumentation, solid_start);
+
+    let textured_start = instrumentation.timing_start();
     if rasterize_axis_aligned_textured_quad(
         surface,
         vertices,
         texture,
         clip,
-        borrow_optional_mut(&mut raster_stats),
+        instrumentation.raster_stats(),
     ) {
-        if let Some(stats) = borrow_optional_mut(&mut stats) {
+        record_textured_quad_elapsed(instrumentation, textured_start);
+        if let Some(stats) = instrumentation.primitive_stats() {
             stats.textured_quad_fast_path_hits += 1;
         }
         return Ok(true);
     }
-    if let Some(stats) = stats
+    record_textured_quad_reject_elapsed(instrumentation, textured_start);
+    if let Some(stats) = instrumentation.primitive_stats()
         && let Some(rejection) = textured_quad_fast_path_rejection(vertices)
     {
         stats.record_textured_quad_rejection(rejection);
     }
     Ok(false)
+}
+
+#[derive(Debug, Default)]
+struct RasterTimings {
+    quad_window_probe: u128,
+    solid_quad: u128,
+    solid_quad_reject: u128,
+    textured_quad: u128,
+    textured_quad_reject: u128,
+    generic_solid_triangle: u128,
+    generic_textured_triangle: u128,
+    generic_degenerate_triangle: u128,
+}
+
+impl RasterTimings {
+    fn record_solid_quad_reject(&mut self, elapsed_us: u128) {
+        self.solid_quad_reject += elapsed_us;
+    }
+
+    fn record_textured_quad_reject(&mut self, elapsed_us: u128) {
+        self.textured_quad_reject += elapsed_us;
+    }
+
+    fn record_generic_triangle(
+        &mut self,
+        classification: TriangleClassification,
+        elapsed_us: u128,
+    ) {
+        match classification {
+            TriangleClassification::Degenerate => self.generic_degenerate_triangle += elapsed_us,
+            TriangleClassification::Solid => self.generic_solid_triangle += elapsed_us,
+            TriangleClassification::Textured => self.generic_textured_triangle += elapsed_us,
+        }
+    }
+
+    fn log_line(&self) -> String {
+        format!(
+            "software renderer raster_timings quad_window_probe_us={} solid_quad_us={} solid_quad_reject_us={} textured_quad_us={} textured_quad_reject_us={} generic_solid_triangle_us={} generic_textured_triangle_us={} generic_degenerate_triangle_us={}",
+            self.quad_window_probe,
+            self.solid_quad,
+            self.solid_quad_reject,
+            self.textured_quad,
+            self.textured_quad_reject,
+            self.generic_solid_triangle,
+            self.generic_textured_triangle,
+            self.generic_degenerate_triangle,
+        )
+    }
+}
+
+fn record_quad_probe_elapsed(
+    instrumentation: &mut RasterInstrumentation<'_>,
+    start: Option<Instant>,
+) {
+    if let (Some(timings), Some(start)) = (instrumentation.timings(), start) {
+        timings.quad_window_probe += start.elapsed().as_micros();
+    }
+}
+
+fn record_solid_quad_elapsed(
+    instrumentation: &mut RasterInstrumentation<'_>,
+    start: Option<Instant>,
+) {
+    if let (Some(timings), Some(start)) = (instrumentation.timings(), start) {
+        timings.solid_quad += start.elapsed().as_micros();
+    }
+}
+
+fn record_solid_quad_reject_elapsed(
+    instrumentation: &mut RasterInstrumentation<'_>,
+    start: Option<Instant>,
+) {
+    if let (Some(timings), Some(start)) = (instrumentation.timings(), start) {
+        timings.record_solid_quad_reject(start.elapsed().as_micros());
+    }
+}
+
+fn record_textured_quad_elapsed(
+    instrumentation: &mut RasterInstrumentation<'_>,
+    start: Option<Instant>,
+) {
+    if let (Some(timings), Some(start)) = (instrumentation.timings(), start) {
+        timings.textured_quad += start.elapsed().as_micros();
+    }
+}
+
+fn record_textured_quad_reject_elapsed(
+    instrumentation: &mut RasterInstrumentation<'_>,
+    start: Option<Instant>,
+) {
+    if let (Some(timings), Some(start)) = (instrumentation.timings(), start) {
+        timings.record_textured_quad_reject(start.elapsed().as_micros());
+    }
 }
 
 #[derive(Debug, Default)]
@@ -766,6 +920,45 @@ mod tests {
     }
 
     #[test]
+    fn renderer_stats_raster_timings_log_line() {
+        let timings = RasterTimings {
+            quad_window_probe: 1,
+            solid_quad: 2,
+            solid_quad_reject: 3,
+            textured_quad: 4,
+            textured_quad_reject: 5,
+            generic_solid_triangle: 6,
+            generic_textured_triangle: 7,
+            generic_degenerate_triangle: 8,
+        };
+
+        assert_eq!(
+            timings.log_line(),
+            "software renderer raster_timings quad_window_probe_us=1 solid_quad_us=2 solid_quad_reject_us=3 textured_quad_us=4 textured_quad_reject_us=5 generic_solid_triangle_us=6 generic_textured_triangle_us=7 generic_degenerate_triangle_us=8"
+        );
+    }
+
+    #[test]
+    fn renderer_stats_raster_timings_routes_rejections_separately() {
+        let mut timings = RasterTimings::default();
+
+        timings.record_solid_quad_reject(2);
+        timings.record_textured_quad_reject(3);
+        timings.record_generic_triangle(TriangleClassification::Solid, 5);
+        timings.record_generic_triangle(TriangleClassification::Textured, 7);
+        timings.record_generic_triangle(TriangleClassification::Degenerate, 11);
+
+        assert_eq!(timings.quad_window_probe, 0);
+        assert_eq!(timings.solid_quad, 0);
+        assert_eq!(timings.solid_quad_reject, 2);
+        assert_eq!(timings.textured_quad, 0);
+        assert_eq!(timings.textured_quad_reject, 3);
+        assert_eq!(timings.generic_solid_triangle, 5);
+        assert_eq!(timings.generic_textured_triangle, 7);
+        assert_eq!(timings.generic_degenerate_triangle, 11);
+    }
+
+    #[test]
     fn renderer_stats_count_textured_quad_fast_path_without_generic_triangles() {
         let texture_id = egui::TextureId::Managed(1);
         let mut renderer = SoftwareRenderer::default();
@@ -783,6 +976,7 @@ mod tests {
                 &mesh,
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
                 Some(&mut stats),
+                None,
                 None,
             )
             .expect("rasterize mesh");
@@ -811,6 +1005,7 @@ mod tests {
                 &mesh,
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
                 Some(&mut stats),
+                None,
                 None,
             )
             .expect("rasterize mesh");
