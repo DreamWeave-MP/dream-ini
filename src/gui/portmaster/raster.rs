@@ -151,6 +151,9 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
     let Some(color) = solid_triangle_color(vertices[0], vertices[1], vertices[2], texture) else {
         return false;
     };
+    if color[3] != u8::MAX {
+        return false;
+    }
     if solid_triangle_color(vertices[3], vertices[4], vertices[5], texture) != Some(color) {
         return false;
     }
@@ -656,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn axis_aligned_quad_fast_path_accepts_solid_rectangle() {
+    fn axis_aligned_quad_fast_path_accepts_opaque_solid_rectangle() {
         let vertices = test_quad_vertices();
 
         let (accepted, pixels) = render_test_quad(5, 5, vertices, full_clip(5, 5));
@@ -719,6 +722,19 @@ mod tests {
 
         assert!(!accepted);
         assert_eq!(white_pixel_count(&surface.pixels), 0);
+    }
+
+    #[test]
+    fn axis_aligned_quad_fast_path_rejects_translucent_solid_quad() {
+        let mut vertices = test_quad_vertices();
+        for vertex in &mut vertices {
+            vertex.color = egui::Color32::from_rgba_premultiplied(128, 128, 128, 128);
+        }
+
+        let (accepted, pixels) = render_test_quad(5, 5, vertices, full_clip(5, 5));
+
+        assert!(!accepted);
+        assert_eq!(white_pixel_count(&pixels), 0);
     }
 
     fn render_test_triangle(
