@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
 use super::log::{SharedLog, write_log};
+use super::pacing::DisplayTiming;
 use super::renderer::SoftwareRenderer;
 use super::surface::SoftwareSurface;
 use super::{GuiFrame, GuiShell};
@@ -24,7 +25,7 @@ pub(super) struct Framebuffer {
     path: PathBuf,
     file: File,
     fix: FbFixScreeninfo,
-    pub(super) var: FbVarScreeninfo,
+    var: FbVarScreeninfo,
     memory: NonNull<u8>,
     memory_len: NonZeroUsize,
 }
@@ -92,6 +93,24 @@ impl Framebuffer {
                 "unsupported framebuffer format: {bits_per_pixel} bits per pixel"
             ))),
         }
+    }
+
+    pub(super) const fn refresh_timing(&self) -> DisplayTiming {
+        DisplayTiming::new(
+            self.var.pixclock,
+            self.var.xres,
+            self.var.yres,
+            [
+                self.var.left_margin,
+                self.var.right_margin,
+                self.var.hsync_len,
+            ],
+            [
+                self.var.upper_margin,
+                self.var.lower_margin,
+                self.var.vsync_len,
+            ],
+        )
     }
 
     pub(super) fn log_info(&self, log: Option<&SharedLog>) {
@@ -372,10 +391,10 @@ impl Drop for Framebuffer {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct FbBitfield {
-    pub(super) offset: u32,
-    pub(super) length: u32,
-    pub(super) msb_right: u32,
+struct FbBitfield {
+    offset: u32,
+    length: u32,
+    msb_right: u32,
 }
 
 #[repr(C)]
@@ -400,36 +419,36 @@ struct FbFixScreeninfo {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct FbVarScreeninfo {
-    pub(super) xres: u32,
-    pub(super) yres: u32,
-    pub(super) xres_virtual: u32,
-    pub(super) yres_virtual: u32,
-    pub(super) xoffset: u32,
-    pub(super) yoffset: u32,
-    pub(super) bits_per_pixel: u32,
-    pub(super) grayscale: u32,
-    pub(super) red: FbBitfield,
-    pub(super) green: FbBitfield,
-    pub(super) blue: FbBitfield,
-    pub(super) transp: FbBitfield,
-    pub(super) nonstd: u32,
-    pub(super) activate: u32,
-    pub(super) height: u32,
-    pub(super) width: u32,
-    pub(super) accel_flags: u32,
-    pub(super) pixclock: u32,
-    pub(super) left_margin: u32,
-    pub(super) right_margin: u32,
-    pub(super) upper_margin: u32,
-    pub(super) lower_margin: u32,
-    pub(super) hsync_len: u32,
-    pub(super) vsync_len: u32,
-    pub(super) sync: u32,
-    pub(super) vmode: u32,
-    pub(super) rotate: u32,
-    pub(super) colorspace: u32,
-    pub(super) reserved: [u32; 4],
+struct FbVarScreeninfo {
+    xres: u32,
+    yres: u32,
+    xres_virtual: u32,
+    yres_virtual: u32,
+    xoffset: u32,
+    yoffset: u32,
+    bits_per_pixel: u32,
+    grayscale: u32,
+    red: FbBitfield,
+    green: FbBitfield,
+    blue: FbBitfield,
+    transp: FbBitfield,
+    nonstd: u32,
+    activate: u32,
+    height: u32,
+    width: u32,
+    accel_flags: u32,
+    pixclock: u32,
+    left_margin: u32,
+    right_margin: u32,
+    upper_margin: u32,
+    lower_margin: u32,
+    hsync_len: u32,
+    vsync_len: u32,
+    sync: u32,
+    vmode: u32,
+    rotate: u32,
+    colorspace: u32,
+    reserved: [u32; 4],
 }
 
 fn get_fix_info(file: &File) -> io::Result<FbFixScreeninfo> {
