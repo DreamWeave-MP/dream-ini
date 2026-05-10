@@ -794,7 +794,7 @@ fn rasterize_solid_triangle(
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
-            solid_triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
+            triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
         } else {
             (bounds.min_x, bounds.max_x)
         };
@@ -844,7 +844,7 @@ fn rasterize_solid_triangle(
     }
 }
 
-fn solid_triangle_scanline_x_range(
+fn triangle_scanline_x_range(
     vertices: TriangleVertices<'_>,
     bounds: TriangleRasterBounds,
     pixel_center_y: f32,
@@ -924,12 +924,25 @@ fn rasterize_textured_triangle_no_stats(
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
+    let narrow_scanlines = bounds.pixel_area() > SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
-        let mut pixel_edge0 = row_edge0;
-        let mut pixel_edge1 = row_edge1;
-        let mut pixel_edge2 = row_edge2;
-        for x in bounds.min_x..bounds.max_x {
+        let (start_x, end_x) = if narrow_scanlines {
+            triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
+        } else {
+            (bounds.min_x, bounds.max_x)
+        };
+        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
+            let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
+            (
+                edge(v1.pos, v2.pos, pixel_center),
+                edge(v2.pos, v0.pos, pixel_center),
+                edge(v0.pos, v1.pos, pixel_center),
+            )
+        } else {
+            (row_edge0, row_edge1, row_edge2)
+        };
+        for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
             let w2 = pixel_edge2 * raster.inv_area;
@@ -963,12 +976,25 @@ fn rasterize_textured_triangle_with_stats(
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
+    let narrow_scanlines = bounds.pixel_area() > SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
-        let mut pixel_edge0 = row_edge0;
-        let mut pixel_edge1 = row_edge1;
-        let mut pixel_edge2 = row_edge2;
-        for x in bounds.min_x..bounds.max_x {
+        let (start_x, end_x) = if narrow_scanlines {
+            triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
+        } else {
+            (bounds.min_x, bounds.max_x)
+        };
+        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
+            let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
+            (
+                edge(v1.pos, v2.pos, pixel_center),
+                edge(v2.pos, v0.pos, pixel_center),
+                edge(v0.pos, v1.pos, pixel_center),
+            )
+        } else {
+            (row_edge0, row_edge1, row_edge2)
+        };
+        for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
             let w2 = pixel_edge2 * raster.inv_area;
