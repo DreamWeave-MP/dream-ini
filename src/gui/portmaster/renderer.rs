@@ -8,10 +8,11 @@ use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
     ClipBounds, RasterStats, SolidTriangleColorDecision, TexturedQuadFastPathRejection,
-    TriangleClassification, TriangleRasterBounds, TriangleScanWorkEstimate, classify_triangle,
-    estimate_triangle_scan_work, is_axis_aligned_quad, rasterize_axis_aligned_solid_quad,
-    rasterize_axis_aligned_textured_quad, rasterize_triangle, solid_triangle_color_decision,
-    textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
+    TriangleClassification, TriangleRasterBounds, TriangleScanWorkEstimate, TriangleTexelSample,
+    classify_triangle, estimate_triangle_scan_work, is_axis_aligned_quad,
+    rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad, rasterize_triangle,
+    solid_triangle_color_decision, textured_quad_fast_path_rejection,
+    triangle_nearest_texel_sample, triangle_raster_bounds, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -496,6 +497,8 @@ struct PrimitiveStats {
     generic_textured_triangles: usize,
     generic_textured_solid_reject_non_uniform_vertex_color: usize,
     generic_textured_solid_reject_non_uniform_texel: usize,
+    generic_textured_non_uniform_color_constant_texel: usize,
+    generic_textured_non_uniform_color_varying_texel: usize,
     degenerate_triangles: usize,
     generic_triangle_bbox_px_buckets: TriangleBboxBuckets,
     generic_solid_triangle_bbox_px_buckets: TriangleBboxBuckets,
@@ -545,6 +548,7 @@ struct TexturedTriangleOffender {
     source: TriangleSource,
     positions: [egui::Pos2; 3],
     uvs: [egui::Pos2; 3],
+    texel_sample: TriangleTexelSample,
 }
 
 #[derive(Debug, Default)]
@@ -792,10 +796,16 @@ impl PrimitiveStats {
                 });
             }
             TriangleClassification::Textured => {
+                let texel_sample = triangle_nearest_texel_sample(v0, v1, v2, record.texture);
                 match solid_triangle_color_decision(v0, v1, v2, record.texture) {
                     SolidTriangleColorDecision::Solid(_) => {}
                     SolidTriangleColorDecision::NonUniformVertexColor => {
                         self.generic_textured_solid_reject_non_uniform_vertex_color += 1;
+                        if texel_sample.is_uniform() {
+                            self.generic_textured_non_uniform_color_constant_texel += 1;
+                        } else {
+                            self.generic_textured_non_uniform_color_varying_texel += 1;
+                        }
                     }
                     SolidTriangleColorDecision::NonUniformTexel => {
                         self.generic_textured_solid_reject_non_uniform_texel += 1;
@@ -812,6 +822,7 @@ impl PrimitiveStats {
                         source: record.source,
                         positions,
                         uvs: [v0.uv, v1.uv, v2.uv],
+                        texel_sample,
                     });
             }
         }
@@ -839,7 +850,7 @@ impl PrimitiveStats {
 
     fn log_line(&self) -> String {
         format!(
-            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
+            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -864,6 +875,8 @@ impl PrimitiveStats {
             self.generic_textured_triangles,
             self.generic_textured_solid_reject_non_uniform_vertex_color,
             self.generic_textured_solid_reject_non_uniform_texel,
+            self.generic_textured_non_uniform_color_constant_texel,
+            self.generic_textured_non_uniform_color_varying_texel,
             self.degenerate_triangles,
             self.generic_triangle_bbox_px_buckets,
             self.generic_solid_triangle_bbox_px_buckets,
@@ -937,7 +950,7 @@ fn format_solid_triangle_offender(index: usize, offender: SolidTriangleOffender)
 
 fn format_textured_triangle_offender(index: usize, offender: TexturedTriangleOffender) -> String {
     format!(
-        "offender{index}_candidate_px={} offender{index}_clipped_bbox_px={} offender{index}_narrowed_rows={} offender{index}_full_scan_rows={} offender{index}_bounds={},{},{},{} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_v0={:.1},{:.1} offender{index}_uv0={:.3},{:.3} offender{index}_v1={:.1},{:.1} offender{index}_uv1={:.3},{:.3} offender{index}_v2={:.1},{:.1} offender{index}_uv2={:.3},{:.3}",
+        "offender{index}_candidate_px={} offender{index}_clipped_bbox_px={} offender{index}_narrowed_rows={} offender{index}_full_scan_rows={} offender{index}_bounds={},{},{},{} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_v0={:.1},{:.1} offender{index}_uv0={:.3},{:.3} offender{index}_v1={:.1},{:.1} offender{index}_uv1={:.3},{:.3} offender{index}_v2={:.1},{:.1} offender{index}_uv2={:.3},{:.3} offender{index}_texels={} offender{index}_constant_texel={} offender{index}_texel_rgba={}",
         offender.scan_work.candidate_px,
         offender.clipped_bbox_px,
         offender.scan_work.narrowed_rows,
@@ -960,7 +973,27 @@ fn format_textured_triangle_offender(index: usize, offender: TexturedTriangleOff
         offender.positions[2].y,
         offender.uvs[2].x,
         offender.uvs[2].y,
+        format_triangle_texels(offender.texel_sample),
+        u8::from(offender.texel_sample.is_uniform()),
+        format_texel_rgba(offender.texel_sample.uniform_color),
     )
+}
+
+fn format_triangle_texels(sample: TriangleTexelSample) -> String {
+    match sample.texels {
+        Some([first, second, third]) => format!(
+            "{},{};{},{};{},{}",
+            first.0, first.1, second.0, second.1, third.0, third.1
+        ),
+        None => "empty".to_owned(),
+    }
+}
+
+fn format_texel_rgba(color: Option<[u8; 4]>) -> String {
+    match color {
+        Some([r, g, b, a]) => format!("{r},{g},{b},{a}"),
+        None => "none".to_owned(),
+    }
 }
 
 fn mesh_index_to_usize(index: u32) -> io::Result<usize> {
@@ -1070,6 +1103,8 @@ mod tests {
             1
         );
         assert_eq!(stats.generic_textured_solid_reject_non_uniform_texel, 0);
+        assert_eq!(stats.generic_textured_non_uniform_color_constant_texel, 1);
+        assert_eq!(stats.generic_textured_non_uniform_color_varying_texel, 0);
         assert_eq!(stats.degenerate_triangles, 1);
         assert_eq!(
             stats.generic_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
@@ -1094,6 +1129,8 @@ mod tests {
         assert!(log_line.contains("generic_textured_triangles=1"));
         assert!(log_line.contains("generic_textured_solid_reject_non_uniform_vertex_color=1"));
         assert!(log_line.contains("generic_textured_solid_reject_non_uniform_texel=0"));
+        assert!(log_line.contains("generic_textured_non_uniform_color_constant_texel=1"));
+        assert!(log_line.contains("generic_textured_non_uniform_color_varying_texel=0"));
         assert!(log_line.contains("textured_quad_fast_path_hits=2"));
         assert!(log_line.contains("textured_quad_reject_non_affine_uv=1"));
         assert!(log_line.contains("degenerate_triangles=1"));
@@ -1140,6 +1177,43 @@ mod tests {
             1
         );
         assert_eq!(stats.generic_textured_solid_reject_non_uniform_texel, 0);
+        assert_eq!(stats.generic_textured_non_uniform_color_constant_texel, 1);
+        assert_eq!(stats.generic_textured_non_uniform_color_varying_texel, 0);
+    }
+
+    #[test]
+    fn primitive_stats_counts_non_uniform_color_with_varying_texels() {
+        let texture = TextureImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 255, 255, 255, 0, 0, 0, 255],
+        };
+        let mut v0 = test_vertex(0.0, 0.0);
+        let mut v1 = test_vertex(2.0, 0.0);
+        let mut v2 = test_vertex(0.0, 2.0);
+        v0.uv = egui::pos2(0.0, 0.0);
+        v1.uv = egui::pos2(1.0, 0.0);
+        v2.uv = egui::pos2(0.0, 0.0);
+        v2.color = egui::Color32::BLACK;
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_generic_triangle(
+            &v0,
+            &v1,
+            &v2,
+            &texture,
+            clip_bounds(16, 16),
+            triangle_source(1, 0),
+        );
+
+        assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(
+            stats.generic_textured_solid_reject_non_uniform_vertex_color,
+            1
+        );
+        assert_eq!(stats.generic_textured_solid_reject_non_uniform_texel, 0);
+        assert_eq!(stats.generic_textured_non_uniform_color_constant_texel, 0);
+        assert_eq!(stats.generic_textured_non_uniform_color_varying_texel, 1);
     }
 
     #[test]
@@ -1172,6 +1246,8 @@ mod tests {
             0
         );
         assert_eq!(stats.generic_textured_solid_reject_non_uniform_texel, 1);
+        assert_eq!(stats.generic_textured_non_uniform_color_constant_texel, 0);
+        assert_eq!(stats.generic_textured_non_uniform_color_varying_texel, 0);
     }
 
     #[test]
@@ -1489,12 +1565,16 @@ mod tests {
                     egui::pos2(1.0, 0.25),
                     egui::pos2(0.75, 1.0),
                 ],
+                texel_sample: TriangleTexelSample {
+                    texels: Some([(0, 1), (2, 3), (4, 5)]),
+                    uniform_color: None,
+                },
             });
 
         assert_eq!(
             stats.textured_triangle_offenders_log_line().as_deref(),
             Some(
-                "software renderer textured_triangle_offenders shown=1 cap=8 offender0_candidate_px=14 offender0_clipped_bbox_px=9 offender0_narrowed_rows=2 offender0_full_scan_rows=1 offender0_bounds=1,2,4,5 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_v0=1.2,2.5 offender0_uv0=0.000,0.500 offender0_v1=3.0,4.0 offender0_uv1=1.000,0.250 offender0_v2=5.0,6.8 offender0_uv2=0.750,1.000"
+                "software renderer textured_triangle_offenders shown=1 cap=8 offender0_candidate_px=14 offender0_clipped_bbox_px=9 offender0_narrowed_rows=2 offender0_full_scan_rows=1 offender0_bounds=1,2,4,5 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_v0=1.2,2.5 offender0_uv0=0.000,0.500 offender0_v1=3.0,4.0 offender0_uv1=1.000,0.250 offender0_v2=5.0,6.8 offender0_uv2=0.750,1.000 offender0_texels=0,1;2,3;4,5 offender0_constant_texel=0 offender0_texel_rgba=none"
             )
         );
     }
@@ -1515,15 +1595,19 @@ mod tests {
 
         assert_eq!(
             log_line,
-            "software renderer textured_triangle_offenders shown=2 cap=8 offender0_candidate_px=12 offender0_clipped_bbox_px=9 offender0_narrowed_rows=1 offender0_full_scan_rows=2 offender0_bounds=0,0,9,1 offender0_primitive=2 offender0_mesh_index_offset=6 offender0_v0=0.0,0.0 offender0_uv0=0.000,0.000 offender0_v1=0.0,0.0 offender0_uv1=0.000,0.000 offender0_v2=0.0,0.0 offender0_uv2=0.000,0.000 offender1_candidate_px=9 offender1_clipped_bbox_px=12 offender1_narrowed_rows=1 offender1_full_scan_rows=2 offender1_bounds=0,0,12,1 offender1_primitive=1 offender1_mesh_index_offset=3 offender1_v0=0.0,0.0 offender1_uv0=0.000,0.000 offender1_v1=0.0,0.0 offender1_uv1=0.000,0.000 offender1_v2=0.0,0.0 offender1_uv2=0.000,0.000"
+            "software renderer textured_triangle_offenders shown=2 cap=8 offender0_candidate_px=12 offender0_clipped_bbox_px=9 offender0_narrowed_rows=1 offender0_full_scan_rows=2 offender0_bounds=0,0,9,1 offender0_primitive=2 offender0_mesh_index_offset=6 offender0_v0=0.0,0.0 offender0_uv0=0.000,0.000 offender0_v1=0.0,0.0 offender0_uv1=0.000,0.000 offender0_v2=0.0,0.0 offender0_uv2=0.000,0.000 offender0_texels=0,0;0,0;0,0 offender0_constant_texel=1 offender0_texel_rgba=255,255,255,255 offender1_candidate_px=9 offender1_clipped_bbox_px=12 offender1_narrowed_rows=1 offender1_full_scan_rows=2 offender1_bounds=0,0,12,1 offender1_primitive=1 offender1_mesh_index_offset=3 offender1_v0=0.0,0.0 offender1_uv0=0.000,0.000 offender1_v1=0.0,0.0 offender1_uv1=0.000,0.000 offender1_v2=0.0,0.0 offender1_uv2=0.000,0.000 offender1_texels=0,0;0,0;0,0 offender1_constant_texel=1 offender1_texel_rgba=255,255,255,255"
         );
         assert!(!log_line.contains(" bounds="));
         assert!(!log_line.contains(" uv0="));
         assert!(log_line.contains("offender0_candidate_px="));
         assert!(log_line.contains("offender0_clipped_bbox_px="));
         assert!(log_line.contains("offender0_uv0="));
+        assert!(log_line.contains("offender0_texels="));
+        assert!(log_line.contains("offender0_constant_texel="));
+        assert!(log_line.contains("offender0_texel_rgba="));
         assert!(log_line.contains("offender1_candidate_px="));
         assert!(log_line.contains("offender1_uv0="));
+        assert!(log_line.contains("offender1_texels="));
     }
 
     #[test]
@@ -1736,6 +1820,10 @@ mod tests {
             source: triangle_source(primitive_index, mesh_index_offset),
             positions: [egui::Pos2::ZERO; 3],
             uvs: [egui::Pos2::ZERO; 3],
+            texel_sample: TriangleTexelSample {
+                texels: Some([(0, 0), (0, 0), (0, 0)]),
+                uniform_color: Some([255, 255, 255, 255]),
+            },
         }
     }
 

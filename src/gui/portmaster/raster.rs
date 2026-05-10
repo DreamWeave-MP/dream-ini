@@ -66,6 +66,18 @@ pub(super) struct TriangleScanWorkEstimate {
     pub(super) full_scan_rows: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TriangleTexelSample {
+    pub(super) texels: Option<[(usize, usize); 3]>,
+    pub(super) uniform_color: Option<[u8; 4]>,
+}
+
+impl TriangleTexelSample {
+    pub(super) const fn is_uniform(self) -> bool {
+        self.uniform_color.is_some()
+    }
+}
+
 impl RasterStats {
     fn record_alpha_px(&mut self, alpha: u8, count: usize) {
         match alpha {
@@ -1179,6 +1191,36 @@ pub(super) fn solid_triangle_color_decision(
         color_to_array(v0.color),
         texel_color(texture, t0),
     ))
+}
+
+pub(super) fn triangle_nearest_texel_sample(
+    v0: &egui::epaint::Vertex,
+    v1: &egui::epaint::Vertex,
+    v2: &egui::epaint::Vertex,
+    texture: &TextureImage,
+) -> TriangleTexelSample {
+    if texture.width == 0 || texture.height == 0 {
+        return TriangleTexelSample {
+            texels: None,
+            uniform_color: Some([255, 255, 255, 255]),
+        };
+    }
+
+    let texels = [
+        nearest_texel(texture, v0.uv),
+        nearest_texel(texture, v1.uv),
+        nearest_texel(texture, v2.uv),
+    ];
+    let uniform_color = if texels[0] == texels[1] && texels[0] == texels[2] {
+        Some(texel_color(texture, texels[0]))
+    } else {
+        None
+    };
+
+    TriangleTexelSample {
+        texels: Some(texels),
+        uniform_color,
+    }
 }
 
 fn solid_triangle_color(
