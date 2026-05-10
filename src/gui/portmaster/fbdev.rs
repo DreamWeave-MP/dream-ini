@@ -239,6 +239,11 @@ impl Framebuffer {
         // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
         let pixels =
             unsafe { std::slice::from_raw_parts_mut(self.memory.as_ptr(), self.memory_len.get()) };
+        if let BlitFormat::Fast32ByteAligned(format) = blit_format {
+            blit_fast32_rows(pixels, surface, viewport, format)?;
+            return Ok(blit_format);
+        }
+
         for y in 0..viewport.height {
             let row_offset = y
                 .checked_mul(viewport.line_length)
@@ -274,13 +279,8 @@ impl Framebuffer {
                     surface.pixels[source_offset + 2],
                 );
                 let pixel = &mut pixels[pixel_offset..pixel_end];
-                match blit_format {
-                    BlitFormat::Fast32ByteAligned(format) => write_fast_pixel(pixel, format, color),
-                    BlitFormat::GenericPackColor => {
-                        let packed = pack_color(&self.var, color);
-                        write_pixel(pixel, viewport.bytes_per_pixel, packed);
-                    }
-                }
+                let packed = pack_color(&self.var, color);
+                write_pixel(pixel, viewport.bytes_per_pixel, packed);
             }
         }
 
@@ -780,6 +780,7 @@ fn distinct_bytes(bytes: [Option<usize>; 4]) -> bool {
     true
 }
 
+#[cfg(test)]
 fn write_fast_pixel(
     pixel: &mut [u8],
     format: Fast32ByteAlignedBlit,
@@ -791,6 +792,77 @@ fn write_fast_pixel(
     pixel[format.blue] = blue;
     if let Some(alpha) = format.alpha {
         pixel[alpha] = u8::MAX;
+    }
+}
+
+fn blit_fast32_rows(
+    pixels: &mut [u8],
+    surface: &SoftwareSurface,
+    viewport: &VisibleViewport,
+    format: Fast32ByteAlignedBlit,
+) -> io::Result<()> {
+    if viewport.bytes_per_pixel != 4 {
+        return Err(io::Error::other(
+            "fast32 framebuffer viewport is not 4 bytes per pixel",
+        ));
+    }
+    let row_bytes = viewport
+        .width
+        .checked_mul(4)
+        .ok_or_else(|| io::Error::other("fast32 framebuffer row byte count overflow"))?;
+    let source_len = surface
+        .width
+        .checked_mul(surface.height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| io::Error::other("software surface byte count overflow"))?;
+    if source_len > surface.pixels.len() {
+        return Err(io::Error::other("software surface pixels are truncated"));
+    }
+    for y in 0..viewport.height {
+        let framebuffer_row_start = viewport_row_offset(viewport, y)?;
+        let framebuffer_row_end = framebuffer_row_start
+            .checked_add(row_bytes)
+            .ok_or_else(|| io::Error::other("fast32 framebuffer row end overflow"))?;
+        let row_scanline_end = viewport
+            .x_offset_bytes
+            .checked_add(row_bytes)
+            .ok_or_else(|| io::Error::other("fast32 framebuffer scanline end overflow"))?;
+        if framebuffer_row_end > pixels.len() || row_scanline_end > viewport.line_length {
+            continue;
+        }
+
+        let source_row_start = y
+            .checked_mul(surface.width)
+            .and_then(|offset| offset.checked_mul(4))
+            .ok_or_else(|| io::Error::other("software surface row offset overflow"))?;
+        let source_row_end = source_row_start
+            .checked_add(row_bytes)
+            .ok_or_else(|| io::Error::other("software surface row end overflow"))?;
+        let source_row = surface
+            .pixels
+            .get(source_row_start..source_row_end)
+            .ok_or_else(|| io::Error::other("software surface row exceeds pixel buffer"))?;
+
+        let framebuffer_row = &mut pixels[framebuffer_row_start..framebuffer_row_end];
+        convert_rgba_row_to_fast32(framebuffer_row, source_row, format);
+    }
+
+    Ok(())
+}
+
+fn convert_rgba_row_to_fast32(
+    destination: &mut [u8],
+    source: &[u8],
+    format: Fast32ByteAlignedBlit,
+) {
+    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+        destination.fill(0);
+        destination[format.red] = source[0];
+        destination[format.green] = source[1];
+        destination[format.blue] = source[2];
+        if let Some(alpha) = format.alpha {
+            destination[alpha] = u8::MAX;
+        }
     }
 }
 
@@ -949,6 +1021,53 @@ mod tests {
     }
 
     #[test]
+    fn portmaster_fast32_row_blit_matches_generic_pack_color() {
+        let var = rgb32_var_without_alpha();
+        let format = detect_fast_blit_format(&var).expect("fast blit format");
+        let viewport = VisibleViewport {
+            width: 3,
+            height: 2,
+            line_length: 12,
+            ..test_viewport(0)
+        };
+        let surface = test_surface(viewport.width, viewport.height);
+        let mut fast = vec![0xee; viewport.line_length * viewport.height];
+        let mut generic = fast.clone();
+
+        blit_fast32_rows(&mut fast, &surface, &viewport, format).expect("fast row blit");
+        blit_generic_for_test(&mut generic, &surface, &viewport, &var).expect("generic blit");
+
+        assert_eq!(fast, generic);
+    }
+
+    #[test]
+    fn portmaster_fast32_row_blit_preserves_stride_padding() {
+        let var = rgb32_var_without_alpha();
+        let format = detect_fast_blit_format(&var).expect("fast blit format");
+        let viewport = VisibleViewport {
+            xoffset: 1,
+            width: 3,
+            height: 2,
+            line_length: 20,
+            x_offset_bytes: 4,
+            base_offset: 4,
+            ..test_viewport(0)
+        };
+        let surface = test_surface(viewport.width, viewport.height);
+        let mut fast = vec![0xaa; viewport.line_length * viewport.height];
+        let mut generic = fast.clone();
+
+        blit_fast32_rows(&mut fast, &surface, &viewport, format).expect("fast row blit");
+        blit_generic_for_test(&mut generic, &surface, &viewport, &var).expect("generic blit");
+
+        assert_eq!(fast, generic);
+        assert_eq!(&fast[0..4], &[0xaa; 4]);
+        assert_eq!(&fast[16..20], &[0xaa; 4]);
+        assert_eq!(&fast[20..24], &[0xaa; 4]);
+        assert_eq!(&fast[36..40], &[0xaa; 4]);
+    }
+
+    #[test]
     fn portmaster_fast_blit_rejects_non_byte_aligned_layout() {
         let mut var = rgb32_var_without_alpha();
         var.red.offset = 17;
@@ -985,6 +1104,46 @@ mod tests {
             transp: FbBitfield::default(),
             ..Default::default()
         }
+    }
+
+    fn test_surface(width: usize, height: usize) -> SoftwareSurface {
+        let mut pixels = Vec::with_capacity(width * height * 4);
+        for index in 0..width * height {
+            let base = u8::try_from(index * 17).expect("test color fits u8");
+            pixels.extend_from_slice(&[base, base.wrapping_add(3), base.wrapping_add(7), 0x80]);
+        }
+        SoftwareSurface {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    fn blit_generic_for_test(
+        pixels: &mut [u8],
+        surface: &SoftwareSurface,
+        viewport: &VisibleViewport,
+        var: &FbVarScreeninfo,
+    ) -> io::Result<()> {
+        for y in 0..viewport.height {
+            let row_offset = viewport_row_offset(viewport, y)?;
+            for x in 0..viewport.width {
+                let pixel_offset = row_offset + x * viewport.bytes_per_pixel;
+                let pixel_end = pixel_offset + viewport.bytes_per_pixel;
+                let source_offset = (y * surface.width + x) * 4;
+                let color = (
+                    surface.pixels[source_offset],
+                    surface.pixels[source_offset + 1],
+                    surface.pixels[source_offset + 2],
+                );
+                write_pixel(
+                    &mut pixels[pixel_offset..pixel_end],
+                    viewport.bytes_per_pixel,
+                    pack_color(var, color),
+                );
+            }
+        }
+        Ok(())
     }
 
     fn test_viewport(base_offset: usize) -> VisibleViewport {
