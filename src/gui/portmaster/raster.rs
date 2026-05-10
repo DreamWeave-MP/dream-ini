@@ -7,6 +7,8 @@ use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
 
 const UV_AFFINE_EPSILON: f32 = 1.0 / 1_048_576.0;
+const SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA: usize = 1024;
+const SOLID_TRIANGLE_SCANLINE_NARROWING_GUARD_PX: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TriangleClassification {
@@ -788,14 +790,27 @@ fn rasterize_solid_triangle(
     let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
     let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
     let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
+    let narrow_scanlines = bounds.pixel_area() > SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
-        let mut pixel_edge0 = row_edge0;
-        let mut pixel_edge1 = row_edge1;
-        let mut pixel_edge2 = row_edge2;
+        let (start_x, end_x) = if narrow_scanlines {
+            solid_triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
+        } else {
+            (bounds.min_x, bounds.max_x)
+        };
+        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
+            let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
+            (
+                edge(v1.pos, v2.pos, pixel_center),
+                edge(v2.pos, v0.pos, pixel_center),
+                edge(v0.pos, v1.pos, pixel_center),
+            )
+        } else {
+            (row_edge0, row_edge1, row_edge2)
+        };
         let mut span_start = None;
-        let mut span_end = bounds.min_x;
-        for x in bounds.min_x..bounds.max_x {
+        let mut span_end = start_x;
+        for x in start_x..end_x {
             let w0 = pixel_edge0 * inv_area;
             let w1 = pixel_edge1 * inv_area;
             let w2 = pixel_edge2 * inv_area;
@@ -827,6 +842,59 @@ fn rasterize_solid_triangle(
         row_edge1 += w1_step_y;
         row_edge2 += w2_step_y;
     }
+}
+
+fn solid_triangle_scanline_x_range(
+    vertices: TriangleVertices<'_>,
+    bounds: TriangleRasterBounds,
+    pixel_center_y: f32,
+) -> (usize, usize) {
+    let mut intersections = [0.0; 3];
+    let mut count = 0;
+    for (a, b) in [
+        (vertices.v0.pos, vertices.v1.pos),
+        (vertices.v1.pos, vertices.v2.pos),
+        (vertices.v2.pos, vertices.v0.pos),
+    ] {
+        if same_f32(a.y, b.y) {
+            continue;
+        }
+        let min_y = a.y.min(b.y);
+        let max_y = a.y.max(b.y);
+        if pixel_center_y < min_y || pixel_center_y > max_y {
+            continue;
+        }
+        let t = (pixel_center_y - a.y) / (b.y - a.y);
+        let intersection = a.x + (b.x - a.x) * t;
+        if !intersection.is_finite() {
+            return (bounds.min_x, bounds.max_x);
+        }
+        intersections[count] = intersection;
+        count += 1;
+    }
+    if count < 2 {
+        return (bounds.min_x, bounds.max_x);
+    }
+
+    let mut min_x = intersections[0];
+    let mut max_x = intersections[0];
+    for intersection in intersections.iter().take(count).skip(1) {
+        min_x = min_x.min(*intersection);
+        max_x = max_x.max(*intersection);
+    }
+
+    let start_x = f32_to_usize_floor_clamped(min_x - 0.5, bounds.max_x)
+        .max(bounds.min_x)
+        .saturating_sub(SOLID_TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
+        .max(bounds.min_x);
+    let end_x = f32_to_usize_ceil_clamped(max_x - 0.5, bounds.max_x)
+        .saturating_add(1 + SOLID_TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
+        .min(bounds.max_x)
+        .max(start_x);
+    if start_x >= end_x {
+        return (bounds.min_x, bounds.max_x);
+    }
+    (start_x, end_x)
 }
 
 fn rasterize_textured_triangle(
