@@ -609,6 +609,8 @@ fn rasterize_solid_triangle(
         let mut pixel_edge0 = row_edge0;
         let mut pixel_edge1 = row_edge1;
         let mut pixel_edge2 = row_edge2;
+        let mut span_start = None;
+        let mut span_end = bounds.min_x;
         for x in bounds.min_x..bounds.max_x {
             let w0 = pixel_edge0 * inv_area;
             let w1 = pixel_edge1 * inv_area;
@@ -617,11 +619,19 @@ fn rasterize_solid_triangle(
                 && edge_covers_pixel(w1, edge1_includes_boundary)
                 && edge_covers_pixel(w2, edge2_includes_boundary)
             {
-                surface.blend_pixel(x, y, color);
+                if span_start.is_none() {
+                    span_start = Some(x);
+                }
+                span_end = x + 1;
+            } else if span_start.is_some() {
+                break;
             }
             pixel_edge0 += w0_step_x;
             pixel_edge1 += w1_step_x;
             pixel_edge2 += w2_step_x;
+        }
+        if let Some(start_x) = span_start {
+            surface.blend_span(y, start_x, span_end, color);
         }
         row_edge0 += w0_step_y;
         row_edge1 += w1_step_y;
