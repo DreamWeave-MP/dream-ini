@@ -32,6 +32,7 @@ pub(in crate::gui) enum ControllerAction {
     ScrollPreviewDown,
 }
 
+#[cfg(target_os = "linux")]
 impl ControllerAction {
     pub(in crate::gui) const fn is_repeatable(self) -> bool {
         matches!(
