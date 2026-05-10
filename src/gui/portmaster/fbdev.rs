@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::log::{SharedLog, write_log};
 use super::pacing::DisplayTiming;
@@ -20,6 +20,11 @@ const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 pub(super) const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct FramebufferDrawOutcome {
+    pub(super) repaint_delay: Duration,
+}
 
 #[derive(Debug)]
 pub(super) struct Framebuffer {
@@ -171,7 +176,7 @@ impl Framebuffer {
         &mut self,
         renderer: &mut SoftwareRenderer,
         frame: &mut GuiFrame<'_, S>,
-    ) -> io::Result<()> {
+    ) -> io::Result<FramebufferDrawOutcome> {
         let log_frame = frame.log_frame;
         let total_start = log_frame.then(Instant::now);
         let stage_start = log_frame.then(Instant::now);
@@ -194,7 +199,7 @@ impl Framebuffer {
         }
 
         let stage_start = log_frame.then(Instant::now);
-        renderer.render(viewport.width, viewport.height, frame)?;
+        let repaint_delay = renderer.render(viewport.width, viewport.height, frame)?;
         let render_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_frame.then(Instant::now);
@@ -210,11 +215,11 @@ impl Framebuffer {
             write_log(
                 frame.log,
                 format!(
-                    "framebuffer draw timings blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} total_us={total_elapsed}"
+                    "framebuffer draw timings blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay:?} total_us={total_elapsed}"
                 ),
             );
         }
-        Ok(())
+        Ok(FramebufferDrawOutcome { repaint_delay })
     }
 
     fn blit_rgba_surface(

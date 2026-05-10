@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub(super) const REFRESH_ENV_VAR: &str = "DREAM_INI_PORTMASTER_REFRESH_HZ";
+pub(super) const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const DEFAULT_REFRESH_HZ: u32 = 60;
 const MIN_REFRESH_HZ: u32 = 15;
 const MAX_REFRESH_HZ: u32 = 120;
@@ -167,6 +168,58 @@ pub(super) fn sleep_after_frame(
     next_deadline
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FrameScheduleAction {
+    Draw,
+    Sleep(Duration),
+}
+
+pub(super) fn repaint_deadline(now: Instant, repaint_delay: Duration) -> Option<Instant> {
+    if repaint_delay == Duration::MAX {
+        None
+    } else {
+        now.checked_add(repaint_delay).or(Some(now))
+    }
+}
+
+pub(super) fn earliest_repaint_deadline(
+    current: Option<Instant>,
+    requested: Option<Instant>,
+) -> Option<Instant> {
+    match (current, requested) {
+        (Some(current), Some(requested)) => Some(current.min(requested)),
+        (Some(current), None) => Some(current),
+        (None, Some(requested)) => Some(requested),
+        (None, None) => None,
+    }
+}
+
+pub(super) fn frame_schedule_action(
+    now: Instant,
+    next_repaint_at: Option<Instant>,
+    requested_repaint_now: bool,
+    idle_poll_interval: Duration,
+) -> FrameScheduleAction {
+    if requested_repaint_now || next_repaint_at.is_some_and(|deadline| deadline <= now) {
+        return FrameScheduleAction::Draw;
+    }
+
+    let sleep_for = next_repaint_at
+        .and_then(|deadline| deadline.checked_duration_since(now))
+        .map_or(idle_poll_interval, |until_repaint| {
+            until_repaint.min(idle_poll_interval)
+        });
+    if sleep_for.is_zero() {
+        FrameScheduleAction::Draw
+    } else {
+        FrameScheduleAction::Sleep(sleep_for)
+    }
+}
+
+pub(super) fn sleep_for_frame_schedule(duration: Duration) {
+    thread::sleep(duration);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +332,71 @@ mod tests {
 
         assert_eq!(next_deadline, late_now);
         assert_eq!(sleep_for, None);
+    }
+
+    #[test]
+    fn repaint_deadline_preserves_idle_and_immediate_requests() {
+        let now = Instant::now();
+
+        assert_eq!(repaint_deadline(now, Duration::MAX), None);
+        assert_eq!(repaint_deadline(now, Duration::ZERO), Some(now));
+        assert_eq!(
+            repaint_deadline(now, Duration::from_millis(25)),
+            Some(now + Duration::from_millis(25))
+        );
+    }
+
+    #[test]
+    fn earliest_repaint_deadline_uses_nearest_known_time() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(50);
+        let sooner = now + Duration::from_millis(10);
+
+        assert_eq!(earliest_repaint_deadline(None, None), None);
+        assert_eq!(earliest_repaint_deadline(Some(later), None), Some(later));
+        assert_eq!(earliest_repaint_deadline(None, Some(sooner)), Some(sooner));
+        assert_eq!(
+            earliest_repaint_deadline(Some(later), Some(sooner)),
+            Some(sooner)
+        );
+    }
+
+    #[test]
+    fn frame_schedule_draws_when_requested_or_due() {
+        let now = Instant::now();
+        let idle_poll = Duration::from_millis(8);
+
+        assert_eq!(
+            frame_schedule_action(now, None, true, idle_poll),
+            FrameScheduleAction::Draw
+        );
+        assert_eq!(
+            frame_schedule_action(now, Some(now), false, idle_poll),
+            FrameScheduleAction::Draw
+        );
+        assert_eq!(
+            frame_schedule_action(now, Some(now - Duration::from_millis(1)), false, idle_poll),
+            FrameScheduleAction::Draw
+        );
+    }
+
+    #[test]
+    fn frame_schedule_sleeps_lightly_until_delayed_or_idle_repaint() {
+        let now = Instant::now();
+        let idle_poll = Duration::from_millis(8);
+
+        assert_eq!(
+            frame_schedule_action(now, Some(now + Duration::from_millis(25)), false, idle_poll),
+            FrameScheduleAction::Sleep(idle_poll)
+        );
+        assert_eq!(
+            frame_schedule_action(now, Some(now + Duration::from_millis(3)), false, idle_poll),
+            FrameScheduleAction::Sleep(Duration::from_millis(3))
+        );
+        assert_eq!(
+            frame_schedule_action(now, None, false, idle_poll),
+            FrameScheduleAction::Sleep(idle_poll)
+        );
     }
 
     fn refresh_test_timing(pixclock: u32) -> DisplayTiming {

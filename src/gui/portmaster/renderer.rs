@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::io;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::log::write_log;
 use super::raster::{
@@ -23,7 +23,7 @@ impl SoftwareRenderer {
         width: usize,
         height: usize,
         frame: &mut GuiFrame<'_, S>,
-    ) -> io::Result<()> {
+    ) -> io::Result<Duration> {
         let log_frame = frame.log_frame;
         let total_start = log_frame.then(Instant::now);
         let stage_start = log_frame.then(Instant::now);
@@ -43,6 +43,7 @@ impl SoftwareRenderer {
         let output = frame
             .context
             .run_ui(raw_input, |ui| frame.app.ui(ui, frame.shell));
+        let repaint_delay = root_repaint_delay(&output);
         let egui_run_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_frame.then(Instant::now);
@@ -81,11 +82,11 @@ impl SoftwareRenderer {
             write_log(
                 frame.log,
                 format!(
-                    "software renderer timings resize_clear_us={resize_clear_elapsed} egui_run_us={egui_run_elapsed} texture_apply_us={texture_apply_elapsed} tessellate_us={tessellate_elapsed} rasterize_us={rasterize_elapsed} texture_free_us={texture_free_elapsed} total_us={total_elapsed}"
+                    "software renderer timings resize_clear_us={resize_clear_elapsed} egui_run_us={egui_run_elapsed} texture_apply_us={texture_apply_elapsed} tessellate_us={tessellate_elapsed} rasterize_us={rasterize_elapsed} texture_free_us={texture_free_elapsed} repaint_delay={repaint_delay:?} total_us={total_elapsed}"
                 ),
             );
         }
-        Ok(())
+        Ok(repaint_delay)
     }
 
     pub(super) const fn surface(&self) -> &SoftwareSurface {
@@ -188,6 +189,13 @@ fn has_four_unique_indices(indices: &[u32]) -> bool {
         count += 1;
     }
     count == unique.len()
+}
+
+fn root_repaint_delay(output: &egui::FullOutput) -> Duration {
+    output
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .map_or(Duration::MAX, |output| output.repaint_delay)
 }
 
 fn elapsed_micros(start: Option<Instant>) -> u128 {
