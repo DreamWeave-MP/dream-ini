@@ -1367,6 +1367,16 @@ struct RectUvRow {
     step_x: egui::Vec2,
 }
 
+impl RectUvRow {
+    fn uv_at(self, x: usize, start_x: usize) -> egui::Pos2 {
+        let dx = usize_to_f32(x - start_x);
+        egui::pos2(
+            self.step_x.x.mul_add(dx, self.uv.x),
+            self.step_x.y.mul_add(dx, self.uv.y),
+        )
+    }
+}
+
 fn rasterize_textured_rect_no_stats(
     surface: &mut SoftwareSurface,
     corners: TexturedQuadCorners,
@@ -1405,11 +1415,10 @@ fn rasterize_textured_rect_no_stats_with_color(
     pixel_color: impl Fn(&TextureImage, egui::Pos2) -> [u8; 4],
 ) {
     for y in range.start_y..range.end_y {
-        let mut row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         for x in range.start_x..range.end_x {
-            let color = pixel_color(texture, row.uv);
+            let color = pixel_color(texture, row.uv_at(x, range.start_x));
             surface.blend_pixel(x, y, color);
-            row.uv += row.step_x;
         }
     }
 }
@@ -1456,12 +1465,11 @@ fn rasterize_textured_rect_with_stats_and_color(
     pixel_color: impl Fn(&TextureImage, egui::Pos2) -> [u8; 4],
 ) {
     for y in range.start_y..range.end_y {
-        let mut row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         for x in range.start_x..range.end_x {
-            let color = pixel_color(texture, row.uv);
+            let color = pixel_color(texture, row.uv_at(x, range.start_x));
             stats.record_alpha_px(color[3], 1);
             surface.blend_pixel(x, y, color);
-            row.uv += row.step_x;
         }
     }
 }
@@ -4020,6 +4028,22 @@ mod tests {
     }
 
     #[test]
+    fn textured_quad_fast_path_matches_generic_at_nearest_half_threshold() {
+        let vertices = textured_quad_vertices(1.0, 1.0, 24.0, 2.0, [255, 255, 255, 255]);
+        let texture = test_alpha_texture_2x1();
+
+        assert_eq!(nearest_texel(&texture, egui::pos2(0.5, 0.0)), (1, 0));
+
+        let (accepted, pixels) =
+            render_test_textured_quad(26, 4, vertices, &texture, full_clip(26, 4));
+        let generic =
+            render_test_textured_quad_generic(26, 4, vertices, &texture, full_clip(26, 4));
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+    }
+
+    #[test]
     fn textured_quad_fast_path_matches_generic_clipped_atlas_rectangle() {
         let vertices = textured_quad_vertices(1.25, 1.5, 5.25, 4.5, [128, 128, 64, 160]);
         let texture = test_texture_4x4();
@@ -4035,6 +4059,39 @@ mod tests {
 
         assert!(accepted);
         assert_eq!(pixels, generic);
+    }
+
+    #[test]
+    fn textured_rect_stats_match_clipped_nearest_half_threshold_alpha_samples() {
+        let vertices = textured_quad_vertices(1.0, 1.0, 24.0, 2.0, [255, 255, 255, 255]);
+        let texture = test_alpha_texture_2x1();
+        let clip = ClipBounds {
+            min_x: 10,
+            min_y: 1,
+            max_x: 15,
+            max_y: 2,
+        };
+        let mut surface = test_surface(26, 4);
+        let mut stats = RasterStats::default();
+
+        let accepted = rasterize_axis_aligned_textured_quad(
+            &mut surface,
+            quad_triangles(&vertices),
+            &texture,
+            clip,
+            Some(&mut stats),
+        );
+        let generic = render_test_textured_quad_generic(26, 4, vertices, &texture, clip);
+
+        assert!(accepted);
+        assert_eq!(surface.pixels, generic);
+        assert_eq!(stats.textured_rect_calls, 1);
+        assert_eq!(stats.textured_rect_px, 5);
+        assert_eq!(stats.textured_rect_sampled_calls, 1);
+        assert_eq!(stats.textured_rect_sampled_px, 5);
+        assert_eq!(stats.transparent_px, 2);
+        assert_eq!(stats.opaque_px, 3);
+        assert_eq!(stats.translucent_px, 0);
     }
 
     #[test]
@@ -4695,6 +4752,14 @@ mod tests {
                 100, 90, 0, 255, 140, 90, 0, 255, 20, 130, 0, 255, 60, 130, 0, 255, 100, 130, 0,
                 255, 140, 130, 0, 255,
             ],
+        }
+    }
+
+    fn test_alpha_texture_2x1() -> TextureImage {
+        TextureImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 0, 0, 0, 0, 255, 0, 255],
         }
     }
 
