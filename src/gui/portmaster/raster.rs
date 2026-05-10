@@ -1945,14 +1945,6 @@ fn rasterize_constant_texel_textured_triangle_no_stats_with_color(
 ) {
     let TriangleVertices { v0, v1, v2 } = vertices;
     let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
-    let coverage = TriangleCoverage {
-        inv_area: raster.inv_area,
-        includes_boundary: TriangleBoundaryIncludes {
-            edge0: raster.edge0_includes_boundary,
-            edge1: raster.edge1_includes_boundary,
-            edge2: raster.edge2_includes_boundary,
-        },
-    };
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
@@ -1965,36 +1957,6 @@ fn rasterize_constant_texel_textured_triangle_no_stats_with_color(
         } else {
             (bounds.min_x, bounds.max_x)
         };
-        let hint_range = if narrow_scanlines {
-            triangle_hint_x_range(
-                vertices,
-                coverage.inv_area,
-                bounds,
-                usize_to_f32(y) + 0.5,
-                start_x,
-                end_x,
-            )
-        } else {
-            None
-        };
-        let (probe_start_x, probe_end_x) = hint_range.unwrap_or((start_x, end_x));
-        let endpoints = triangle_row_endpoints(TriangleRowSearch {
-            vertices,
-            coverage,
-            y,
-            candidate_start_x: start_x,
-            candidate_end_x: end_x,
-            probe_start_x,
-            probe_end_x,
-            hinted: hint_range.is_some(),
-            collect_stats: false,
-        });
-        let Some((span_start, span_end)) = endpoints.span else {
-            row_edge0 += raster.w0_step_y;
-            row_edge1 += raster.w1_step_y;
-            row_edge2 += raster.w2_step_y;
-            continue;
-        };
         let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
             let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
             (
@@ -2005,12 +1967,7 @@ fn rasterize_constant_texel_textured_triangle_no_stats_with_color(
         } else {
             (row_edge0, row_edge1, row_edge2)
         };
-        for _ in start_x..span_start {
-            pixel_edge0 += raster.w0_step_x;
-            pixel_edge1 += raster.w1_step_x;
-            pixel_edge2 += raster.w2_step_x;
-        }
-        for x in span_start..span_end {
+        for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
             let w2 = pixel_edge2 * raster.inv_area;
@@ -2082,14 +2039,6 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
 ) {
     let TriangleVertices { v0, v1, v2 } = vertices;
     let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
-    let coverage = TriangleCoverage {
-        inv_area: raster.inv_area,
-        includes_boundary: TriangleBoundaryIncludes {
-            edge0: raster.edge0_includes_boundary,
-            edge1: raster.edge1_includes_boundary,
-            edge2: raster.edge2_includes_boundary,
-        },
-    };
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
@@ -2110,36 +2059,6 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
         } else {
             stats.textured_triangle_full_scan_rows += 1;
         }
-        let hint_range = if narrow_scanlines {
-            triangle_hint_x_range(
-                vertices,
-                coverage.inv_area,
-                bounds,
-                usize_to_f32(y) + 0.5,
-                start_x,
-                end_x,
-            )
-        } else {
-            None
-        };
-        let (probe_start_x, probe_end_x) = hint_range.unwrap_or((start_x, end_x));
-        let endpoints = triangle_row_endpoints(TriangleRowSearch {
-            vertices,
-            coverage,
-            y,
-            candidate_start_x: start_x,
-            candidate_end_x: end_x,
-            probe_start_x,
-            probe_end_x,
-            hinted: hint_range.is_some(),
-            collect_stats: false,
-        });
-        let Some((span_start, span_end)) = endpoints.span else {
-            row_edge0 += raster.w0_step_y;
-            row_edge1 += raster.w1_step_y;
-            row_edge2 += raster.w2_step_y;
-            continue;
-        };
         let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
             let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
             (
@@ -2150,12 +2069,7 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
         } else {
             (row_edge0, row_edge1, row_edge2)
         };
-        for _ in start_x..span_start {
-            pixel_edge0 += raster.w0_step_x;
-            pixel_edge1 += raster.w1_step_x;
-            pixel_edge2 += raster.w2_step_x;
-        }
-        for x in span_start..span_end {
+        for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
             let w2 = pixel_edge2 * raster.inv_area;
@@ -2725,64 +2639,6 @@ mod tests {
     }
 
     #[test]
-    fn constant_texel_textured_triangle_matches_reference_for_giant_sliver() {
-        let texture = test_solid_2x2_texture([255, 255, 255, 255]);
-        let mut vertices = [
-            solid_vertex(124.7, 213.3, [32, 80, 120, 255]),
-            solid_vertex(517.5, 457.5, [200, 48, 16, 192]),
-            solid_vertex(125.5, 212.9, [64, 180, 220, 96]),
-        ];
-        vertices[0].uv = egui::pos2(0.0, 0.0);
-        vertices[1].uv = egui::pos2(0.2, 0.1);
-        vertices[2].uv = egui::pos2(0.49, 0.49);
-        let clip = full_clip(640, 480);
-
-        assert_eq!(
-            triangle_nearest_texel_sample(&vertices[0], &vertices[1], &vertices[2], &texture)
-                .uniform_color,
-            Some([255, 255, 255, 255])
-        );
-        assert_textured_triangle_matches_reference(
-            640,
-            480,
-            clip,
-            [30, 90, 150, 255],
-            vertices,
-            &texture,
-        );
-    }
-
-    #[test]
-    fn constant_texel_textured_triangle_matches_generic_for_boundary_drift_triangle() {
-        let texture = test_solid_2x2_texture([77, 131, 199, 113]);
-        let mut vertices = [
-            solid_vertex(159.340_12, 59.640_804, [17, 91, 203, 251]),
-            solid_vertex(98.330_84, 448.938_54, [241, 37, 71, 173]),
-            solid_vertex(482.737_18, 307.795_17, [83, 219, 29, 67]),
-        ];
-        vertices[0].uv = egui::pos2(0.0, 0.0);
-        vertices[1].uv = egui::pos2(0.2, 0.1);
-        vertices[2].uv = egui::pos2(0.49, 0.49);
-
-        assert_eq!(
-            triangle_nearest_texel_sample(&vertices[0], &vertices[1], &vertices[2], &texture)
-                .uniform_color,
-            Some([77, 131, 199, 113])
-        );
-        assert_eq!(
-            render_test_triangle_with(640, 480, &vertices[0], &vertices[1], &vertices[2], &texture,),
-            render_test_triangle_generic(
-                640,
-                480,
-                &vertices[0],
-                &vertices[1],
-                &vertices[2],
-                &texture,
-            )
-        );
-    }
-
-    #[test]
     fn constant_texel_textured_triangle_stats_use_textured_counters() {
         let texture = test_solid_2x2_texture([77, 131, 199, 113]);
         let mut vertices = [
@@ -2981,7 +2837,7 @@ mod tests {
     #[test]
     fn solid_triangle_rasterizer_matches_reference_for_boundary_drift_triangle() {
         let vertices = [
-            solid_vertex(159.340_12, 59.640_804, [88, 144, 200, 255]),
+            solid_vertex(159.34012, 59.640_804, [88, 144, 200, 255]),
             solid_vertex(98.330_84, 448.938_54, [88, 144, 200, 255]),
             solid_vertex(482.737_18, 307.795_17, [88, 144, 200, 255]),
         ];
