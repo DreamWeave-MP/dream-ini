@@ -8,9 +8,9 @@ use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
     ClipBounds, RasterStats, TexturedQuadFastPathRejection, TriangleClassification,
-    TriangleRasterBounds, classify_triangle, is_axis_aligned_quad,
-    rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad, rasterize_triangle,
-    textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
+    TriangleRasterBounds, TriangleScanWorkEstimate, classify_triangle, estimate_triangle_scan_work,
+    is_axis_aligned_quad, rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad,
+    rasterize_triangle, textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -88,6 +88,9 @@ impl SoftwareRenderer {
         if let Some(stats) = primitive_stats {
             write_log(frame.log, stats.log_line());
             if let Some(log_line) = stats.solid_triangle_offenders_log_line() {
+                write_log(frame.log, log_line);
+            }
+            if let Some(log_line) = stats.textured_triangle_offenders_log_line() {
                 write_log(frame.log, log_line);
             }
         }
@@ -497,6 +500,7 @@ struct PrimitiveStats {
     generic_degenerate_triangle_bbox_px_buckets: TriangleBboxBuckets,
     generic_triangle_bbox_non_finite: usize,
     solid_triangle_offenders: SolidTriangleOffenders,
+    textured_triangle_offenders: TexturedTriangleOffenders,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -520,6 +524,24 @@ struct SolidTriangleOffenders {
 }
 
 const SOLID_TRIANGLE_OFFENDER_LIMIT: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TexturedTriangleOffender {
+    clipped_bbox_px: usize,
+    scan_work: TriangleScanWorkEstimate,
+    bounds: TriangleRasterBounds,
+    source: TriangleSource,
+    positions: [egui::Pos2; 3],
+    uvs: [egui::Pos2; 3],
+}
+
+#[derive(Debug, Default)]
+struct TexturedTriangleOffenders {
+    entries: [Option<TexturedTriangleOffender>; TEXTURED_TRIANGLE_OFFENDER_LIMIT],
+    len: usize,
+}
+
+const TEXTURED_TRIANGLE_OFFENDER_LIMIT: usize = 8;
 
 impl SolidTriangleOffenders {
     fn record(&mut self, offender: SolidTriangleOffender) {
@@ -559,6 +581,60 @@ fn compare_solid_triangle_offenders(
 ) -> std::cmp::Ordering {
     left.clipped_bbox_px
         .cmp(&right.clipped_bbox_px)
+        .then_with(|| {
+            right
+                .source
+                .primitive_index
+                .cmp(&left.source.primitive_index)
+        })
+        .then_with(|| {
+            right
+                .source
+                .mesh_index_offset
+                .cmp(&left.source.mesh_index_offset)
+        })
+}
+
+impl TexturedTriangleOffenders {
+    fn record(&mut self, offender: TexturedTriangleOffender) {
+        if self.len < TEXTURED_TRIANGLE_OFFENDER_LIMIT {
+            self.entries[self.len] = Some(offender);
+            self.len += 1;
+            self.sort_used_entries();
+            return;
+        }
+
+        let Some(last) = self.entries[self.len - 1] else {
+            return;
+        };
+        if compare_textured_triangle_offenders(&offender, &last).is_gt() {
+            self.entries[self.len - 1] = Some(offender);
+            self.sort_used_entries();
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn sort_used_entries(&mut self) {
+        self.entries[..self.len].sort_by(|left, right| match (left, right) {
+            (Some(left), Some(right)) => compare_textured_triangle_offenders(right, left),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+    }
+}
+
+fn compare_textured_triangle_offenders(
+    left: &TexturedTriangleOffender,
+    right: &TexturedTriangleOffender,
+) -> std::cmp::Ordering {
+    left.scan_work
+        .candidate_px
+        .cmp(&right.scan_work.candidate_px)
+        .then_with(|| left.clipped_bbox_px.cmp(&right.clipped_bbox_px))
         .then_with(|| {
             right
                 .source
@@ -706,6 +782,16 @@ impl PrimitiveStats {
             TriangleClassification::Textured => {
                 self.generic_textured_triangle_bbox_px_buckets
                     .record(clipped_bbox_px);
+                let positions = [v0.pos, v1.pos, v2.pos];
+                self.textured_triangle_offenders
+                    .record(TexturedTriangleOffender {
+                        clipped_bbox_px,
+                        scan_work: estimate_triangle_scan_work(positions, bounds),
+                        bounds,
+                        source,
+                        positions,
+                        uvs: [v0.uv, v1.uv, v2.uv],
+                    });
             }
         }
     }
@@ -784,6 +870,27 @@ impl PrimitiveStats {
         }
         Some(log_line)
     }
+
+    fn textured_triangle_offenders_log_line(&self) -> Option<String> {
+        if self.textured_triangle_offenders.is_empty() {
+            return None;
+        }
+
+        let mut log_line = format!(
+            "software renderer textured_triangle_offenders shown={} cap={}",
+            self.textured_triangle_offenders.len, TEXTURED_TRIANGLE_OFFENDER_LIMIT
+        );
+        for (index, offender) in self.textured_triangle_offenders.entries
+            [..self.textured_triangle_offenders.len]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            log_line.push(' ');
+            log_line.push_str(&format_textured_triangle_offender(index, *offender));
+        }
+        Some(log_line)
+    }
 }
 
 fn format_solid_triangle_offender(index: usize, offender: SolidTriangleOffender) -> String {
@@ -802,6 +909,34 @@ fn format_solid_triangle_offender(index: usize, offender: SolidTriangleOffender)
         offender.positions[1].y,
         offender.positions[2].x,
         offender.positions[2].y,
+    )
+}
+
+fn format_textured_triangle_offender(index: usize, offender: TexturedTriangleOffender) -> String {
+    format!(
+        "offender{index}_candidate_px={} offender{index}_clipped_bbox_px={} offender{index}_narrowed_rows={} offender{index}_full_scan_rows={} offender{index}_bounds={},{},{},{} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_v0={:.1},{:.1} offender{index}_uv0={:.3},{:.3} offender{index}_v1={:.1},{:.1} offender{index}_uv1={:.3},{:.3} offender{index}_v2={:.1},{:.1} offender{index}_uv2={:.3},{:.3}",
+        offender.scan_work.candidate_px,
+        offender.clipped_bbox_px,
+        offender.scan_work.narrowed_rows,
+        offender.scan_work.full_scan_rows,
+        offender.bounds.min_x,
+        offender.bounds.min_y,
+        offender.bounds.max_x,
+        offender.bounds.max_y,
+        offender.source.primitive_index,
+        offender.source.mesh_index_offset,
+        offender.positions[0].x,
+        offender.positions[0].y,
+        offender.uvs[0].x,
+        offender.uvs[0].y,
+        offender.positions[1].x,
+        offender.positions[1].y,
+        offender.uvs[1].x,
+        offender.uvs[1].y,
+        offender.positions[2].x,
+        offender.positions[2].y,
+        offender.uvs[2].x,
+        offender.uvs[2].y,
     )
 }
 
@@ -1188,6 +1323,125 @@ mod tests {
     }
 
     #[test]
+    fn primitive_stats_keeps_top_textured_triangle_offenders_ordered_and_capped() {
+        let mut offenders = TexturedTriangleOffenders::default();
+
+        for candidate_px in 1..=10 {
+            offenders.record(test_textured_offender(
+                candidate_px,
+                candidate_px * 2,
+                candidate_px,
+                candidate_px * 3,
+            ));
+        }
+
+        assert_eq!(offenders.len, TEXTURED_TRIANGLE_OFFENDER_LIMIT);
+        let candidate_px: Vec<_> = offenders.entries[..offenders.len]
+            .iter()
+            .flatten()
+            .map(|offender| offender.scan_work.candidate_px)
+            .collect();
+        assert_eq!(candidate_px, vec![10, 9, 8, 7, 6, 5, 4, 3]);
+    }
+
+    #[test]
+    fn primitive_stats_orders_textured_triangle_offender_ties_by_source() {
+        let mut offenders = TexturedTriangleOffenders::default();
+
+        offenders.record(test_textured_offender(12, 9, 2, 6));
+        offenders.record(test_textured_offender(12, 9, 1, 9));
+        offenders.record(test_textured_offender(12, 9, 1, 3));
+
+        let sources: Vec<_> = offenders.entries[..offenders.len]
+            .iter()
+            .flatten()
+            .map(|offender| offender.source)
+            .collect();
+        assert_eq!(
+            sources,
+            vec![
+                triangle_source(1, 3),
+                triangle_source(1, 9),
+                triangle_source(2, 6)
+            ]
+        );
+    }
+
+    #[test]
+    fn primitive_stats_formats_textured_triangle_offenders_log_line() {
+        let mut stats = PrimitiveStats::default();
+        stats
+            .textured_triangle_offenders
+            .record(TexturedTriangleOffender {
+                clipped_bbox_px: 9,
+                scan_work: TriangleScanWorkEstimate {
+                    candidate_px: 14,
+                    narrowed_rows: 2,
+                    full_scan_rows: 1,
+                },
+                bounds: TriangleRasterBounds {
+                    min_x: 1,
+                    min_y: 2,
+                    max_x: 4,
+                    max_y: 5,
+                },
+                source: triangle_source(7, 12),
+                positions: [
+                    egui::pos2(1.25, 2.5),
+                    egui::pos2(3.0, 4.0),
+                    egui::pos2(5.0, 6.75),
+                ],
+                uvs: [
+                    egui::pos2(0.0, 0.5),
+                    egui::pos2(1.0, 0.25),
+                    egui::pos2(0.75, 1.0),
+                ],
+            });
+
+        assert_eq!(
+            stats.textured_triangle_offenders_log_line().as_deref(),
+            Some(
+                "software renderer textured_triangle_offenders shown=1 cap=8 offender0_candidate_px=14 offender0_clipped_bbox_px=9 offender0_narrowed_rows=2 offender0_full_scan_rows=1 offender0_bounds=1,2,4,5 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_v0=1.2,2.5 offender0_uv0=0.000,0.500 offender0_v1=3.0,4.0 offender0_uv1=1.000,0.250 offender0_v2=5.0,6.8 offender0_uv2=0.750,1.000"
+            )
+        );
+    }
+
+    #[test]
+    fn primitive_stats_formats_multiple_textured_triangle_offenders_with_indexed_keys() {
+        let mut stats = PrimitiveStats::default();
+        stats
+            .textured_triangle_offenders
+            .record(test_textured_offender(12, 9, 2, 6));
+        stats
+            .textured_triangle_offenders
+            .record(test_textured_offender(9, 12, 1, 3));
+
+        let log_line = stats
+            .textured_triangle_offenders_log_line()
+            .expect("offender log line");
+
+        assert_eq!(
+            log_line,
+            "software renderer textured_triangle_offenders shown=2 cap=8 offender0_candidate_px=12 offender0_clipped_bbox_px=9 offender0_narrowed_rows=1 offender0_full_scan_rows=2 offender0_bounds=0,0,9,1 offender0_primitive=2 offender0_mesh_index_offset=6 offender0_v0=0.0,0.0 offender0_uv0=0.000,0.000 offender0_v1=0.0,0.0 offender0_uv1=0.000,0.000 offender0_v2=0.0,0.0 offender0_uv2=0.000,0.000 offender1_candidate_px=9 offender1_clipped_bbox_px=12 offender1_narrowed_rows=1 offender1_full_scan_rows=2 offender1_bounds=0,0,12,1 offender1_primitive=1 offender1_mesh_index_offset=3 offender1_v0=0.0,0.0 offender1_uv0=0.000,0.000 offender1_v1=0.0,0.0 offender1_uv1=0.000,0.000 offender1_v2=0.0,0.0 offender1_uv2=0.000,0.000"
+        );
+        assert!(!log_line.contains(" bounds="));
+        assert!(!log_line.contains(" uv0="));
+        assert!(log_line.contains("offender0_candidate_px="));
+        assert!(log_line.contains("offender0_clipped_bbox_px="));
+        assert!(log_line.contains("offender0_uv0="));
+        assert!(log_line.contains("offender1_candidate_px="));
+        assert!(log_line.contains("offender1_uv0="));
+    }
+
+    #[test]
+    fn primitive_stats_skips_textured_triangle_offenders_log_line_when_empty() {
+        assert_eq!(
+            PrimitiveStats::default().textured_triangle_offenders_log_line(),
+            None
+        );
+    }
+
+    #[test]
     fn renderer_stats_raster_timings_log_line() {
         let timings = RasterTimings {
             quad_window_probe: 1,
@@ -1364,6 +1618,31 @@ mod tests {
             },
             source: triangle_source(primitive_index, mesh_index_offset),
             positions: [egui::Pos2::ZERO; 3],
+        }
+    }
+
+    fn test_textured_offender(
+        candidate_px: usize,
+        clipped_bbox_px: usize,
+        primitive_index: usize,
+        mesh_index_offset: usize,
+    ) -> TexturedTriangleOffender {
+        TexturedTriangleOffender {
+            clipped_bbox_px,
+            scan_work: TriangleScanWorkEstimate {
+                candidate_px,
+                narrowed_rows: 1,
+                full_scan_rows: 2,
+            },
+            bounds: TriangleRasterBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: clipped_bbox_px,
+                max_y: 1,
+            },
+            source: triangle_source(primitive_index, mesh_index_offset),
+            positions: [egui::Pos2::ZERO; 3],
+            uvs: [egui::Pos2::ZERO; 3],
         }
     }
 

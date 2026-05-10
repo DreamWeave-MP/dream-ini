@@ -52,6 +52,13 @@ pub(super) struct RasterStats {
     pub(super) transparent_px: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TriangleScanWorkEstimate {
+    pub(super) candidate_px: usize,
+    pub(super) narrowed_rows: usize,
+    pub(super) full_scan_rows: usize,
+}
+
 impl RasterStats {
     fn record_alpha_px(&mut self, alpha: u8, count: usize) {
         match alpha {
@@ -297,6 +304,33 @@ pub(super) fn triangle_raster_bounds(
         max_x,
         max_y,
     })
+}
+
+pub(super) fn estimate_triangle_scan_work(
+    positions: [egui::Pos2; 3],
+    bounds: TriangleRasterBounds,
+) -> TriangleScanWorkEstimate {
+    let mut estimate = TriangleScanWorkEstimate::default();
+    let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
+    for y in bounds.min_y..bounds.max_y {
+        let (start_x, end_x) = if narrow_scanlines {
+            triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
+        } else {
+            (bounds.min_x, bounds.max_x)
+        };
+        let candidate_px = end_x - start_x;
+        estimate.candidate_px += candidate_px;
+        if candidate_px < bounds.max_x - bounds.min_x {
+            estimate.narrowed_rows += 1;
+        } else {
+            estimate.full_scan_rows += 1;
+        }
+    }
+    estimate
+}
+
+fn triangle_positions(vertices: TriangleVertices<'_>) -> [egui::Pos2; 3] {
+    [vertices.v0.pos, vertices.v1.pos, vertices.v2.pos]
 }
 
 pub(super) fn classify_triangle(
@@ -802,11 +836,12 @@ fn rasterize_solid_triangle(
     let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
     let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
     let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
+    let positions = triangle_positions(vertices);
     let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
-            triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
+            triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
         } else {
             (bounds.min_x, bounds.max_x)
         };
@@ -866,16 +901,16 @@ fn rasterize_solid_triangle(
 }
 
 fn triangle_scanline_x_range(
-    vertices: TriangleVertices<'_>,
+    positions: [egui::Pos2; 3],
     bounds: TriangleRasterBounds,
     pixel_center_y: f32,
 ) -> (usize, usize) {
     let mut intersections = [0.0; 3];
     let mut count = 0;
     for (a, b) in [
-        (vertices.v0.pos, vertices.v1.pos),
-        (vertices.v1.pos, vertices.v2.pos),
-        (vertices.v2.pos, vertices.v0.pos),
+        (positions[0], positions[1]),
+        (positions[1], positions[2]),
+        (positions[2], positions[0]),
     ] {
         if same_f32(a.y, b.y) {
             continue;
@@ -945,11 +980,12 @@ fn rasterize_textured_triangle_no_stats(
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
+    let positions = triangle_positions(vertices);
     let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
-            triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
+            triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
         } else {
             (bounds.min_x, bounds.max_x)
         };
@@ -997,11 +1033,12 @@ fn rasterize_textured_triangle_with_stats(
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
+    let positions = triangle_positions(vertices);
     let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
-            triangle_scanline_x_range(vertices, bounds, usize_to_f32(y) + 0.5)
+            triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
         } else {
             (bounds.min_x, bounds.max_x)
         };
