@@ -1499,6 +1499,63 @@ mod tests {
     }
 
     #[test]
+    fn textured_triangle_rasterizer_matches_reference_for_giant_sliver() {
+        let mut vertices = [
+            solid_vertex(124.7, 213.3, [192, 96, 48, 224]),
+            solid_vertex(517.5, 457.5, [192, 96, 48, 224]),
+            solid_vertex(125.5, 212.9, [192, 96, 48, 224]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(1.0, 0.0);
+        vertices[2].uv = egui::pos2(0.0, 1.0);
+        let clip = full_clip(640, 480);
+        let texture = test_texture_4x4();
+
+        assert_eq!(
+            classify_triangle(&vertices[0], &vertices[1], &vertices[2], &texture),
+            TriangleClassification::Textured
+        );
+        assert_textured_triangle_matches_reference(
+            640,
+            480,
+            clip,
+            [30, 90, 150, 255],
+            vertices,
+            &texture,
+        );
+
+        let bounds = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+            .expect("triangle bounds");
+        assert_eq!(
+            bounds,
+            TriangleRasterBounds {
+                min_x: 124,
+                min_y: 212,
+                max_x: 518,
+                max_y: 458,
+            }
+        );
+        assert!(bounds.pixel_area() > 1024);
+
+        let mut surface = test_surface_with_background(640, 480, [30, 90, 150, 255]);
+        let mut stats = RasterStats::default();
+        rasterize_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            clip,
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_triangle_calls, 1);
+        assert_eq!(stats.textured_triangle_bbox_px, 96_924);
+        assert!(stats.textured_triangle_covered_px > 0);
+        assert!(stats.textured_triangle_bbox_px >= stats.textured_triangle_covered_px * 8);
+    }
+
+    #[test]
     fn triangle_classification_matches_rasterizer_solid_and_textured_paths() {
         let texture = test_texture_2x2();
         let v0 = test_vertex(0.0, 0.0);
@@ -2206,6 +2263,59 @@ mod tests {
         assert_eq!(direct.pixels, reference.pixels);
     }
 
+    fn assert_textured_triangle_matches_reference(
+        width: usize,
+        height: usize,
+        clip: ClipBounds,
+        background: [u8; 4],
+        vertices: [egui::epaint::Vertex; 3],
+        texture: &TextureImage,
+    ) {
+        assert_eq!(
+            classify_triangle(&vertices[0], &vertices[1], &vertices[2], texture),
+            TriangleClassification::Textured
+        );
+        let mut routed = test_surface_with_background(width, height, background);
+        let mut direct = test_surface_with_background(width, height, background);
+        let mut reference = test_surface_with_background(width, height, background);
+
+        rasterize_triangle(
+            &mut routed,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            texture,
+            clip,
+            None,
+        );
+        if let Some(bounds) = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+        {
+            rasterize_textured_triangle(
+                &mut direct,
+                TriangleVertices {
+                    v0: &vertices[0],
+                    v1: &vertices[1],
+                    v2: &vertices[2],
+                },
+                texture,
+                bounds,
+                edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
+                None,
+            );
+        }
+        reference_rasterize_textured_triangle(
+            &mut reference,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            clip,
+            texture,
+        );
+
+        assert_eq!(routed.pixels, reference.pixels);
+        assert_eq!(direct.pixels, reference.pixels);
+    }
+
     fn reference_rasterize_solid_triangle(
         surface: &mut SoftwareSurface,
         v0: &egui::epaint::Vertex,
@@ -2236,6 +2346,43 @@ mod tests {
                     && edge_covers_pixel(w1, edge1_includes_boundary)
                     && edge_covers_pixel(w2, edge2_includes_boundary)
                 {
+                    surface.blend_pixel(x, y, color);
+                }
+            }
+        }
+    }
+
+    fn reference_rasterize_textured_triangle(
+        surface: &mut SoftwareSurface,
+        v0: &egui::epaint::Vertex,
+        v1: &egui::epaint::Vertex,
+        v2: &egui::epaint::Vertex,
+        clip: ClipBounds,
+        texture: &TextureImage,
+    ) {
+        let area = edge(v0.pos, v1.pos, v2.pos);
+        if area.abs() <= f32::EPSILON {
+            return;
+        }
+        let Some(bounds) = triangle_raster_bounds(v0, v1, v2, clip) else {
+            return;
+        };
+        let inv_area = 1.0 / area;
+        let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
+        let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
+        let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
+
+        for y in bounds.min_y..bounds.max_y {
+            for x in bounds.min_x..bounds.max_x {
+                let pixel_center = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
+                let w0 = edge(v1.pos, v2.pos, pixel_center) * inv_area;
+                let w1 = edge(v2.pos, v0.pos, pixel_center) * inv_area;
+                let w2 = edge(v0.pos, v1.pos, pixel_center) * inv_area;
+                if edge_covers_pixel(w0, edge0_includes_boundary)
+                    && edge_covers_pixel(w1, edge1_includes_boundary)
+                    && edge_covers_pixel(w2, edge2_includes_boundary)
+                {
+                    let color = textured_triangle_pixel_color(v0, v1, v2, texture, w0, w1, w2);
                     surface.blend_pixel(x, y, color);
                 }
             }
