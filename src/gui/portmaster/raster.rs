@@ -26,6 +26,13 @@ pub(super) enum TexturedQuadFastPathRejection {
     NonAffineUv,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SolidTriangleColorDecision {
+    Solid([u8; 4]),
+    NonUniformVertexColor,
+    NonUniformTexel,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct RasterStats {
     pub(super) solid_rect_calls: usize,
@@ -1146,18 +1153,18 @@ fn textured_triangle_pixel_color(
     modulate_color(vertex_color, texture_color)
 }
 
-fn solid_triangle_color(
+pub(super) fn solid_triangle_color_decision(
     v0: &egui::epaint::Vertex,
     v1: &egui::epaint::Vertex,
     v2: &egui::epaint::Vertex,
     texture: &TextureImage,
-) -> Option<[u8; 4]> {
+) -> SolidTriangleColorDecision {
     if v0.color != v1.color || v0.color != v2.color {
-        return None;
+        return SolidTriangleColorDecision::NonUniformVertexColor;
     }
 
     if texture.width == 0 || texture.height == 0 {
-        return Some(modulate_color(
+        return SolidTriangleColorDecision::Solid(modulate_color(
             color_to_array(v0.color),
             [255, 255, 255, 255],
         ));
@@ -1165,13 +1172,26 @@ fn solid_triangle_color(
 
     let t0 = nearest_texel(texture, v0.uv);
     if t0 != nearest_texel(texture, v1.uv) || t0 != nearest_texel(texture, v2.uv) {
-        return None;
+        return SolidTriangleColorDecision::NonUniformTexel;
     }
 
-    Some(modulate_color(
+    SolidTriangleColorDecision::Solid(modulate_color(
         color_to_array(v0.color),
         texel_color(texture, t0),
     ))
+}
+
+fn solid_triangle_color(
+    v0: &egui::epaint::Vertex,
+    v1: &egui::epaint::Vertex,
+    v2: &egui::epaint::Vertex,
+    texture: &TextureImage,
+) -> Option<[u8; 4]> {
+    match solid_triangle_color_decision(v0, v1, v2, texture) {
+        SolidTriangleColorDecision::Solid(color) => Some(color),
+        SolidTriangleColorDecision::NonUniformVertexColor
+        | SolidTriangleColorDecision::NonUniformTexel => None,
+    }
 }
 
 fn nearest_texel(texture: &TextureImage, uv: egui::Pos2) -> (usize, usize) {

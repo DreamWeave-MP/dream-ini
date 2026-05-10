@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
-    ClipBounds, RasterStats, TexturedQuadFastPathRejection, TriangleClassification,
-    TriangleRasterBounds, TriangleScanWorkEstimate, classify_triangle, estimate_triangle_scan_work,
-    is_axis_aligned_quad, rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad,
-    rasterize_triangle, textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
+    ClipBounds, RasterStats, SolidTriangleColorDecision, TexturedQuadFastPathRejection,
+    TriangleClassification, TriangleRasterBounds, TriangleScanWorkEstimate, classify_triangle,
+    estimate_triangle_scan_work, is_axis_aligned_quad, rasterize_axis_aligned_solid_quad,
+    rasterize_axis_aligned_textured_quad, rasterize_triangle, solid_triangle_color_decision,
+    textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -493,6 +494,8 @@ struct PrimitiveStats {
     generic_triangles_rasterized: usize,
     generic_solid_triangles: usize,
     generic_textured_triangles: usize,
+    generic_textured_solid_reject_non_uniform_vertex_color: usize,
+    generic_textured_solid_reject_non_uniform_texel: usize,
     degenerate_triangles: usize,
     generic_triangle_bbox_px_buckets: TriangleBboxBuckets,
     generic_solid_triangle_bbox_px_buckets: TriangleBboxBuckets,
@@ -731,7 +734,7 @@ impl PrimitiveStats {
         if classification == TriangleClassification::Degenerate {
             return;
         }
-        self.record_generic_triangle_bbox(v0, v1, v2, classification, clip, source);
+        self.record_generic_triangle_bbox(v0, v1, v2, texture, classification, clip, source);
     }
 
     fn record_generic_triangle_bbox(
@@ -739,6 +742,7 @@ impl PrimitiveStats {
         v0: &egui::epaint::Vertex,
         v1: &egui::epaint::Vertex,
         v2: &egui::epaint::Vertex,
+        texture: &TextureImage,
         classification: TriangleClassification,
         clip: ClipBounds,
         source: TriangleSource,
@@ -780,6 +784,15 @@ impl PrimitiveStats {
                 });
             }
             TriangleClassification::Textured => {
+                match solid_triangle_color_decision(v0, v1, v2, texture) {
+                    SolidTriangleColorDecision::Solid(_) => {}
+                    SolidTriangleColorDecision::NonUniformVertexColor => {
+                        self.generic_textured_solid_reject_non_uniform_vertex_color += 1;
+                    }
+                    SolidTriangleColorDecision::NonUniformTexel => {
+                        self.generic_textured_solid_reject_non_uniform_texel += 1;
+                    }
+                }
                 self.generic_textured_triangle_bbox_px_buckets
                     .record(clipped_bbox_px);
                 let positions = [v0.pos, v1.pos, v2.pos];
@@ -818,7 +831,7 @@ impl PrimitiveStats {
 
     fn log_line(&self) -> String {
         format!(
-            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
+            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -841,6 +854,8 @@ impl PrimitiveStats {
             self.generic_triangles_rasterized,
             self.generic_solid_triangles,
             self.generic_textured_triangles,
+            self.generic_textured_solid_reject_non_uniform_vertex_color,
+            self.generic_textured_solid_reject_non_uniform_texel,
             self.degenerate_triangles,
             self.generic_triangle_bbox_px_buckets,
             self.generic_solid_triangle_bbox_px_buckets,
@@ -1042,6 +1057,11 @@ mod tests {
         assert_eq!(stats.generic_triangles_rasterized, 3);
         assert_eq!(stats.generic_solid_triangles, 1);
         assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(
+            stats.generic_textured_solid_reject_non_uniform_vertex_color,
+            1
+        );
+        assert_eq!(stats.generic_textured_solid_reject_non_uniform_texel, 0);
         assert_eq!(stats.degenerate_triangles, 1);
         assert_eq!(
             stats.generic_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
@@ -1063,6 +1083,9 @@ mod tests {
         stats.textured_quad_reject_non_affine_uv = 1;
         let log_line = stats.log_line();
         assert!(log_line.contains("generic_solid_triangles=1"));
+        assert!(log_line.contains("generic_textured_triangles=1"));
+        assert!(log_line.contains("generic_textured_solid_reject_non_uniform_vertex_color=1"));
+        assert!(log_line.contains("generic_textured_solid_reject_non_uniform_texel=0"));
         assert!(log_line.contains("textured_quad_fast_path_hits=2"));
         assert!(log_line.contains("textured_quad_reject_non_affine_uv=1"));
         assert!(log_line.contains("degenerate_triangles=1"));
@@ -1079,6 +1102,68 @@ mod tests {
             "generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=0,0,0,0,0,0"
         ));
         assert!(log_line.contains("generic_triangle_bbox_non_finite=0"));
+    }
+
+    #[test]
+    fn primitive_stats_counts_textured_triangle_rejected_by_non_uniform_vertex_color() {
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let v0 = test_vertex(0.0, 0.0);
+        let v1 = test_vertex(2.0, 0.0);
+        let mut v2 = test_vertex(0.0, 2.0);
+        v2.color = egui::Color32::BLACK;
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_generic_triangle(
+            &v0,
+            &v1,
+            &v2,
+            &texture,
+            clip_bounds(16, 16),
+            triangle_source(1, 0),
+        );
+
+        assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(
+            stats.generic_textured_solid_reject_non_uniform_vertex_color,
+            1
+        );
+        assert_eq!(stats.generic_textured_solid_reject_non_uniform_texel, 0);
+    }
+
+    #[test]
+    fn primitive_stats_counts_textured_triangle_rejected_by_non_uniform_texel() {
+        let texture = TextureImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 255, 255, 255, 0, 0, 0, 255],
+        };
+        let mut v0 = test_vertex(0.0, 0.0);
+        let mut v1 = test_vertex(2.0, 0.0);
+        let mut v2 = test_vertex(0.0, 2.0);
+        v0.uv = egui::pos2(0.0, 0.0);
+        v1.uv = egui::pos2(1.0, 0.0);
+        v2.uv = egui::pos2(0.0, 0.0);
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_generic_triangle(
+            &v0,
+            &v1,
+            &v2,
+            &texture,
+            clip_bounds(16, 16),
+            triangle_source(1, 0),
+        );
+
+        assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(
+            stats.generic_textured_solid_reject_non_uniform_vertex_color,
+            0
+        );
+        assert_eq!(stats.generic_textured_solid_reject_non_uniform_texel, 1);
     }
 
     #[test]
