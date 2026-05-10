@@ -21,6 +21,8 @@ mod log;
 #[cfg(target_os = "linux")]
 mod pacing;
 #[cfg(target_os = "linux")]
+mod raster;
+#[cfg(target_os = "linux")]
 mod shell;
 #[cfg(target_os = "linux")]
 mod surface;
@@ -33,11 +35,13 @@ use log::{SharedLog, install_panic_hook, log_startup, open_log, write_log};
 #[cfg(target_os = "linux")]
 use pacing::{REFRESH_ENV_VAR, select_refresh_rate, sleep_after_frame};
 #[cfg(target_os = "linux")]
+use raster::{ClipBounds, rasterize_triangle, usize_to_f32};
+#[cfg(target_os = "linux")]
 use shell::PortMasterGuiShell;
 #[cfg(target_os = "linux")]
 use surface::SoftwareSurface;
 #[cfg(target_os = "linux")]
-use texture::{TextureImage, TextureStore};
+use texture::TextureStore;
 
 #[cfg(target_os = "linux")]
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
@@ -631,189 +635,6 @@ impl SoftwareRenderer {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug)]
-struct ClipBounds {
-    min_x: usize,
-    min_y: usize,
-    max_x: usize,
-    max_y: usize,
-}
-
-#[cfg(target_os = "linux")]
-impl ClipBounds {
-    fn new(rect: egui::Rect, width: usize, height: usize) -> io::Result<Self> {
-        let min_x = clamp_rect_value(rect.min.x.floor(), width)?;
-        let min_y = clamp_rect_value(rect.min.y.floor(), height)?;
-        let max_x = clamp_rect_value(rect.max.x.ceil(), width)?;
-        let max_y = clamp_rect_value(rect.max.y.ceil(), height)?;
-        Ok(Self {
-            min_x,
-            min_y,
-            max_x,
-            max_y,
-        })
-    }
-
-    const fn is_empty(self) -> bool {
-        self.min_x >= self.max_x || self.min_y >= self.max_y
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn clamp_rect_value(value: f32, max: usize) -> io::Result<usize> {
-    if !value.is_finite() {
-        return Err(io::Error::other("non-finite clip rectangle value"));
-    }
-    Ok(f32_to_usize_floor_clamped(value, max))
-}
-
-#[cfg(target_os = "linux")]
-fn usize_to_f32(value: usize) -> f32 {
-    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
-}
-
-#[cfg(target_os = "linux")]
-fn f32_to_usize_floor_clamped(value: f32, max: usize) -> usize {
-    f32_to_usize_threshold_clamped(value.floor(), max)
-}
-
-#[cfg(target_os = "linux")]
-fn f32_to_usize_ceil_clamped(value: f32, max: usize) -> usize {
-    f32_to_usize_threshold_clamped(value.ceil(), max)
-}
-
-#[cfg(target_os = "linux")]
-fn f32_to_usize_round_clamped(value: f32, max: usize) -> usize {
-    f32_to_usize_threshold_clamped(value.round(), max)
-}
-
-#[cfg(target_os = "linux")]
-fn f32_to_usize_threshold_clamped(value: f32, max: usize) -> usize {
-    if value <= 0.0 {
-        return 0;
-    }
-    if value >= usize_to_f32(max) {
-        return max;
-    }
-    let mut low = 0_usize;
-    let mut high = max;
-    while low < high {
-        let mid = (low + high).div_ceil(2);
-        if usize_to_f32(mid) <= value {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    low
-}
-
-#[cfg(target_os = "linux")]
-fn f32_to_u8_round_clamped(value: f32) -> u8 {
-    let value = value.round().clamp(0.0, 255.0);
-    let mut low = 0_u8;
-    let mut high = u8::MAX;
-    while low < high {
-        let mid = low + (high - low).div_ceil(2);
-        if f32::from(mid) <= value {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    low
-}
-
-#[cfg(target_os = "linux")]
-fn edge(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
-    (c.x - a.x).mul_add(b.y - a.y, -((c.y - a.y) * (b.x - a.x)))
-}
-
-#[cfg(target_os = "linux")]
-fn rasterize_triangle(
-    surface: &mut SoftwareSurface,
-    v0: &egui::epaint::Vertex,
-    v1: &egui::epaint::Vertex,
-    v2: &egui::epaint::Vertex,
-    texture: &TextureImage,
-    clip: ClipBounds,
-) {
-    let area = edge(v0.pos, v1.pos, v2.pos);
-    if area.abs() <= f32::EPSILON {
-        return;
-    }
-    let min_x = f32_to_usize_floor_clamped(v0.pos.x.min(v1.pos.x).min(v2.pos.x), clip.max_x)
-        .max(clip.min_x);
-    let max_x =
-        f32_to_usize_ceil_clamped(v0.pos.x.max(v1.pos.x).max(v2.pos.x), clip.max_x).min(clip.max_x);
-    let min_y = f32_to_usize_floor_clamped(v0.pos.y.min(v1.pos.y).min(v2.pos.y), clip.max_y)
-        .max(clip.min_y);
-    let max_y =
-        f32_to_usize_ceil_clamped(v0.pos.y.max(v1.pos.y).max(v2.pos.y), clip.max_y).min(clip.max_y);
-    if min_x >= max_x || min_y >= max_y {
-        return;
-    }
-
-    for y in min_y..max_y {
-        for x in min_x..max_x {
-            let point = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
-            let w0 = edge(v1.pos, v2.pos, point) / area;
-            let w1 = edge(v2.pos, v0.pos, point) / area;
-            let w2 = edge(v0.pos, v1.pos, point) / area;
-            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
-                continue;
-            }
-            let uv = egui::pos2(
-                v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
-                v0.uv.y.mul_add(w0, v1.uv.y.mul_add(w1, v2.uv.y * w2)),
-            );
-            let vertex_color = interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2);
-            let texture_color = texture.sample_nearest(uv);
-            let color = modulate_color(vertex_color, texture_color);
-            surface.blend_pixel(x, y, color);
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn interpolate_color(
-    c0: egui::Color32,
-    c1: egui::Color32,
-    c2: egui::Color32,
-    w0: f32,
-    w1: f32,
-    w2: f32,
-) -> [u8; 4] {
-    [
-        interpolate_channel(c0.r(), c1.r(), c2.r(), w0, w1, w2),
-        interpolate_channel(c0.g(), c1.g(), c2.g(), w0, w1, w2),
-        interpolate_channel(c0.b(), c1.b(), c2.b(), w0, w1, w2),
-        interpolate_channel(c0.a(), c1.a(), c2.a(), w0, w1, w2),
-    ]
-}
-
-#[cfg(target_os = "linux")]
-fn interpolate_channel(c0: u8, c1: u8, c2: u8, w0: f32, w1: f32, w2: f32) -> u8 {
-    let value = f32::from(c0).mul_add(w0, f32::from(c1).mul_add(w1, f32::from(c2) * w2));
-    f32_to_u8_round_clamped(value)
-}
-
-#[cfg(target_os = "linux")]
-fn modulate_color(vertex: [u8; 4], texture: [u8; 4]) -> [u8; 4] {
-    [
-        multiply_u8(vertex[0], texture[0]),
-        multiply_u8(vertex[1], texture[1]),
-        multiply_u8(vertex[2], texture[2]),
-        multiply_u8(vertex[3], texture[3]),
-    ]
-}
-
-#[cfg(target_os = "linux")]
-fn multiply_u8(a: u8, b: u8) -> u8 {
-    u8::try_from((u16::from(a) * u16::from(b) + 127) / 255).unwrap_or(u8::MAX)
-}
-
-#[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct FbBitfield {
@@ -1353,37 +1174,6 @@ mod tests {
         assert_eq!(pack_color(&var, (0x12, 0x34, 0x56)), 0xff12_3456);
     }
 
-    #[test]
-    fn triangle_rasterizer_draws_into_tiny_surface() {
-        let mut surface = SoftwareSurface::default();
-        surface.resize(2, 2).expect("surface");
-        surface.clear([0, 0, 0, 255]);
-        let texture = TextureImage {
-            width: 1,
-            height: 1,
-            pixels: vec![255, 255, 255, 255],
-        };
-        let v0 = test_vertex(0.0, 0.0);
-        let v1 = test_vertex(2.0, 0.0);
-        let v2 = test_vertex(0.0, 2.0);
-
-        rasterize_triangle(
-            &mut surface,
-            &v0,
-            &v1,
-            &v2,
-            &texture,
-            ClipBounds {
-                min_x: 0,
-                min_y: 0,
-                max_x: 2,
-                max_y: 2,
-            },
-        );
-
-        assert!(surface.pixels.chunks_exact(4).any(|pixel| pixel[0] == 255));
-    }
-
     fn test_viewport(base_offset: usize) -> VisibleViewport {
         VisibleViewport {
             xoffset: 0,
@@ -1409,14 +1199,6 @@ mod tests {
             lower_margin: 33,
             vsync_len: 2,
             ..Default::default()
-        }
-    }
-
-    fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
-        egui::epaint::Vertex {
-            pos: egui::pos2(x, y),
-            color: egui::Color32::WHITE,
-            uv: egui::Pos2::ZERO,
         }
     }
 }

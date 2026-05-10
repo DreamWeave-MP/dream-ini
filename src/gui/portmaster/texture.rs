@@ -3,8 +3,6 @@
 use std::collections::HashMap;
 use std::io;
 
-use super::{f32_to_usize_round_clamped, usize_to_f32};
-
 const MAX_TEXTURE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Default)]
@@ -154,27 +152,6 @@ impl TextureImage {
             ));
         }
         Ok(())
-    }
-
-    pub(super) fn sample_nearest(&self, uv: egui::Pos2) -> [u8; 4] {
-        if self.width == 0 || self.height == 0 {
-            return [255, 255, 255, 255];
-        }
-        let x = f32_to_usize_round_clamped(
-            uv.x.clamp(0.0, 1.0) * usize_to_f32(self.width.saturating_sub(1)),
-            self.width.saturating_sub(1),
-        );
-        let y = f32_to_usize_round_clamped(
-            uv.y.clamp(0.0, 1.0) * usize_to_f32(self.height.saturating_sub(1)),
-            self.height.saturating_sub(1),
-        );
-        let offset = (y * self.width + x) * 4;
-        [
-            self.pixels[offset],
-            self.pixels[offset + 1],
-            self.pixels[offset + 2],
-            self.pixels[offset + 3],
-        ]
     }
 }
 
