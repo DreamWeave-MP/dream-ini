@@ -4,10 +4,11 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use super::log::write_log;
+use super::pacing::format_repaint_delay;
 use super::raster::{
-    ClipBounds, TriangleClassification, classify_triangle, is_axis_aligned_quad,
-    rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad, rasterize_triangle,
-    usize_to_f32,
+    ClipBounds, TexturedQuadFastPathRejection, TriangleClassification, classify_triangle,
+    is_axis_aligned_quad, rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad,
+    rasterize_triangle, textured_quad_fast_path_rejection, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -87,10 +88,11 @@ impl SoftwareRenderer {
         let texture_free_elapsed = elapsed_micros(stage_start);
         let total_elapsed = elapsed_micros(total_start);
         if log_frame {
+            let repaint_delay = format_repaint_delay(repaint_delay);
             write_log(
                 frame.log,
                 format!(
-                    "software renderer timings resize_clear_us={resize_clear_elapsed} egui_run_us={egui_run_elapsed} texture_apply_us={texture_apply_elapsed} tessellate_us={tessellate_elapsed} rasterize_us={rasterize_elapsed} texture_free_us={texture_free_elapsed} repaint_delay={repaint_delay:?} total_us={total_elapsed}"
+                    "software renderer timings resize_clear_us={resize_clear_elapsed} egui_run_us={egui_run_elapsed} texture_apply_us={texture_apply_elapsed} tessellate_us={tessellate_elapsed} rasterize_us={rasterize_elapsed} texture_free_us={texture_free_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}"
                 ),
             );
         }
@@ -154,55 +156,16 @@ impl SoftwareRenderer {
         while index_offset + 2 < mesh.indices.len() {
             if index_offset + 5 < mesh.indices.len() {
                 let quad = &mesh.indices[index_offset..index_offset + 6];
-                if let Some(stats) = stats.as_deref_mut() {
-                    stats.quad_windows += 1;
-                }
-                if has_four_unique_indices(quad) {
-                    if let Some(stats) = stats.as_deref_mut() {
-                        stats.four_unique_quad_windows += 1;
-                    }
-                    let i0 = mesh_index_to_usize(quad[0])?;
-                    let i1 = mesh_index_to_usize(quad[1])?;
-                    let i2 = mesh_index_to_usize(quad[2])?;
-                    let i3 = mesh_index_to_usize(quad[3])?;
-                    let i4 = mesh_index_to_usize(quad[4])?;
-                    let i5 = mesh_index_to_usize(quad[5])?;
-                    if let (Some(v0), Some(v1), Some(v2), Some(v3), Some(v4), Some(v5)) = (
-                        mesh.vertices.get(i0),
-                        mesh.vertices.get(i1),
-                        mesh.vertices.get(i2),
-                        mesh.vertices.get(i3),
-                        mesh.vertices.get(i4),
-                        mesh.vertices.get(i5),
-                    ) {
-                        if let Some(stats) = stats.as_deref_mut() {
-                            stats.record_quad_window([v0, v1, v2, v3, v4, v5], texture);
-                        }
-                        if rasterize_axis_aligned_solid_quad(
-                            surface,
-                            [v0, v1, v2, v3, v4, v5],
-                            texture,
-                            clip,
-                        ) {
-                            if let Some(stats) = stats.as_deref_mut() {
-                                stats.solid_quad_fast_path_hits += 1;
-                            }
-                            index_offset += 6;
-                            continue;
-                        }
-                        if rasterize_axis_aligned_textured_quad(
-                            surface,
-                            [v0, v1, v2, v3, v4, v5],
-                            texture,
-                            clip,
-                        ) {
-                            if let Some(stats) = stats.as_deref_mut() {
-                                stats.textured_quad_fast_path_hits += 1;
-                            }
-                            index_offset += 6;
-                            continue;
-                        }
-                    }
+                if try_rasterize_quad_window(
+                    surface,
+                    mesh,
+                    texture,
+                    clip,
+                    quad,
+                    stats.as_deref_mut(),
+                )? {
+                    index_offset += 6;
+                    continue;
                 }
             }
 
@@ -232,6 +195,72 @@ impl SoftwareRenderer {
     }
 }
 
+fn try_rasterize_quad_window(
+    surface: &mut SoftwareSurface,
+    mesh: &egui::Mesh,
+    texture: &TextureImage,
+    clip: ClipBounds,
+    quad: &[u32],
+    mut stats: Option<&mut PrimitiveStats>,
+) -> io::Result<bool> {
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.quad_windows += 1;
+    }
+    if has_four_unique_indices(quad) {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.four_unique_quad_windows += 1;
+        }
+    } else {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.quad_windows_not_four_unique_indices += 1;
+        }
+        return Ok(false);
+    }
+
+    let i0 = mesh_index_to_usize(quad[0])?;
+    let i1 = mesh_index_to_usize(quad[1])?;
+    let i2 = mesh_index_to_usize(quad[2])?;
+    let i3 = mesh_index_to_usize(quad[3])?;
+    let i4 = mesh_index_to_usize(quad[4])?;
+    let i5 = mesh_index_to_usize(quad[5])?;
+    let (Some(v0), Some(v1), Some(v2), Some(v3), Some(v4), Some(v5)) = (
+        mesh.vertices.get(i0),
+        mesh.vertices.get(i1),
+        mesh.vertices.get(i2),
+        mesh.vertices.get(i3),
+        mesh.vertices.get(i4),
+        mesh.vertices.get(i5),
+    ) else {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.quad_window_vertex_lookup_failures += 1;
+        }
+        return Ok(false);
+    };
+
+    let vertices = [v0, v1, v2, v3, v4, v5];
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.record_quad_window(vertices, texture);
+    }
+    if rasterize_axis_aligned_solid_quad(surface, vertices, texture, clip) {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.solid_quad_fast_path_hits += 1;
+        }
+        return Ok(true);
+    }
+    if rasterize_axis_aligned_textured_quad(surface, vertices, texture, clip) {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.textured_quad_fast_path_hits += 1;
+        }
+        return Ok(true);
+    }
+    if let Some(stats) = stats
+        && let Some(rejection) = textured_quad_fast_path_rejection(vertices)
+    {
+        stats.record_textured_quad_rejection(rejection);
+    }
+    Ok(false)
+}
+
 #[derive(Debug, Default)]
 struct PrimitiveStats {
     mesh_primitives: usize,
@@ -241,11 +270,18 @@ struct PrimitiveStats {
     mesh_indices: usize,
     quad_windows: usize,
     four_unique_quad_windows: usize,
+    quad_windows_not_four_unique_indices: usize,
+    quad_window_vertex_lookup_failures: usize,
     axis_aligned_quad_windows: usize,
     solid_axis_aligned_quad_windows: usize,
     textured_axis_aligned_quad_windows: usize,
     solid_quad_fast_path_hits: usize,
     textured_quad_fast_path_hits: usize,
+    textured_quad_reject_not_rectangle_diagonal: usize,
+    textured_quad_reject_not_axis_aligned_rectangle: usize,
+    textured_quad_reject_corner_attribute_mismatch: usize,
+    textured_quad_reject_non_uniform_color: usize,
+    textured_quad_reject_non_affine_uv: usize,
     generic_triangles_rasterized: usize,
     generic_solid_triangles: usize,
     generic_textured_triangles: usize,
@@ -286,9 +322,29 @@ impl PrimitiveStats {
         }
     }
 
+    fn record_textured_quad_rejection(&mut self, rejection: TexturedQuadFastPathRejection) {
+        match rejection {
+            TexturedQuadFastPathRejection::NotRectangleDiagonal => {
+                self.textured_quad_reject_not_rectangle_diagonal += 1;
+            }
+            TexturedQuadFastPathRejection::NotAxisAlignedRectangle => {
+                self.textured_quad_reject_not_axis_aligned_rectangle += 1;
+            }
+            TexturedQuadFastPathRejection::CornerAttributeMismatch => {
+                self.textured_quad_reject_corner_attribute_mismatch += 1;
+            }
+            TexturedQuadFastPathRejection::NonUniformColor => {
+                self.textured_quad_reject_non_uniform_color += 1;
+            }
+            TexturedQuadFastPathRejection::NonAffineUv => {
+                self.textured_quad_reject_non_affine_uv += 1;
+            }
+        }
+    }
+
     fn log_line(&self) -> String {
         format!(
-            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} degenerate_triangles={}",
+            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} degenerate_triangles={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -296,11 +352,18 @@ impl PrimitiveStats {
             self.mesh_indices,
             self.quad_windows,
             self.four_unique_quad_windows,
+            self.quad_windows_not_four_unique_indices,
+            self.quad_window_vertex_lookup_failures,
             self.axis_aligned_quad_windows,
             self.solid_axis_aligned_quad_windows,
             self.textured_axis_aligned_quad_windows,
             self.solid_quad_fast_path_hits,
             self.textured_quad_fast_path_hits,
+            self.textured_quad_reject_not_rectangle_diagonal,
+            self.textured_quad_reject_not_axis_aligned_rectangle,
+            self.textured_quad_reject_corner_attribute_mismatch,
+            self.textured_quad_reject_non_uniform_color,
+            self.textured_quad_reject_non_affine_uv,
             self.generic_triangles_rasterized,
             self.generic_solid_triangles,
             self.generic_textured_triangles,
@@ -408,8 +471,14 @@ mod tests {
         assert_eq!(stats.generic_textured_triangles, 1);
         assert_eq!(stats.degenerate_triangles, 1);
         stats.textured_quad_fast_path_hits = 2;
+        stats.textured_quad_reject_non_affine_uv = 1;
         assert!(stats.log_line().contains("generic_solid_triangles=1"));
         assert!(stats.log_line().contains("textured_quad_fast_path_hits=2"));
+        assert!(
+            stats
+                .log_line()
+                .contains("textured_quad_reject_non_affine_uv=1")
+        );
         assert!(stats.log_line().contains("degenerate_triangles=1"));
     }
 
@@ -437,6 +506,33 @@ mod tests {
         assert_eq!(stats.textured_quad_fast_path_hits, 1);
         assert_eq!(stats.generic_triangles_rasterized, 0);
         assert_eq!(stats.generic_textured_triangles, 0);
+    }
+
+    #[test]
+    fn renderer_stats_count_textured_quad_fast_path_rejection() {
+        let texture_id = egui::TextureId::Managed(1);
+        let mut renderer = SoftwareRenderer::default();
+        renderer.surface.resize(8, 8).expect("surface");
+        renderer.surface.clear([0, 0, 0, 255]);
+        renderer
+            .textures
+            .apply(&texture_delta(texture_id))
+            .expect("texture");
+        let mut mesh = textured_quad_mesh(texture_id);
+        mesh.vertices[3].uv = egui::pos2(0.75, 1.0);
+        let mut stats = PrimitiveStats::default();
+
+        renderer
+            .rasterize_mesh(
+                &mesh,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
+                Some(&mut stats),
+            )
+            .expect("rasterize mesh");
+
+        assert_eq!(stats.textured_quad_fast_path_hits, 0);
+        assert_eq!(stats.textured_quad_reject_non_affine_uv, 1);
+        assert_eq!(stats.generic_triangles_rasterized, 2);
     }
 
     fn quad_vertices() -> [egui::epaint::Vertex; 4] {

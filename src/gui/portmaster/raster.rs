@@ -15,6 +15,15 @@ pub(super) enum TriangleClassification {
     Textured,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TexturedQuadFastPathRejection {
+    NotRectangleDiagonal,
+    NotAxisAlignedRectangle,
+    CornerAttributeMismatch,
+    NonUniformColor,
+    NonAffineUv,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ClipBounds {
     min_x: usize,
@@ -208,10 +217,18 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
         return false;
     }
 
-    let Some((min_x, min_y, max_x, max_y)) = axis_aligned_quad_bounds(vertices) else {
+    let Some(bounds) = axis_aligned_quad_bounds(vertices) else {
         return false;
     };
-    rasterize_solid_rect(surface, min_x, min_y, max_x, max_y, clip, color);
+    rasterize_solid_rect(
+        surface,
+        bounds.min_x,
+        bounds.min_y,
+        bounds.max_x,
+        bounds.max_y,
+        clip,
+        color,
+    );
     true
 }
 
@@ -221,37 +238,18 @@ pub(super) fn rasterize_axis_aligned_textured_quad(
     texture: &TextureImage,
     clip: ClipBounds,
 ) -> bool {
-    if !triangles_share_rectangle_diagonal(vertices) {
-        return false;
-    }
-    let Some((min_x, min_y, max_x, max_y)) = axis_aligned_quad_bounds(vertices) else {
+    let Ok(candidate) = textured_quad_fast_path_candidate(vertices) else {
         return false;
     };
-    let Some(corners) = textured_quad_corners(vertices, min_x, min_y, max_x, max_y) else {
-        return false;
-    };
-    if corners.tl.color != corners.tr.color
-        || corners.tl.color != corners.bl.color
-        || corners.tl.color != corners.br.color
-    {
-        return false;
-    }
-    let affine_br_uv = egui::pos2(
-        corners.tr.uv.x + corners.bl.uv.x - corners.tl.uv.x,
-        corners.tr.uv.y + corners.bl.uv.y - corners.tl.uv.y,
-    );
-    if !near_finite_pos2(corners.br.uv, affine_br_uv, UV_AFFINE_EPSILON) {
-        return false;
-    }
 
-    rasterize_textured_rect(
-        surface,
-        corners,
-        (min_x, min_y, max_x, max_y),
-        texture,
-        clip,
-    );
+    rasterize_textured_rect(surface, candidate.corners, candidate.bounds, texture, clip);
     true
+}
+
+pub(super) fn textured_quad_fast_path_rejection(
+    vertices: [&egui::epaint::Vertex; 6],
+) -> Option<TexturedQuadFastPathRejection> {
+    textured_quad_fast_path_candidate(vertices).err()
 }
 
 pub(super) fn is_axis_aligned_quad(vertices: [&egui::epaint::Vertex; 6]) -> bool {
@@ -297,7 +295,42 @@ fn triangles_share_rectangle_diagonal(vertices: [&egui::epaint::Vertex; 6]) -> b
         && !same_f32(shared[0].y, shared[1].y)
 }
 
-fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32, f32, f32, f32)> {
+fn textured_quad_fast_path_candidate(
+    vertices: [&egui::epaint::Vertex; 6],
+) -> Result<TexturedQuadFastPathCandidate, TexturedQuadFastPathRejection> {
+    if !triangles_share_rectangle_diagonal(vertices) {
+        return Err(TexturedQuadFastPathRejection::NotRectangleDiagonal);
+    }
+    let Some(bounds) = axis_aligned_quad_bounds(vertices) else {
+        return Err(TexturedQuadFastPathRejection::NotAxisAlignedRectangle);
+    };
+    let Some(corners) = textured_quad_corners(
+        vertices,
+        bounds.min_x,
+        bounds.min_y,
+        bounds.max_x,
+        bounds.max_y,
+    ) else {
+        return Err(TexturedQuadFastPathRejection::CornerAttributeMismatch);
+    };
+    if corners.tl.color != corners.tr.color
+        || corners.tl.color != corners.bl.color
+        || corners.tl.color != corners.br.color
+    {
+        return Err(TexturedQuadFastPathRejection::NonUniformColor);
+    }
+    let affine_br_uv = egui::pos2(
+        corners.tr.uv.x + corners.bl.uv.x - corners.tl.uv.x,
+        corners.tr.uv.y + corners.bl.uv.y - corners.tl.uv.y,
+    );
+    if !near_finite_pos2(corners.br.uv, affine_br_uv, UV_AFFINE_EPSILON) {
+        return Err(TexturedQuadFastPathRejection::NonAffineUv);
+    }
+
+    Ok(TexturedQuadFastPathCandidate { corners, bounds })
+}
+
+fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<QuadBounds> {
     let mut positions = [egui::Pos2::ZERO; 4];
     let mut position_count = 0;
     for vertex in vertices {
@@ -353,7 +386,26 @@ fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32
             }
         }
     }
-    Some((min_x, min_y, max_x, max_y))
+    Some(QuadBounds {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct TexturedQuadFastPathCandidate {
+    corners: TexturedQuadCorners,
+    bounds: QuadBounds,
+}
+
+#[derive(Clone, Copy)]
+struct QuadBounds {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -441,11 +493,16 @@ fn rasterize_solid_rect(
 fn rasterize_textured_rect(
     surface: &mut SoftwareSurface,
     corners: TexturedQuadCorners,
-    bounds: (f32, f32, f32, f32),
+    bounds: QuadBounds,
     texture: &TextureImage,
     clip: ClipBounds,
 ) {
-    let (min_x, min_y, max_x, max_y) = bounds;
+    let QuadBounds {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    } = bounds;
     let start_x = solid_rect_boundary_index(min_x, clip.max_x).max(clip.min_x);
     let end_x = solid_rect_boundary_index(max_x, clip.max_x).min(clip.max_x);
     let start_y = solid_rect_boundary_index(min_y, clip.max_y).max(clip.min_y);
@@ -1190,6 +1247,10 @@ mod tests {
 
         assert!(!accepted);
         assert_eq!(white_pixel_count(&pixels), 0);
+        assert_eq!(
+            textured_quad_fast_path_rejection(quad_vertex_refs(&vertices)),
+            Some(TexturedQuadFastPathRejection::NonAffineUv)
+        );
     }
 
     #[test]
@@ -1203,6 +1264,31 @@ mod tests {
 
         assert!(!accepted);
         assert_eq!(white_pixel_count(&pixels), 0);
+        assert_eq!(
+            textured_quad_fast_path_rejection(quad_vertex_refs(&vertices)),
+            Some(TexturedQuadFastPathRejection::NonUniformColor)
+        );
+    }
+
+    #[test]
+    fn textured_quad_fast_path_rejection_accepts_eligible_quad() {
+        let vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [255, 255, 255, 255]);
+
+        assert_eq!(
+            textured_quad_fast_path_rejection(quad_vertex_refs(&vertices)),
+            None
+        );
+    }
+
+    fn quad_vertex_refs(vertices: &[egui::epaint::Vertex; 4]) -> [&egui::epaint::Vertex; 6] {
+        [
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+        ]
     }
 
     fn render_test_triangle(

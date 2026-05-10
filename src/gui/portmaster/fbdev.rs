@@ -10,7 +10,7 @@ use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
 use super::log::{SharedLog, write_log};
-use super::pacing::DisplayTiming;
+use super::pacing::{DisplayTiming, format_repaint_delay};
 use super::renderer::SoftwareRenderer;
 use super::surface::SoftwareSurface;
 use super::{GuiFrame, GuiShell};
@@ -212,10 +212,11 @@ impl Framebuffer {
         let total_elapsed = elapsed_micros(total_start);
         if log_frame {
             let blit_format_name = blit_format.name();
+            let repaint_delay = format_repaint_delay(repaint_delay);
             write_log(
                 frame.log,
                 format!(
-                    "framebuffer draw timings blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay:?} total_us={total_elapsed}"
+                    "framebuffer draw timings blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}"
                 ),
             );
         }
