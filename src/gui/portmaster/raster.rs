@@ -59,35 +59,34 @@ fn f32_to_usize_threshold_clamped(value: f32, max: usize) -> usize {
     if value <= 0.0 {
         return 0;
     }
-    if value >= usize_to_f32(max) {
+    let max_value = usize_to_f32(max);
+    if value >= max_value {
         return max;
     }
-    let mut low = 0_usize;
-    let mut high = max;
-    while low < high {
-        let mid = (low + high).div_ceil(2);
-        if usize_to_f32(mid) <= value {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    low
+    f32_to_usize_bounded(value.clamp(0.0, max_value))
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "value is clamped to a non-negative finite usize range before casting"
+)]
+fn f32_to_usize_bounded(value: f32) -> usize {
+    value as usize
 }
 
 fn f32_to_u8_round_clamped(value: f32) -> u8 {
     let value = value.round().clamp(0.0, 255.0);
-    let mut low = 0_u8;
-    let mut high = u8::MAX;
-    while low < high {
-        let mid = low + (high - low).div_ceil(2);
-        if f32::from(mid) <= value {
-            low = mid;
-        } else {
-            high = mid - 1;
-        }
-    }
-    low
+    f32_to_u8_bounded(value)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "value is rounded and clamped to the u8 range before casting"
+)]
+fn f32_to_u8_bounded(value: f32) -> u8 {
+    value as u8
 }
 
 fn edge(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
@@ -197,6 +196,49 @@ fn multiply_u8(a: u8, b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usize_conversions_clamp_floor_ceil_and_round() {
+        assert_eq!(f32_to_usize_floor_clamped(-1.25, 10), 0);
+        assert_eq!(f32_to_usize_floor_clamped(1.75, 10), 1);
+        assert_eq!(f32_to_usize_floor_clamped(12.0, 10), 10);
+
+        assert_eq!(f32_to_usize_ceil_clamped(-1.25, 10), 0);
+        assert_eq!(f32_to_usize_ceil_clamped(1.25, 10), 2);
+        assert_eq!(f32_to_usize_ceil_clamped(12.0, 10), 10);
+
+        assert_eq!(f32_to_usize_round_clamped(-1.25, 10), 0);
+        assert_eq!(f32_to_usize_round_clamped(1.49, 10), 1);
+        assert_eq!(f32_to_usize_round_clamped(1.5, 10), 2);
+        assert_eq!(f32_to_usize_round_clamped(12.0, 10), 10);
+    }
+
+    #[test]
+    fn u8_conversion_rounds_and_clamps() {
+        assert_eq!(f32_to_u8_round_clamped(-1.0), 0);
+        assert_eq!(f32_to_u8_round_clamped(1.49), 1);
+        assert_eq!(f32_to_u8_round_clamped(1.5), 2);
+        assert_eq!(f32_to_u8_round_clamped(300.0), 255);
+    }
+
+    #[test]
+    fn nearest_texture_sampling_clamps_to_edges() {
+        let texture = TextureImage {
+            width: 2,
+            height: 2,
+            pixels: vec![
+                1, 0, 0, 255, // top-left
+                2, 0, 0, 255, // top-right
+                3, 0, 0, 255, // bottom-left
+                4, 0, 0, 255, // bottom-right
+            ],
+        };
+
+        assert_eq!(sample_nearest(&texture, egui::pos2(-1.0, -1.0))[0], 1);
+        assert_eq!(sample_nearest(&texture, egui::pos2(2.0, -1.0))[0], 2);
+        assert_eq!(sample_nearest(&texture, egui::pos2(-1.0, 2.0))[0], 3);
+        assert_eq!(sample_nearest(&texture, egui::pos2(2.0, 2.0))[0], 4);
+    }
 
     #[test]
     fn triangle_rasterizer_draws_into_tiny_surface() {
