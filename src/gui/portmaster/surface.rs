@@ -44,6 +44,21 @@ impl SoftwareSurface {
         alpha_blend(&mut self.pixels[offset..offset + 4], color);
     }
 
+    pub(super) const fn row_offset(&self, y: usize) -> usize {
+        y * self.width * 4
+    }
+
+    pub(super) fn write_opaque_pixel_at_offset(&mut self, offset: usize, color: [u8; 4]) {
+        self.pixels[offset..offset + 4].copy_from_slice(&color);
+    }
+
+    pub(super) fn blend_translucent_pixel_at_offset(&mut self, offset: usize, color: [u8; 4]) {
+        blend_translucent_premultiplied_over_opaque_destination(
+            &mut self.pixels[offset..offset + 4],
+            color,
+        );
+    }
+
     pub(super) fn blend_span(&mut self, y: usize, start_x: usize, end_x: usize, color: [u8; 4]) {
         if color[3] == 0 {
             return;
@@ -79,6 +94,17 @@ fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {
     // egui::Color32 stores premultiplied-alpha sRGBA. Do not multiply the
     // source channels by alpha again here unless darker fringes around every
     // translucent primitive sound like entertainment.
+    destination[0] = blend_premultiplied_channel(source[0], destination[0], inverse_alpha);
+    destination[1] = blend_premultiplied_channel(source[1], destination[1], inverse_alpha);
+    destination[2] = blend_premultiplied_channel(source[2], destination[2], inverse_alpha);
+    destination[3] = u8::MAX;
+}
+
+fn blend_translucent_premultiplied_over_opaque_destination(
+    destination: &mut [u8],
+    source: [u8; 4],
+) {
+    let inverse_alpha = u16::from(u8::MAX - source[3]);
     destination[0] = blend_premultiplied_channel(source[0], destination[0], inverse_alpha);
     destination[1] = blend_premultiplied_channel(source[1], destination[1], inverse_alpha);
     destination[2] = blend_premultiplied_channel(source[2], destination[2], inverse_alpha);
@@ -171,6 +197,52 @@ mod tests {
         surface.blend_span(0, 1, 3, color);
 
         assert_eq!(surface.pixels, expected);
+    }
+
+    #[test]
+    fn offset_opaque_write_matches_blend_pixel_for_opaque_source() {
+        let color = [44, 55, 66, 255];
+        let mut by_offset = SoftwareSurface::default();
+        by_offset.resize(3, 2).expect("surface");
+        by_offset.clear([1, 2, 3, 255]);
+        let mut by_blend = SoftwareSurface::default();
+        by_blend.resize(3, 2).expect("surface");
+        by_blend.clear([1, 2, 3, 255]);
+
+        by_offset.write_opaque_pixel_at_offset(by_offset.row_offset(1) + 2 * 4, color);
+        by_blend.blend_pixel(2, 1, color);
+
+        assert_eq!(by_offset.pixels, by_blend.pixels);
+    }
+
+    #[test]
+    fn offset_translucent_blend_matches_alpha_blend_for_translucent_source() {
+        let color = [100, 25, 0, 128];
+        let mut by_offset = SoftwareSurface::default();
+        by_offset.resize(3, 2).expect("surface");
+        by_offset.clear([20, 40, 60, 255]);
+        let mut by_blend = SoftwareSurface::default();
+        by_blend.resize(3, 2).expect("surface");
+        by_blend.clear([20, 40, 60, 255]);
+
+        by_offset.blend_translucent_pixel_at_offset(by_offset.row_offset(1) + 4, color);
+        by_blend.blend_pixel(1, 1, color);
+
+        assert_eq!(by_offset.pixels, by_blend.pixels);
+    }
+
+    #[test]
+    fn transparent_source_matches_skipped_offset_write() {
+        let mut by_offset = SoftwareSurface::default();
+        by_offset.resize(3, 2).expect("surface");
+        by_offset.clear([20, 40, 60, 255]);
+        let mut by_blend = SoftwareSurface::default();
+        by_blend.resize(3, 2).expect("surface");
+        by_blend.clear([20, 40, 60, 255]);
+
+        by_blend.blend_pixel(1, 1, [100, 25, 0, 0]);
+
+        assert_eq!(by_offset.pixels, by_blend.pixels);
     }
 
     #[test]

@@ -2095,6 +2095,8 @@ fn rasterize_white_constant_texel_textured_triangle_no_stats(
             &raster,
             (pixel_edge0, pixel_edge1, pixel_edge2),
         );
+        let row_offset = surface.row_offset(y);
+        let mut pixel_offset = row_offset + start_x * 4;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
@@ -2103,12 +2105,23 @@ fn rasterize_white_constant_texel_textured_triangle_no_stats(
                 && edge_covers_pixel(w1, raster.edge1_includes_boundary)
                 && edge_covers_pixel(w2, raster.edge2_includes_boundary)
             {
-                let color = white_constant_texel_pixel_color(row_color, color_step, x - start_x);
-                surface.blend_pixel(x, y, color);
+                let dx = x - start_x;
+                let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
+                if alpha != 0 {
+                    let color = white_constant_texel_pixel_color_with_alpha(
+                        row_color, color_step, dx, alpha,
+                    );
+                    if alpha == u8::MAX {
+                        surface.write_opaque_pixel_at_offset(pixel_offset, color);
+                    } else {
+                        surface.blend_translucent_pixel_at_offset(pixel_offset, color);
+                    }
+                }
             }
             pixel_edge0 += raster.w0_step_x;
             pixel_edge1 += raster.w1_step_x;
             pixel_edge2 += raster.w2_step_x;
+            pixel_offset += 4;
         }
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
@@ -2253,6 +2266,8 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
             &raster,
             (pixel_edge0, pixel_edge1, pixel_edge2),
         );
+        let row_offset = surface.row_offset(y);
+        let mut pixel_offset = row_offset + start_x * 4;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
@@ -2261,17 +2276,28 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
                 && edge_covers_pixel(w1, raster.edge1_includes_boundary)
                 && edge_covers_pixel(w2, raster.edge2_includes_boundary)
             {
-                let color = white_constant_texel_pixel_color(row_color, color_step, x - start_x);
-                surface.blend_pixel(x, y, color);
+                let dx = x - start_x;
+                let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
                 stats.textured_triangle_covered_px += 1;
                 stats.constant_texel_textured_triangle_covered_px += 1;
                 stats.constant_texel_textured_triangle_white_texel_covered_px += 1;
-                stats.record_alpha_px(color[3], 1);
-                stats.record_constant_texel_alpha_px(color[3], 1);
+                stats.record_alpha_px(alpha, 1);
+                stats.record_constant_texel_alpha_px(alpha, 1);
+                if alpha != 0 {
+                    let color = white_constant_texel_pixel_color_with_alpha(
+                        row_color, color_step, dx, alpha,
+                    );
+                    if alpha == u8::MAX {
+                        surface.write_opaque_pixel_at_offset(pixel_offset, color);
+                    } else {
+                        surface.blend_translucent_pixel_at_offset(pixel_offset, color);
+                    }
+                }
             }
             pixel_edge0 += raster.w0_step_x;
             pixel_edge1 += raster.w1_step_x;
             pixel_edge2 += raster.w2_step_x;
+            pixel_offset += 4;
         }
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
@@ -2527,13 +2553,27 @@ fn white_constant_texel_pixel_color(
     color_step: [f32; 4],
     dx: usize,
 ) -> [u8; 4] {
+    let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
+    white_constant_texel_pixel_color_with_alpha(row_color, color_step, dx, alpha)
+}
+
+fn white_constant_texel_pixel_color_with_alpha(
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    dx: usize,
+    alpha: u8,
+) -> [u8; 4] {
     let dx = usize_to_f32(dx);
     [
         f32_to_u8_round_clamped(color_step[0].mul_add(dx, row_color[0])),
         f32_to_u8_round_clamped(color_step[1].mul_add(dx, row_color[1])),
         f32_to_u8_round_clamped(color_step[2].mul_add(dx, row_color[2])),
-        f32_to_u8_round_clamped(color_step[3].mul_add(dx, row_color[3])),
+        alpha,
     ]
+}
+
+fn white_constant_texel_pixel_alpha(row_color: [f32; 4], color_step: [f32; 4], dx: usize) -> u8 {
+    f32_to_u8_round_clamped(color_step[3].mul_add(usize_to_f32(dx), row_color[3]))
 }
 
 fn white_constant_texel_row_color(
@@ -3296,6 +3336,78 @@ mod tests {
             constant_stats.opaque_px
                 + constant_stats.translucent_px
                 + constant_stats.transparent_px
+        );
+    }
+
+    #[test]
+    fn constant_texel_textured_triangle_stats_count_skipped_transparent_white_pixels() {
+        let texture = test_solid_2x2_texture([255, 255, 255, 255]);
+        let mut vertices = [
+            solid_vertex(0.0, 0.0, [0, 0, 0, 0]),
+            solid_vertex(4.0, 0.0, [64, 0, 0, 0]),
+            solid_vertex(0.0, 4.0, [0, 64, 0, 0]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(0.2, 0.1);
+        vertices[2].uv = egui::pos2(0.49, 0.49);
+        let mut constant_surface = test_surface(5, 5);
+        let mut sampled_surface = test_surface(5, 5);
+        let mut constant_stats = RasterStats::default();
+        let mut sampled_stats = RasterStats::default();
+
+        assert_eq!(
+            triangle_nearest_texel_sample(&vertices[0], &vertices[1], &vertices[2], &texture)
+                .uniform_color,
+            Some([255, 255, 255, 255])
+        );
+        assert_eq!(
+            solid_triangle_color(&vertices[0], &vertices[1], &vertices[2], &texture),
+            None
+        );
+
+        rasterize_triangle(
+            &mut constant_surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            full_clip(5, 5),
+            Some(&mut constant_stats),
+        );
+        rasterize_textured_triangle(
+            &mut sampled_surface,
+            TriangleVertices {
+                v0: &vertices[0],
+                v1: &vertices[1],
+                v2: &vertices[2],
+            },
+            &texture,
+            triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], full_clip(5, 5))
+                .expect("triangle bounds"),
+            edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
+            Some(&mut sampled_stats),
+        );
+
+        assert_eq!(constant_surface.pixels, sampled_surface.pixels);
+        assert_eq!(constant_surface.pixels, test_surface(5, 5).pixels);
+        assert_eq!(constant_stats.textured_triangle_covered_px, 10);
+        assert_eq!(
+            constant_stats.textured_triangle_covered_px,
+            sampled_stats.textured_triangle_covered_px
+        );
+        assert_eq!(
+            constant_stats.transparent_px,
+            constant_stats.textured_triangle_covered_px
+        );
+        assert_eq!(constant_stats.opaque_px, 0);
+        assert_eq!(constant_stats.translucent_px, 0);
+        assert_eq!(
+            constant_stats.constant_texel_textured_triangle_white_texel_covered_px,
+            constant_stats.textured_triangle_covered_px
+        );
+        assert_eq!(
+            constant_stats.constant_texel_textured_triangle_transparent_px,
+            constant_stats.textured_triangle_covered_px
         );
     }
 
