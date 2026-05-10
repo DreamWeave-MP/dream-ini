@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
-    ClipBounds, TexturedQuadFastPathRejection, TriangleClassification, classify_triangle,
-    is_axis_aligned_quad, rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad,
-    rasterize_triangle, textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
+    ClipBounds, RasterStats, TexturedQuadFastPathRejection, TriangleClassification,
+    classify_triangle, is_axis_aligned_quad, rasterize_axis_aligned_solid_quad,
+    rasterize_axis_aligned_textured_quad, rasterize_triangle, textured_quad_fast_path_rejection,
+    triangle_raster_bounds, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -75,9 +76,14 @@ impl SoftwareRenderer {
 
         let stage_start = log_frame.then(Instant::now);
         let mut primitive_stats = log_frame.then(PrimitiveStats::default);
-        let rasterize_result = self.rasterize(&primitives, primitive_stats.as_mut());
+        let mut raster_stats = log_frame.then(RasterStats::default);
+        let rasterize_result =
+            self.rasterize(&primitives, primitive_stats.as_mut(), raster_stats.as_mut());
         let rasterize_elapsed = elapsed_micros(stage_start);
         if let Some(stats) = primitive_stats {
+            write_log(frame.log, stats.log_line());
+        }
+        if let Some(stats) = raster_stats {
             write_log(frame.log, stats.log_line());
         }
         rasterize_result?;
@@ -108,6 +114,7 @@ impl SoftwareRenderer {
         &mut self,
         primitives: &[egui::ClippedPrimitive],
         mut stats: Option<&mut PrimitiveStats>,
+        mut raster_stats: Option<&mut RasterStats>,
     ) -> io::Result<()> {
         for primitive in primitives {
             match &primitive.primitive {
@@ -115,7 +122,12 @@ impl SoftwareRenderer {
                     if let Some(stats) = stats.as_deref_mut() {
                         stats.mesh_primitives += 1;
                     }
-                    self.rasterize_mesh(mesh, primitive.clip_rect, stats.as_deref_mut())?;
+                    self.rasterize_mesh(
+                        mesh,
+                        primitive.clip_rect,
+                        stats.as_deref_mut(),
+                        raster_stats.as_deref_mut(),
+                    )?;
                 }
                 egui::epaint::Primitive::Callback(_) => {
                     if let Some(stats) = stats.as_deref_mut() {
@@ -135,6 +147,7 @@ impl SoftwareRenderer {
         mesh: &egui::Mesh,
         clip_rect: egui::Rect,
         mut stats: Option<&mut PrimitiveStats>,
+        mut raster_stats: Option<&mut RasterStats>,
     ) -> io::Result<()> {
         if let Some(stats) = stats.as_deref_mut() {
             stats.mesh_indices += mesh.indices.len();
@@ -164,6 +177,7 @@ impl SoftwareRenderer {
                     clip,
                     quad,
                     stats.as_deref_mut(),
+                    raster_stats.as_deref_mut(),
                 )? {
                     index_offset += 6;
                     continue;
@@ -189,7 +203,15 @@ impl SoftwareRenderer {
             if let Some(stats) = stats.as_deref_mut() {
                 stats.record_generic_triangle(v0, v1, v2, texture, clip);
             }
-            rasterize_triangle(surface, v0, v1, v2, texture, clip);
+            rasterize_triangle(
+                surface,
+                v0,
+                v1,
+                v2,
+                texture,
+                clip,
+                raster_stats.as_deref_mut(),
+            );
             index_offset += 3;
         }
         Ok(())
@@ -203,6 +225,7 @@ fn try_rasterize_quad_window(
     clip: ClipBounds,
     quad: &[u32],
     mut stats: Option<&mut PrimitiveStats>,
+    mut raster_stats: Option<&mut RasterStats>,
 ) -> io::Result<bool> {
     if let Some(stats) = stats.as_deref_mut() {
         stats.quad_windows += 1;
@@ -242,13 +265,25 @@ fn try_rasterize_quad_window(
     if let Some(stats) = stats.as_deref_mut() {
         stats.record_quad_window(vertices, texture);
     }
-    if rasterize_axis_aligned_solid_quad(surface, vertices, texture, clip) {
+    if rasterize_axis_aligned_solid_quad(
+        surface,
+        vertices,
+        texture,
+        clip,
+        raster_stats.as_deref_mut(),
+    ) {
         if let Some(stats) = stats.as_deref_mut() {
             stats.solid_quad_fast_path_hits += 1;
         }
         return Ok(true);
     }
-    if rasterize_axis_aligned_textured_quad(surface, vertices, texture, clip) {
+    if rasterize_axis_aligned_textured_quad(
+        surface,
+        vertices,
+        texture,
+        clip,
+        raster_stats.as_deref_mut(),
+    ) {
         if let Some(stats) = stats.as_deref_mut() {
             stats.textured_quad_fast_path_hits += 1;
         }
@@ -744,6 +779,7 @@ mod tests {
                 &mesh,
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
                 Some(&mut stats),
+                None,
             )
             .expect("rasterize mesh");
 
@@ -771,6 +807,7 @@ mod tests {
                 &mesh,
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
                 Some(&mut stats),
+                None,
             )
             .expect("rasterize mesh");
 

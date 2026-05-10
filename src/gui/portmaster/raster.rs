@@ -24,6 +24,44 @@ pub(super) enum TexturedQuadFastPathRejection {
     NonAffineUv,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct RasterStats {
+    pub(super) solid_rect_calls: usize,
+    pub(super) solid_rect_px: usize,
+    pub(super) textured_rect_calls: usize,
+    pub(super) textured_rect_px: usize,
+    pub(super) solid_triangle_calls: usize,
+    pub(super) solid_triangle_bbox_px: usize,
+    pub(super) solid_triangle_covered_px: usize,
+    pub(super) solid_triangle_span_rows: usize,
+    pub(super) textured_triangle_calls: usize,
+    pub(super) textured_triangle_bbox_px: usize,
+    pub(super) textured_triangle_covered_px: usize,
+    pub(super) degenerate_triangle_skips: usize,
+    pub(super) fully_clipped_triangle_skips: usize,
+}
+
+impl RasterStats {
+    pub(super) fn log_line(&self) -> String {
+        format!(
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} degenerate_triangle_skips={} fully_clipped_triangle_skips={}",
+            self.solid_rect_calls,
+            self.solid_rect_px,
+            self.textured_rect_calls,
+            self.textured_rect_px,
+            self.solid_triangle_calls,
+            self.solid_triangle_bbox_px,
+            self.solid_triangle_covered_px,
+            self.solid_triangle_span_rows,
+            self.textured_triangle_calls,
+            self.textured_triangle_bbox_px,
+            self.textured_triangle_covered_px,
+            self.degenerate_triangle_skips,
+            self.fully_clipped_triangle_skips,
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ClipBounds {
     min_x: usize,
@@ -174,21 +212,36 @@ pub(super) fn rasterize_triangle(
     v2: &egui::epaint::Vertex,
     texture: &TextureImage,
     clip: ClipBounds,
+    mut stats: Option<&mut RasterStats>,
 ) {
     let area = edge(v0.pos, v1.pos, v2.pos);
     if area.abs() <= f32::EPSILON {
+        if let Some(stats) = stats {
+            stats.degenerate_triangle_skips += 1;
+        }
         return;
     }
     let Some(bounds) = triangle_raster_bounds(v0, v1, v2, clip) else {
+        if let Some(stats) = stats {
+            stats.fully_clipped_triangle_skips += 1;
+        }
         return;
     };
 
     if let Some(color) = solid_triangle_color(v0, v1, v2, texture) {
-        rasterize_solid_triangle(surface, v0, v1, v2, bounds, area, color);
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.solid_triangle_calls += 1;
+            stats.solid_triangle_bbox_px += bounds.pixel_area();
+        }
+        rasterize_solid_triangle(surface, v0, v1, v2, bounds, area, color, stats);
         return;
     }
 
-    rasterize_textured_triangle(surface, v0, v1, v2, texture, bounds, area);
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.textured_triangle_calls += 1;
+        stats.textured_triangle_bbox_px += bounds.pixel_area();
+    }
+    rasterize_textured_triangle(surface, v0, v1, v2, texture, bounds, area, stats);
 }
 
 pub(super) fn triangle_raster_bounds(
@@ -238,6 +291,7 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
     vertices: [&egui::epaint::Vertex; 6],
     texture: &TextureImage,
     clip: ClipBounds,
+    stats: Option<&mut RasterStats>,
 ) -> bool {
     let Some(color) = solid_triangle_color(vertices[0], vertices[1], vertices[2], texture) else {
         return false;
@@ -260,6 +314,7 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
         bounds.max_y,
         clip,
         color,
+        stats,
     );
     true
 }
@@ -269,12 +324,20 @@ pub(super) fn rasterize_axis_aligned_textured_quad(
     vertices: [&egui::epaint::Vertex; 6],
     texture: &TextureImage,
     clip: ClipBounds,
+    stats: Option<&mut RasterStats>,
 ) -> bool {
     let Ok(candidate) = textured_quad_fast_path_candidate(vertices) else {
         return false;
     };
 
-    rasterize_textured_rect(surface, candidate.corners, candidate.bounds, texture, clip);
+    rasterize_textured_rect(
+        surface,
+        candidate.corners,
+        candidate.bounds,
+        texture,
+        clip,
+        stats,
+    );
     true
 }
 
@@ -509,6 +572,7 @@ fn rasterize_solid_rect(
     max_y: f32,
     clip: ClipBounds,
     color: [u8; 4],
+    stats: Option<&mut RasterStats>,
 ) {
     let start_x = solid_rect_boundary_index(min_x, clip.max_x).max(clip.min_x);
     let end_x = solid_rect_boundary_index(max_x, clip.max_x).min(clip.max_x);
@@ -516,6 +580,10 @@ fn rasterize_solid_rect(
     let end_y = solid_rect_boundary_index(max_y, clip.max_y).min(clip.max_y);
     if start_x >= end_x || start_y >= end_y {
         return;
+    }
+    if let Some(stats) = stats {
+        stats.solid_rect_calls += 1;
+        stats.solid_rect_px += (end_x - start_x) * (end_y - start_y);
     }
     for y in start_y..end_y {
         surface.blend_span(y, start_x, end_x, color);
@@ -528,6 +596,7 @@ fn rasterize_textured_rect(
     bounds: QuadBounds,
     texture: &TextureImage,
     clip: ClipBounds,
+    stats: Option<&mut RasterStats>,
 ) {
     let QuadBounds {
         min_x,
@@ -541,6 +610,10 @@ fn rasterize_textured_rect(
     let end_y = solid_rect_boundary_index(max_y, clip.max_y).min(clip.max_y);
     if start_x >= end_x || start_y >= end_y {
         return;
+    }
+    if let Some(stats) = stats {
+        stats.textured_rect_calls += 1;
+        stats.textured_rect_px += (end_x - start_x) * (end_y - start_y);
     }
 
     let inv_width = 1.0 / (max_x - min_x);
@@ -586,6 +659,7 @@ fn rasterize_solid_triangle(
     bounds: TriangleRasterBounds,
     area: f32,
     color: [u8; 4],
+    mut stats: Option<&mut RasterStats>,
 ) {
     let inv_area = 1.0 / area;
     let start = egui::pos2(
@@ -632,6 +706,10 @@ fn rasterize_solid_triangle(
         }
         if let Some(start_x) = span_start {
             surface.blend_span(y, start_x, span_end, color);
+            if let Some(stats) = stats.as_deref_mut() {
+                stats.solid_triangle_covered_px += span_end - start_x;
+                stats.solid_triangle_span_rows += 1;
+            }
         }
         row_edge0 += w0_step_y;
         row_edge1 += w1_step_y;
@@ -647,6 +725,7 @@ fn rasterize_textured_triangle(
     texture: &TextureImage,
     bounds: TriangleRasterBounds,
     area: f32,
+    mut stats: Option<&mut RasterStats>,
 ) {
     let inv_area = 1.0 / area;
     let start = egui::pos2(
@@ -686,6 +765,9 @@ fn rasterize_textured_triangle(
                 let texture_color = sample_nearest(texture, uv);
                 let color = modulate_color(vertex_color, texture_color);
                 surface.blend_pixel(x, y, color);
+                if let Some(stats) = stats.as_deref_mut() {
+                    stats.textured_triangle_covered_px += 1;
+                }
             }
             pixel_edge0 += w0_step_x;
             pixel_edge1 += w1_step_x;
@@ -1015,6 +1097,7 @@ mod tests {
             &vertices[2],
             &texture,
             clip,
+            None,
         );
         rasterize_triangle(
             &mut production,
@@ -1023,6 +1106,7 @@ mod tests {
             &vertices[2],
             &texture,
             clip,
+            None,
         );
         reference_rasterize_solid_triangle(
             &mut reference,
@@ -1123,6 +1207,182 @@ mod tests {
     }
 
     #[test]
+    fn raster_stats_log_line_includes_all_counters() {
+        let stats = RasterStats {
+            solid_rect_calls: 1,
+            solid_rect_px: 2,
+            textured_rect_calls: 3,
+            textured_rect_px: 4,
+            solid_triangle_calls: 5,
+            solid_triangle_bbox_px: 6,
+            solid_triangle_covered_px: 7,
+            solid_triangle_span_rows: 8,
+            textured_triangle_calls: 9,
+            textured_triangle_bbox_px: 10,
+            textured_triangle_covered_px: 11,
+            degenerate_triangle_skips: 12,
+            fully_clipped_triangle_skips: 13,
+        };
+
+        assert_eq!(
+            stats.log_line(),
+            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 textured_triangle_calls=9 textured_triangle_bbox_px=10 textured_triangle_covered_px=11 degenerate_triangle_skips=12 fully_clipped_triangle_skips=13"
+        );
+    }
+
+    #[test]
+    fn raster_stats_rect_px_equals_clipped_rect_area() {
+        let vertices = test_quad_vertices();
+        let texture = test_white_texture();
+        let clip = ClipBounds {
+            min_x: 2,
+            min_y: 2,
+            max_x: 4,
+            max_y: 3,
+        };
+        let mut surface = test_surface(5, 5);
+        let mut stats = RasterStats::default();
+
+        let accepted = rasterize_axis_aligned_solid_quad(
+            &mut surface,
+            [
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &vertices[1],
+                &vertices[3],
+                &vertices[2],
+            ],
+            &texture,
+            clip,
+            Some(&mut stats),
+        );
+
+        assert!(accepted);
+        assert_eq!(stats.solid_rect_calls, 1);
+        assert_eq!(stats.solid_rect_px, 2);
+    }
+
+    #[test]
+    fn raster_stats_textured_rect_px_equals_clipped_rect_area() {
+        let vertices = textured_quad_vertices(1.0, 1.0, 4.0, 3.0, [255, 255, 255, 255]);
+        let texture = test_texture_2x2();
+        let clip = ClipBounds {
+            min_x: 2,
+            min_y: 2,
+            max_x: 4,
+            max_y: 3,
+        };
+        let mut surface = test_surface(5, 5);
+        let mut stats = RasterStats::default();
+
+        let accepted = rasterize_axis_aligned_textured_quad(
+            &mut surface,
+            [
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &vertices[1],
+                &vertices[3],
+                &vertices[2],
+            ],
+            &texture,
+            clip,
+            Some(&mut stats),
+        );
+
+        assert!(accepted);
+        assert_eq!(stats.textured_rect_calls, 1);
+        assert_eq!(stats.textured_rect_px, 2);
+    }
+
+    #[test]
+    fn raster_stats_triangle_bbox_covers_emitted_pixels() {
+        let mut surface = test_surface(5, 5);
+        let texture = test_white_texture();
+        let mut stats = RasterStats::default();
+        let solid = [
+            test_vertex(0.0, 0.0),
+            test_vertex(4.0, 0.0),
+            test_vertex(0.0, 4.0),
+        ];
+
+        rasterize_triangle(
+            &mut surface,
+            &solid[0],
+            &solid[1],
+            &solid[2],
+            &texture,
+            full_clip(5, 5),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.solid_triangle_calls, 1);
+        assert!(stats.solid_triangle_covered_px > 0);
+        assert!(stats.solid_triangle_bbox_px >= stats.solid_triangle_covered_px);
+        assert!(stats.solid_triangle_span_rows > 0);
+
+        let texture = test_texture_2x2();
+        let mut textured = solid;
+        textured[1].uv = egui::pos2(1.0, 0.0);
+        textured[2].uv = egui::pos2(0.0, 1.0);
+        rasterize_triangle(
+            &mut surface,
+            &textured[0],
+            &textured[1],
+            &textured[2],
+            &texture,
+            full_clip(5, 5),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_triangle_calls, 1);
+        assert!(stats.textured_triangle_covered_px > 0);
+        assert!(stats.textured_triangle_bbox_px >= stats.textured_triangle_covered_px);
+    }
+
+    #[test]
+    fn raster_stats_triangle_skips_match_raster_decisions() {
+        let mut surface = test_surface(4, 4);
+        let texture = test_white_texture();
+        let mut stats = RasterStats::default();
+        let degenerate = [
+            test_vertex(1.0, 1.0),
+            test_vertex(2.0, 2.0),
+            test_vertex(2.0, 2.0),
+        ];
+        let clipped = [
+            test_vertex(10.0, 10.0),
+            test_vertex(11.0, 10.0),
+            test_vertex(10.0, 11.0),
+        ];
+
+        rasterize_triangle(
+            &mut surface,
+            &degenerate[0],
+            &degenerate[1],
+            &degenerate[2],
+            &texture,
+            full_clip(4, 4),
+            Some(&mut stats),
+        );
+        rasterize_triangle(
+            &mut surface,
+            &clipped[0],
+            &clipped[1],
+            &clipped[2],
+            &texture,
+            full_clip(4, 4),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.degenerate_triangle_skips, 1);
+        assert_eq!(stats.fully_clipped_triangle_skips, 1);
+        assert_eq!(stats.solid_triangle_calls, 0);
+        assert_eq!(stats.textured_triangle_calls, 0);
+    }
+
+    #[test]
     fn solid_triangle_edges_cover_shared_diagonal_once() {
         let color = egui::Color32::from_rgba_premultiplied(128, 0, 0, 128);
         let mut top_left = test_vertex(0.0, 0.0);
@@ -1147,6 +1407,7 @@ mod tests {
             &bottom_left,
             &texture,
             full_clip(3, 3),
+            None,
         );
         rasterize_triangle(
             &mut surface,
@@ -1155,6 +1416,7 @@ mod tests {
             &bottom_left,
             &texture,
             full_clip(3, 3),
+            None,
         );
 
         assert_eq!(red_pixel_count(&surface.pixels), 9);
@@ -1196,6 +1458,7 @@ mod tests {
             &bottom_left,
             &texture,
             full_clip(3, 3),
+            None,
         );
         rasterize_triangle(
             &mut surface,
@@ -1204,6 +1467,7 @@ mod tests {
             &bottom_left,
             &texture,
             full_clip(3, 3),
+            None,
         );
 
         assert_eq!(red_pixel_count(&surface.pixels), 9);
@@ -1272,6 +1536,7 @@ mod tests {
             ],
             &texture,
             full_clip(5, 5),
+            None,
         );
 
         assert!(!accepted);
@@ -1516,6 +1781,7 @@ mod tests {
                 max_x: width,
                 max_y: height,
             },
+            None,
         );
 
         surface.pixels
@@ -1542,6 +1808,7 @@ mod tests {
             &vertices[2],
             &texture,
             clip,
+            None,
         );
         if let Some(bounds) = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
         {
@@ -1553,6 +1820,7 @@ mod tests {
                 bounds,
                 edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
                 color,
+                None,
             );
         }
         reference_rasterize_solid_triangle(
@@ -1629,6 +1897,7 @@ mod tests {
             ],
             &texture,
             clip,
+            None,
         );
 
         (accepted, surface.pixels)
@@ -1684,6 +1953,7 @@ mod tests {
             ],
             texture,
             clip,
+            None,
         );
 
         (accepted, surface.pixels)
@@ -1764,6 +2034,7 @@ mod tests {
             texture,
             triangle_raster_bounds(v0, v1, v2, clip).expect("triangle bounds"),
             edge(v0.pos, v1.pos, v2.pos),
+            None,
         );
     }
 
