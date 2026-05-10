@@ -23,6 +23,8 @@ mod pacing;
 #[cfg(target_os = "linux")]
 mod raster;
 #[cfg(target_os = "linux")]
+mod renderer;
+#[cfg(target_os = "linux")]
 mod shell;
 #[cfg(target_os = "linux")]
 mod surface;
@@ -35,13 +37,11 @@ use log::{SharedLog, install_panic_hook, log_startup, open_log, write_log};
 #[cfg(target_os = "linux")]
 use pacing::{REFRESH_ENV_VAR, select_refresh_rate, sleep_after_frame};
 #[cfg(target_os = "linux")]
-use raster::{ClipBounds, rasterize_triangle, usize_to_f32};
+use renderer::SoftwareRenderer;
 #[cfg(target_os = "linux")]
 use shell::PortMasterGuiShell;
 #[cfg(target_os = "linux")]
 use surface::SoftwareSurface;
-#[cfg(target_os = "linux")]
-use texture::TextureStore;
 
 #[cfg(target_os = "linux")]
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
@@ -160,13 +160,13 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-struct GuiFrame<'a, S: GuiShell> {
-    context: &'a egui::Context,
-    app: &'a mut GuiApp,
-    shell: &'a mut S,
+pub(super) struct GuiFrame<'a, S: GuiShell> {
+    pub(super) context: &'a egui::Context,
+    pub(super) app: &'a mut GuiApp,
+    pub(super) shell: &'a mut S,
     snapshots: &'a mut Vec<FramebufferSnapshot>,
-    log: Option<&'a SharedLog>,
-    log_frame: bool,
+    pub(super) log: Option<&'a SharedLog>,
+    pub(super) log_frame: bool,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -528,109 +528,6 @@ impl Drop for Framebuffer {
         // SAFETY: memory and memory_len are the same mapping returned by mmap in
         // Framebuffer::open_path and have not been unmapped yet.
         let _ = unsafe { libc::munmap(self.memory.as_ptr().cast(), self.memory_len.get()) };
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Default)]
-struct SoftwareRenderer {
-    surface: SoftwareSurface,
-    textures: TextureStore,
-}
-
-#[cfg(target_os = "linux")]
-impl SoftwareRenderer {
-    fn render<S: GuiShell>(
-        &mut self,
-        width: usize,
-        height: usize,
-        frame: &mut GuiFrame<'_, S>,
-    ) -> io::Result<()> {
-        self.surface.resize(width, height)?;
-        self.surface.clear([17, 20, 28, 255]);
-
-        let raw_input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(usize_to_f32(width), usize_to_f32(height)),
-            )),
-            max_texture_side: Some(1024),
-            ..Default::default()
-        };
-        let output = frame
-            .context
-            .run_ui(raw_input, |ui| frame.app.ui(ui, frame.shell));
-        self.textures.apply(&output.textures_delta)?;
-        let primitives = frame.context.tessellate(output.shapes, 1.0);
-        if frame.log_frame {
-            write_log(
-                frame.log,
-                format!(
-                    "software renderer surface={}x{} bytes={} textures={} texture_bytes={} primitives={}",
-                    self.surface.width,
-                    self.surface.height,
-                    self.surface.pixels.len(),
-                    self.textures.len(),
-                    self.textures.bytes_used(),
-                    primitives.len()
-                ),
-            );
-        }
-        self.rasterize(&primitives)?;
-        for id in output.textures_delta.free {
-            self.textures.free(id);
-        }
-        Ok(())
-    }
-
-    const fn surface(&self) -> &SoftwareSurface {
-        &self.surface
-    }
-
-    fn rasterize(&mut self, primitives: &[egui::ClippedPrimitive]) -> io::Result<()> {
-        for primitive in primitives {
-            match &primitive.primitive {
-                egui::epaint::Primitive::Mesh(mesh) => {
-                    self.rasterize_mesh(mesh, primitive.clip_rect)?;
-                }
-                egui::epaint::Primitive::Callback(_) => {
-                    return Err(io::Error::other(
-                        "unsupported egui paint callback in software renderer",
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn rasterize_mesh(&mut self, mesh: &egui::Mesh, clip_rect: egui::Rect) -> io::Result<()> {
-        let Some(texture) = self.textures.get(&mesh.texture_id) else {
-            return Ok(());
-        };
-        let clip = ClipBounds::new(clip_rect, self.surface.width, self.surface.height)?;
-        if clip.is_empty() {
-            return Ok(());
-        }
-        let surface = &mut self.surface;
-        for triangle in mesh.indices.chunks_exact(3) {
-            let i0 = usize::try_from(triangle[0])
-                .map_err(|_| io::Error::other("mesh index does not fit usize"))?;
-            let i1 = usize::try_from(triangle[1])
-                .map_err(|_| io::Error::other("mesh index does not fit usize"))?;
-            let i2 = usize::try_from(triangle[2])
-                .map_err(|_| io::Error::other("mesh index does not fit usize"))?;
-            let Some(v0) = mesh.vertices.get(i0) else {
-                continue;
-            };
-            let Some(v1) = mesh.vertices.get(i1) else {
-                continue;
-            };
-            let Some(v2) = mesh.vertices.get(i2) else {
-                continue;
-            };
-            rasterize_triangle(surface, v0, v1, v2, texture, clip);
-        }
-        Ok(())
     }
 }
 
