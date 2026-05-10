@@ -95,6 +95,9 @@ pub(super) struct RasterStats {
     pub(super) constant_texel_textured_triangle_transparent_px: usize,
     pub(super) constant_texel_textured_triangle_us: usize,
     pub(super) constant_texel_textured_triangle_white_texel_us: usize,
+    pub(super) constant_texel_textured_triangle_white_texel_transparent_branch_us: usize,
+    pub(super) constant_texel_textured_triangle_white_texel_opaque_branch_us: usize,
+    pub(super) constant_texel_textured_triangle_white_texel_translucent_branch_us: usize,
     pub(super) constant_texel_textured_triangle_non_white_texel_us: usize,
     pub(super) sampled_textured_triangle_calls: usize,
     pub(super) sampled_textured_triangle_candidate_px: usize,
@@ -118,6 +121,19 @@ pub(super) struct TriangleScanWorkEstimate {
 pub(super) struct TriangleTexelSample {
     pub(super) texels: Option<[(usize, usize); 3]>,
     pub(super) uniform_color: Option<[u8; 4]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WhiteTexelAlphaClass {
+    Transparent,
+    Opaque,
+    Translucent,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WhiteTexelBranchTimer {
+    class: WhiteTexelAlphaClass,
+    start: Instant,
 }
 
 impl TriangleTexelSample {
@@ -145,7 +161,7 @@ impl RasterStats {
 
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} textured_rect_constant_texel_calls={} textured_rect_constant_texel_px={} textured_rect_constant_texel_us={} textured_rect_sampled_calls={} textured_rect_sampled_px={} textured_rect_sampled_us={} textured_rect_white_texel_calls={} textured_rect_white_texel_px={} textured_rect_uniform_color_calls={} textured_rect_uniform_color_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} solid_fan_edge_intersections={} solid_fan_endpoint_probe_px={} solid_fan_fallback_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={} sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} textured_rect_constant_texel_calls={} textured_rect_constant_texel_px={} textured_rect_constant_texel_us={} textured_rect_sampled_calls={} textured_rect_sampled_px={} textured_rect_sampled_us={} textured_rect_white_texel_calls={} textured_rect_white_texel_px={} textured_rect_uniform_color_calls={} textured_rect_uniform_color_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} solid_fan_edge_intersections={} solid_fan_endpoint_probe_px={} solid_fan_fallback_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_white_texel_transparent_branch_us={} constant_texel_textured_triangle_white_texel_opaque_branch_us={} constant_texel_textured_triangle_white_texel_translucent_branch_us={} constant_texel_textured_triangle_non_white_texel_us={} sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -205,6 +221,9 @@ impl RasterStats {
             self.constant_texel_textured_triangle_transparent_px,
             self.constant_texel_textured_triangle_us,
             self.constant_texel_textured_triangle_white_texel_us,
+            self.constant_texel_textured_triangle_white_texel_transparent_branch_us,
+            self.constant_texel_textured_triangle_white_texel_opaque_branch_us,
+            self.constant_texel_textured_triangle_white_texel_translucent_branch_us,
             self.constant_texel_textured_triangle_non_white_texel_us,
             self.sampled_textured_triangle_calls,
             self.sampled_textured_triangle_candidate_px,
@@ -221,6 +240,47 @@ impl RasterStats {
 
 fn duration_as_us(duration: Duration) -> usize {
     usize::try_from(duration.as_micros()).unwrap_or(usize::MAX)
+}
+
+impl WhiteTexelBranchTimer {
+    fn switch_to(timer: &mut Option<Self>, stats: &mut RasterStats, class: WhiteTexelAlphaClass) {
+        if timer.is_some_and(|timer| timer.class == class) {
+            return;
+        }
+        Self::close(timer, stats);
+        *timer = Some(Self {
+            class,
+            start: Instant::now(),
+        });
+    }
+
+    fn close(timer: &mut Option<Self>, stats: &mut RasterStats) {
+        let Some(timer) = timer.take() else {
+            return;
+        };
+        let elapsed_us = duration_as_us(timer.start.elapsed());
+        match timer.class {
+            WhiteTexelAlphaClass::Transparent => {
+                stats.constant_texel_textured_triangle_white_texel_transparent_branch_us +=
+                    elapsed_us;
+            }
+            WhiteTexelAlphaClass::Opaque => {
+                stats.constant_texel_textured_triangle_white_texel_opaque_branch_us += elapsed_us;
+            }
+            WhiteTexelAlphaClass::Translucent => {
+                stats.constant_texel_textured_triangle_white_texel_translucent_branch_us +=
+                    elapsed_us;
+            }
+        }
+    }
+}
+
+const fn white_texel_alpha_class(alpha: u8) -> WhiteTexelAlphaClass {
+    match alpha {
+        0 => WhiteTexelAlphaClass::Transparent,
+        u8::MAX => WhiteTexelAlphaClass::Opaque,
+        _ => WhiteTexelAlphaClass::Translucent,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2234,6 +2294,7 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
     let positions = triangle_positions(vertices);
     let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
     let color_step = white_constant_texel_color_step(v0, v1, v2, &raster);
+    let mut branch_timer = None;
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
@@ -2278,31 +2339,47 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
             {
                 let dx = x - start_x;
                 let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
+                let class = white_texel_alpha_class(alpha);
+                WhiteTexelBranchTimer::switch_to(&mut branch_timer, stats, class);
                 stats.textured_triangle_covered_px += 1;
                 stats.constant_texel_textured_triangle_covered_px += 1;
                 stats.constant_texel_textured_triangle_white_texel_covered_px += 1;
-                stats.record_alpha_px(alpha, 1);
-                stats.record_constant_texel_alpha_px(alpha, 1);
-                if alpha != 0 {
-                    let color = white_constant_texel_pixel_color_with_alpha(
-                        row_color, color_step, dx, alpha,
-                    );
-                    if alpha == u8::MAX {
+                match class {
+                    WhiteTexelAlphaClass::Transparent => {
+                        stats.transparent_px += 1;
+                        stats.constant_texel_textured_triangle_transparent_px += 1;
+                    }
+                    WhiteTexelAlphaClass::Opaque => {
+                        stats.opaque_px += 1;
+                        stats.constant_texel_textured_triangle_opaque_px += 1;
+                        let color = white_constant_texel_pixel_color_with_alpha(
+                            row_color, color_step, dx, alpha,
+                        );
                         surface.write_opaque_pixel_at_offset(pixel_offset, color);
-                    } else {
+                    }
+                    WhiteTexelAlphaClass::Translucent => {
+                        stats.translucent_px += 1;
+                        stats.constant_texel_textured_triangle_translucent_px += 1;
+                        let color = white_constant_texel_pixel_color_with_alpha(
+                            row_color, color_step, dx, alpha,
+                        );
                         surface.blend_translucent_pixel_at_offset(pixel_offset, color);
                     }
                 }
+            } else {
+                WhiteTexelBranchTimer::close(&mut branch_timer, stats);
             }
             pixel_edge0 += raster.w0_step_x;
             pixel_edge1 += raster.w1_step_x;
             pixel_edge2 += raster.w2_step_x;
             pixel_offset += 4;
         }
+        WhiteTexelBranchTimer::close(&mut branch_timer, stats);
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
         row_edge2 += raster.w2_step_y;
     }
+    WhiteTexelBranchTimer::close(&mut branch_timer, stats);
 }
 
 fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
@@ -3340,6 +3417,85 @@ mod tests {
     }
 
     #[test]
+    fn constant_texel_textured_triangle_stats_log_white_texel_branch_timings() {
+        let texture = test_solid_2x2_texture([255, 255, 255, 255]);
+        let mut vertices = [
+            solid_vertex(1.0, 1.0, [0, 0, 0, 0]),
+            solid_vertex(42.0, 2.0, [255, 0, 0, 255]),
+            solid_vertex(3.0, 38.0, [0, 0, 96, 96]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(0.2, 0.1);
+        vertices[2].uv = egui::pos2(0.49, 0.49);
+        let mut surface = test_surface(48, 42);
+        let mut stats = RasterStats::default();
+
+        rasterize_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            full_clip(48, 42),
+            Some(&mut stats),
+        );
+
+        let mut transparent_vertices = [
+            solid_vertex(0.0, 0.0, [0, 0, 0, 0]),
+            solid_vertex(4.0, 0.0, [64, 0, 0, 0]),
+            solid_vertex(0.0, 4.0, [0, 64, 0, 0]),
+        ];
+        transparent_vertices[0].uv = egui::pos2(0.0, 0.0);
+        transparent_vertices[1].uv = egui::pos2(0.2, 0.1);
+        transparent_vertices[2].uv = egui::pos2(0.49, 0.49);
+        rasterize_triangle(
+            &mut surface,
+            &transparent_vertices[0],
+            &transparent_vertices[1],
+            &transparent_vertices[2],
+            &texture,
+            full_clip(48, 42),
+            Some(&mut stats),
+        );
+
+        let mut opaque_vertices = [
+            solid_vertex(0.0, 0.0, [255, 0, 0, 255]),
+            solid_vertex(4.0, 0.0, [0, 255, 0, 255]),
+            solid_vertex(0.0, 4.0, [0, 0, 255, 255]),
+        ];
+        opaque_vertices[0].uv = egui::pos2(0.0, 0.0);
+        opaque_vertices[1].uv = egui::pos2(0.2, 0.1);
+        opaque_vertices[2].uv = egui::pos2(0.49, 0.49);
+        rasterize_triangle(
+            &mut surface,
+            &opaque_vertices[0],
+            &opaque_vertices[1],
+            &opaque_vertices[2],
+            &texture,
+            full_clip(48, 42),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.constant_texel_textured_triangle_white_texel_calls, 3);
+        assert!(stats.constant_texel_textured_triangle_transparent_px > 0);
+        assert!(stats.constant_texel_textured_triangle_opaque_px > 0);
+        assert!(stats.constant_texel_textured_triangle_translucent_px > 0);
+        let log_line = stats.log_line();
+        assert!(log_line.contains(&format!(
+            "constant_texel_textured_triangle_white_texel_transparent_branch_us={}",
+            stats.constant_texel_textured_triangle_white_texel_transparent_branch_us
+        )));
+        assert!(log_line.contains(&format!(
+            "constant_texel_textured_triangle_white_texel_opaque_branch_us={}",
+            stats.constant_texel_textured_triangle_white_texel_opaque_branch_us
+        )));
+        assert!(log_line.contains(&format!(
+            "constant_texel_textured_triangle_white_texel_translucent_branch_us={}",
+            stats.constant_texel_textured_triangle_white_texel_translucent_branch_us
+        )));
+    }
+
+    #[test]
     fn constant_texel_textured_triangle_stats_count_skipped_transparent_white_pixels() {
         let texture = test_solid_2x2_texture([255, 255, 255, 255]);
         let mut vertices = [
@@ -3964,6 +4120,9 @@ mod tests {
             constant_texel_textured_triangle_transparent_px: 67,
             constant_texel_textured_triangle_us: 56,
             constant_texel_textured_triangle_white_texel_us: 68,
+            constant_texel_textured_triangle_white_texel_transparent_branch_us: 70,
+            constant_texel_textured_triangle_white_texel_opaque_branch_us: 71,
+            constant_texel_textured_triangle_white_texel_translucent_branch_us: 72,
             constant_texel_textured_triangle_non_white_texel_us: 69,
             sampled_textured_triangle_calls: 57,
             sampled_textured_triangle_candidate_px: 58,
@@ -3978,7 +4137,7 @@ mod tests {
 
         assert_eq!(
             stats.log_line(),
-            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 textured_rect_constant_texel_calls=43 textured_rect_constant_texel_px=44 textured_rect_constant_texel_us=45 textured_rect_sampled_calls=46 textured_rect_sampled_px=47 textured_rect_sampled_us=48 textured_rect_white_texel_calls=49 textured_rect_white_texel_px=50 textured_rect_uniform_color_calls=51 textured_rect_uniform_color_px=52 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_hint_build_us=12 solid_triangle_endpoint_search_us=13 solid_triangle_blend_span_us=14 solid_triangle_blend_span_calls=15 solid_triangle_span_px=16 solid_triangle_endpoint_probe_px=17 solid_triangle_hint_probe_px=18 solid_triangle_canary_probe_px=19 solid_triangle_fallback_probe_px=20 solid_triangle_direct_probe_px=21 solid_triangle_hint_candidate_px=22 solid_triangle_narrowed_rows=23 solid_triangle_full_scan_rows=24 solid_fan_calls=25 solid_fan_triangles=26 solid_fan_rows=27 solid_fan_px=28 solid_fan_edge_intersections=29 solid_fan_endpoint_probe_px=30 solid_fan_fallback_rows=31 textured_triangle_calls=32 textured_triangle_bbox_px=33 textured_triangle_covered_px=34 textured_triangle_candidate_px=35 textured_triangle_narrowed_rows=36 textured_triangle_full_scan_rows=37 constant_texel_textured_triangle_calls=53 constant_texel_textured_triangle_white_texel_calls=61 constant_texel_textured_triangle_non_white_texel_calls=62 constant_texel_textured_triangle_candidate_px=54 constant_texel_textured_triangle_covered_px=55 constant_texel_textured_triangle_white_texel_covered_px=63 constant_texel_textured_triangle_non_white_texel_covered_px=64 constant_texel_textured_triangle_opaque_px=65 constant_texel_textured_triangle_translucent_px=66 constant_texel_textured_triangle_transparent_px=67 constant_texel_textured_triangle_us=56 constant_texel_textured_triangle_white_texel_us=68 constant_texel_textured_triangle_non_white_texel_us=69 sampled_textured_triangle_calls=57 sampled_textured_triangle_candidate_px=58 sampled_textured_triangle_covered_px=59 sampled_textured_triangle_us=60 degenerate_triangle_skips=38 fully_clipped_triangle_skips=39 opaque_px=40 translucent_px=41 transparent_px=42"
+            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 textured_rect_constant_texel_calls=43 textured_rect_constant_texel_px=44 textured_rect_constant_texel_us=45 textured_rect_sampled_calls=46 textured_rect_sampled_px=47 textured_rect_sampled_us=48 textured_rect_white_texel_calls=49 textured_rect_white_texel_px=50 textured_rect_uniform_color_calls=51 textured_rect_uniform_color_px=52 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_hint_build_us=12 solid_triangle_endpoint_search_us=13 solid_triangle_blend_span_us=14 solid_triangle_blend_span_calls=15 solid_triangle_span_px=16 solid_triangle_endpoint_probe_px=17 solid_triangle_hint_probe_px=18 solid_triangle_canary_probe_px=19 solid_triangle_fallback_probe_px=20 solid_triangle_direct_probe_px=21 solid_triangle_hint_candidate_px=22 solid_triangle_narrowed_rows=23 solid_triangle_full_scan_rows=24 solid_fan_calls=25 solid_fan_triangles=26 solid_fan_rows=27 solid_fan_px=28 solid_fan_edge_intersections=29 solid_fan_endpoint_probe_px=30 solid_fan_fallback_rows=31 textured_triangle_calls=32 textured_triangle_bbox_px=33 textured_triangle_covered_px=34 textured_triangle_candidate_px=35 textured_triangle_narrowed_rows=36 textured_triangle_full_scan_rows=37 constant_texel_textured_triangle_calls=53 constant_texel_textured_triangle_white_texel_calls=61 constant_texel_textured_triangle_non_white_texel_calls=62 constant_texel_textured_triangle_candidate_px=54 constant_texel_textured_triangle_covered_px=55 constant_texel_textured_triangle_white_texel_covered_px=63 constant_texel_textured_triangle_non_white_texel_covered_px=64 constant_texel_textured_triangle_opaque_px=65 constant_texel_textured_triangle_translucent_px=66 constant_texel_textured_triangle_transparent_px=67 constant_texel_textured_triangle_us=56 constant_texel_textured_triangle_white_texel_us=68 constant_texel_textured_triangle_white_texel_transparent_branch_us=70 constant_texel_textured_triangle_white_texel_opaque_branch_us=71 constant_texel_textured_triangle_white_texel_translucent_branch_us=72 constant_texel_textured_triangle_non_white_texel_us=69 sampled_textured_triangle_calls=57 sampled_textured_triangle_candidate_px=58 sampled_textured_triangle_covered_px=59 sampled_textured_triangle_us=60 degenerate_triangle_skips=38 fully_clipped_triangle_skips=39 opaque_px=40 translucent_px=41 transparent_px=42"
         );
     }
 
