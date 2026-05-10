@@ -36,9 +36,15 @@ pub(super) struct RasterStats {
     pub(super) solid_triangle_bbox_px: usize,
     pub(super) solid_triangle_covered_px: usize,
     pub(super) solid_triangle_span_rows: usize,
+    pub(super) solid_triangle_candidate_px: usize,
+    pub(super) solid_triangle_narrowed_rows: usize,
+    pub(super) solid_triangle_full_scan_rows: usize,
     pub(super) textured_triangle_calls: usize,
     pub(super) textured_triangle_bbox_px: usize,
     pub(super) textured_triangle_covered_px: usize,
+    pub(super) textured_triangle_candidate_px: usize,
+    pub(super) textured_triangle_narrowed_rows: usize,
+    pub(super) textured_triangle_full_scan_rows: usize,
     pub(super) degenerate_triangle_skips: usize,
     pub(super) fully_clipped_triangle_skips: usize,
     pub(super) opaque_px: usize,
@@ -57,7 +63,7 @@ impl RasterStats {
 
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -66,9 +72,15 @@ impl RasterStats {
             self.solid_triangle_bbox_px,
             self.solid_triangle_covered_px,
             self.solid_triangle_span_rows,
+            self.solid_triangle_candidate_px,
+            self.solid_triangle_narrowed_rows,
+            self.solid_triangle_full_scan_rows,
             self.textured_triangle_calls,
             self.textured_triangle_bbox_px,
             self.textured_triangle_covered_px,
+            self.textured_triangle_candidate_px,
+            self.textured_triangle_narrowed_rows,
+            self.textured_triangle_full_scan_rows,
             self.degenerate_triangle_skips,
             self.fully_clipped_triangle_skips,
             self.opaque_px,
@@ -798,6 +810,15 @@ fn rasterize_solid_triangle(
         } else {
             (bounds.min_x, bounds.max_x)
         };
+        if let Some(stats) = &mut stats {
+            let candidate_px = end_x - start_x;
+            stats.solid_triangle_candidate_px += candidate_px;
+            if candidate_px < bounds.max_x - bounds.min_x {
+                stats.solid_triangle_narrowed_rows += 1;
+            } else {
+                stats.solid_triangle_full_scan_rows += 1;
+            }
+        }
         let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
             let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
             (
@@ -984,6 +1005,13 @@ fn rasterize_textured_triangle_with_stats(
         } else {
             (bounds.min_x, bounds.max_x)
         };
+        let candidate_px = end_x - start_x;
+        stats.textured_triangle_candidate_px += candidate_px;
+        if candidate_px < bounds.max_x - bounds.min_x {
+            stats.textured_triangle_narrowed_rows += 1;
+        } else {
+            stats.textured_triangle_full_scan_rows += 1;
+        }
         let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
             let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
             (
@@ -1521,6 +1549,7 @@ mod tests {
         assert_eq!(stats.solid_triangle_calls, 1);
         assert_eq!(stats.solid_triangle_bbox_px, 96_924);
         assert!(stats.solid_triangle_covered_px > 0);
+        assert!(stats.solid_triangle_candidate_px < stats.solid_triangle_bbox_px);
         assert!(stats.solid_triangle_bbox_px >= stats.solid_triangle_covered_px * 8);
     }
 
@@ -1578,6 +1607,7 @@ mod tests {
         assert_eq!(stats.textured_triangle_calls, 1);
         assert_eq!(stats.textured_triangle_bbox_px, 96_924);
         assert!(stats.textured_triangle_covered_px > 0);
+        assert!(stats.textured_triangle_candidate_px < stats.textured_triangle_bbox_px);
         assert!(stats.textured_triangle_bbox_px >= stats.textured_triangle_covered_px * 8);
     }
 
@@ -1617,19 +1647,25 @@ mod tests {
             solid_triangle_bbox_px: 6,
             solid_triangle_covered_px: 7,
             solid_triangle_span_rows: 8,
-            textured_triangle_calls: 9,
-            textured_triangle_bbox_px: 10,
-            textured_triangle_covered_px: 11,
-            degenerate_triangle_skips: 12,
-            fully_clipped_triangle_skips: 13,
-            opaque_px: 14,
-            translucent_px: 15,
-            transparent_px: 16,
+            solid_triangle_candidate_px: 9,
+            solid_triangle_narrowed_rows: 10,
+            solid_triangle_full_scan_rows: 11,
+            textured_triangle_calls: 12,
+            textured_triangle_bbox_px: 13,
+            textured_triangle_covered_px: 14,
+            textured_triangle_candidate_px: 15,
+            textured_triangle_narrowed_rows: 16,
+            textured_triangle_full_scan_rows: 17,
+            degenerate_triangle_skips: 18,
+            fully_clipped_triangle_skips: 19,
+            opaque_px: 20,
+            translucent_px: 21,
+            transparent_px: 22,
         };
 
         assert_eq!(
             stats.log_line(),
-            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 textured_triangle_calls=9 textured_triangle_bbox_px=10 textured_triangle_covered_px=11 degenerate_triangle_skips=12 fully_clipped_triangle_skips=13 opaque_px=14 translucent_px=15 transparent_px=16"
+            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_narrowed_rows=10 solid_triangle_full_scan_rows=11 textured_triangle_calls=12 textured_triangle_bbox_px=13 textured_triangle_covered_px=14 textured_triangle_candidate_px=15 textured_triangle_narrowed_rows=16 textured_triangle_full_scan_rows=17 degenerate_triangle_skips=18 fully_clipped_triangle_skips=19 opaque_px=20 translucent_px=21 transparent_px=22"
         );
     }
 
