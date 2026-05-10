@@ -625,6 +625,25 @@ struct SolidTriangleCoverage {
 }
 
 #[derive(Clone, Copy)]
+struct SolidTriangleRowSearch<'a> {
+    vertices: TriangleVertices<'a>,
+    coverage: SolidTriangleCoverage,
+    y: usize,
+    candidate_start_x: usize,
+    candidate_end_x: usize,
+    probe_start_x: usize,
+    probe_end_x: usize,
+    hinted: bool,
+    collect_stats: bool,
+}
+
+struct SolidTriangleRowEndpoints {
+    span: Option<(usize, usize)>,
+    endpoint_probe_px: usize,
+    fell_back: bool,
+}
+
+#[derive(Clone, Copy)]
 struct TexturedQuadCorners {
     tl: egui::epaint::Vertex,
     tr: egui::epaint::Vertex,
@@ -908,26 +927,146 @@ fn rasterize_solid_triangle(
         }
 
         let collect_stats = stats.is_some();
-        let (span_start, first_probe_px) =
-            solid_triangle_first_covered_x(start_x, end_x, y, vertices, coverage, collect_stats);
-        let mut endpoint_probe_px = first_probe_px;
-        if let Some(span_start) = span_start {
-            let (last_x, last_probe_px) =
-                solid_triangle_last_covered_x(start_x, end_x, y, vertices, coverage, collect_stats);
-            endpoint_probe_px += last_probe_px;
-            let span_end = last_x.map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
+        let hint_range = if narrow_scanlines {
+            solid_triangle_hint_x_range(
+                vertices,
+                coverage.inv_area,
+                bounds,
+                usize_to_f32(y) + 0.5,
+                start_x,
+                end_x,
+            )
+        } else {
+            None
+        };
+        let (probe_start_x, probe_end_x) = hint_range.unwrap_or((start_x, end_x));
+        if let (Some((hint_start_x, hint_end_x)), Some(stats)) = (hint_range, &mut stats) {
+            stats.solid_triangle_hint_rows += 1;
+            stats.solid_triangle_hint_candidate_px += hint_end_x - hint_start_x;
+        }
+
+        let endpoints = solid_triangle_row_endpoints(SolidTriangleRowSearch {
+            vertices,
+            coverage,
+            y,
+            candidate_start_x: start_x,
+            candidate_end_x: end_x,
+            probe_start_x,
+            probe_end_x,
+            hinted: hint_range.is_some(),
+            collect_stats,
+        });
+        if endpoints.fell_back
+            && let Some(stats) = &mut stats
+        {
+            stats.solid_triangle_hint_fallback_rows += 1;
+        }
+        if let Some((span_start, span_end)) = endpoints.span {
             surface.blend_span(y, span_start, span_end, color);
             if let Some(stats) = &mut stats {
                 let px = span_end - span_start;
-                stats.solid_triangle_endpoint_probe_px += endpoint_probe_px;
+                stats.solid_triangle_endpoint_probe_px += endpoints.endpoint_probe_px;
                 stats.solid_triangle_covered_px += px;
                 stats.solid_triangle_span_rows += 1;
                 stats.record_alpha_px(color[3], px);
             }
         } else if let Some(stats) = &mut stats {
-            stats.solid_triangle_endpoint_probe_px += endpoint_probe_px;
+            stats.solid_triangle_endpoint_probe_px += endpoints.endpoint_probe_px;
         }
     }
+}
+
+fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTriangleRowEndpoints {
+    let (mut span_start, first_probe_px) = solid_triangle_first_covered_x(
+        search.probe_start_x,
+        search.probe_end_x,
+        search.y,
+        search.vertices,
+        search.coverage,
+        search.collect_stats,
+    );
+    let mut endpoint_probe_px = first_probe_px;
+    let mut fell_back = false;
+    if search.hinted {
+        fell_back = solid_triangle_hint_needs_fallback(&search, span_start, &mut endpoint_probe_px);
+        if fell_back {
+            let (fallback_span_start, fallback_probe_px) = solid_triangle_first_covered_x(
+                search.candidate_start_x,
+                search.candidate_end_x,
+                search.y,
+                search.vertices,
+                search.coverage,
+                search.collect_stats,
+            );
+            endpoint_probe_px += fallback_probe_px;
+            span_start = fallback_span_start;
+        }
+    }
+
+    let Some(span_start) = span_start else {
+        return SolidTriangleRowEndpoints {
+            span: None,
+            endpoint_probe_px,
+            fell_back,
+        };
+    };
+    let (last_start_x, last_end_x) = if fell_back {
+        (search.candidate_start_x, search.candidate_end_x)
+    } else {
+        (search.probe_start_x, search.probe_end_x)
+    };
+    let (last_x, last_probe_px) = solid_triangle_last_covered_x(
+        last_start_x,
+        last_end_x,
+        search.y,
+        search.vertices,
+        search.coverage,
+        search.collect_stats,
+    );
+    endpoint_probe_px += last_probe_px;
+    let span_end = last_x.map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
+    SolidTriangleRowEndpoints {
+        span: Some((span_start, span_end)),
+        endpoint_probe_px,
+        fell_back,
+    }
+}
+
+fn solid_triangle_hint_needs_fallback(
+    search: &SolidTriangleRowSearch<'_>,
+    span_start: Option<usize>,
+    endpoint_probe_px: &mut usize,
+) -> bool {
+    if span_start.is_none() {
+        return true;
+    }
+    if search.probe_start_x > search.candidate_start_x {
+        if search.collect_stats {
+            *endpoint_probe_px += 1;
+        }
+        if solid_triangle_covers_pixel(
+            search.probe_start_x - 1,
+            search.y,
+            search.vertices,
+            search.coverage,
+        ) {
+            return true;
+        }
+    }
+    if search.probe_end_x < search.candidate_end_x {
+        if search.collect_stats {
+            *endpoint_probe_px += 1;
+        }
+        if solid_triangle_covers_pixel(
+            search.probe_end_x,
+            search.y,
+            search.vertices,
+            search.coverage,
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 fn solid_triangle_first_covered_x(
@@ -968,6 +1107,59 @@ fn solid_triangle_last_covered_x(
         }
     }
     (None, probe_px)
+}
+
+fn solid_triangle_hint_x_range(
+    vertices: TriangleVertices<'_>,
+    inv_area: f32,
+    bounds: TriangleRasterBounds,
+    pixel_center_y: f32,
+    candidate_start_x: usize,
+    candidate_end_x: usize,
+) -> Option<(usize, usize)> {
+    let TriangleVertices { v0, v1, v2 } = vertices;
+    let mut min_center_x = f32::NEG_INFINITY;
+    let mut max_center_x = f32::INFINITY;
+    for (a, b) in [(v1.pos, v2.pos), (v2.pos, v0.pos), (v0.pos, v1.pos)] {
+        let slope_x = edge_step_x(a, b) * inv_area;
+        let at_origin = edge(a, b, egui::pos2(0.0, pixel_center_y)) * inv_area;
+        if !slope_x.is_finite() || !at_origin.is_finite() {
+            return None;
+        }
+        if same_f32(slope_x, 0.0) {
+            if at_origin < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let boundary_x = -at_origin / slope_x;
+        if !boundary_x.is_finite() {
+            return None;
+        }
+        if slope_x > 0.0 {
+            min_center_x = min_center_x.max(boundary_x);
+        } else {
+            max_center_x = max_center_x.min(boundary_x);
+        }
+    }
+    if !min_center_x.is_finite() || !max_center_x.is_finite() || min_center_x > max_center_x {
+        return None;
+    }
+
+    let start_x = f32_to_usize_ceil_clamped(min_center_x - 0.5, bounds.max_x)
+        .max(candidate_start_x)
+        .saturating_sub(TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
+        .max(candidate_start_x)
+        .max(bounds.min_x);
+    let end_x = f32_to_usize_floor_clamped(max_center_x - 0.5, bounds.max_x)
+        .saturating_add(1 + TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
+        .min(candidate_end_x)
+        .min(bounds.max_x)
+        .max(start_x);
+    if start_x >= end_x {
+        return None;
+    }
+    Some((start_x, end_x))
 }
 
 fn solid_triangle_covers_pixel(
@@ -2037,6 +2229,35 @@ mod tests {
     }
 
     #[test]
+    fn solid_triangle_hint_stats_count_large_safe_triangle() {
+        let vertices = [
+            solid_vertex(48.25, 38.5, [88, 144, 200, 255]),
+            solid_vertex(462.75, 92.25, [88, 144, 200, 255]),
+            solid_vertex(137.5, 430.75, [88, 144, 200, 255]),
+        ];
+        let clip = full_clip(512, 512);
+        let mut surface = test_surface(512, 512);
+        let mut stats = RasterStats::default();
+
+        rasterize_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &test_white_texture(),
+            clip,
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.solid_triangle_calls, 1);
+        assert!(stats.solid_triangle_hint_rows > 0);
+        assert!(stats.solid_triangle_hint_candidate_px > 0);
+        assert!(stats.solid_triangle_endpoint_probe_px > 0);
+        assert!(stats.solid_triangle_candidate_px >= stats.solid_triangle_hint_candidate_px);
+        assert!(stats.solid_triangle_hint_fallback_rows < stats.solid_triangle_hint_rows);
+    }
+
+    #[test]
     fn solid_triangle_stats_count_endpoint_probes_without_hints() {
         let vertices = [
             solid_vertex(1.0, 1.0, [160, 32, 64, 255]),
@@ -2168,6 +2389,46 @@ mod tests {
                 solid_vertex(125.5, 212.9, [192, 96, 48, 160]),
             ],
         );
+    }
+
+    #[test]
+    fn solid_triangle_hint_path_matches_reference_for_fractional_sweep() {
+        let backgrounds = [[0, 0, 0, 255], [24, 48, 96, 255]];
+        let clips = [
+            full_clip(160, 144),
+            ClipBounds {
+                min_x: 11,
+                min_y: 7,
+                max_x: 151,
+                max_y: 132,
+            },
+        ];
+        for case in 0..24 {
+            let offset = usize_to_f32(case) * 0.37;
+            let color = if case % 3 == 0 {
+                [96, 160, 224, 176]
+            } else {
+                [96, 160, 224, 255]
+            };
+            let vertices = [
+                solid_vertex(7.125 + offset, 8.25 + offset * 0.5, color),
+                solid_vertex(142.75 - offset * 0.25, 18.625 + offset, color),
+                solid_vertex(35.5 + offset * 0.75, 136.875 - offset * 0.3, color),
+            ];
+            let ordered = if case % 2 == 0 {
+                vertices
+            } else {
+                [vertices[0], vertices[2], vertices[1]]
+            };
+            let clip = clips[case % clips.len()];
+            let background = backgrounds[case % backgrounds.len()];
+
+            assert_solid_triangle_matches_reference(160, 144, clip, background, ordered);
+
+            let bounds = triangle_raster_bounds(&ordered[0], &ordered[1], &ordered[2], clip)
+                .expect("triangle bounds");
+            assert!(bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA);
+        }
     }
 
     #[test]
