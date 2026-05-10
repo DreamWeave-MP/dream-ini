@@ -292,11 +292,31 @@ pub(super) fn rasterize_triangle(
         return;
     }
 
-    if let Some(stats) = &mut stats {
+    if let Some(texture_color) = triangle_nearest_texel_sample(v0, v1, v2, texture).uniform_color {
+        record_textured_triangle_call(&mut stats, bounds);
+        rasterize_constant_texel_textured_triangle(
+            surface,
+            vertices,
+            bounds,
+            area,
+            texture_color,
+            stats,
+        );
+        return;
+    }
+
+    record_textured_triangle_call(&mut stats, bounds);
+    rasterize_textured_triangle(surface, vertices, texture, bounds, area, stats);
+}
+
+fn record_textured_triangle_call(
+    stats: &mut Option<&mut RasterStats>,
+    bounds: TriangleRasterBounds,
+) {
+    if let Some(stats) = stats.as_deref_mut() {
         stats.textured_triangle_calls += 1;
         stats.textured_triangle_bbox_px += bounds.pixel_area();
     }
-    rasterize_textured_triangle(surface, vertices, texture, bounds, area, stats);
 }
 
 pub(super) fn triangle_raster_bounds(
@@ -987,6 +1007,227 @@ fn rasterize_textured_triangle(
     }
 }
 
+fn rasterize_constant_texel_textured_triangle(
+    surface: &mut SoftwareSurface,
+    vertices: TriangleVertices<'_>,
+    bounds: TriangleRasterBounds,
+    area: f32,
+    texture_color: [u8; 4],
+    stats: Option<&mut RasterStats>,
+) {
+    if let Some(stats) = stats {
+        rasterize_constant_texel_textured_triangle_with_stats(
+            surface,
+            vertices,
+            bounds,
+            area,
+            texture_color,
+            stats,
+        );
+    } else {
+        rasterize_constant_texel_textured_triangle_no_stats(
+            surface,
+            vertices,
+            bounds,
+            area,
+            texture_color,
+        );
+    }
+}
+
+fn rasterize_constant_texel_textured_triangle_no_stats(
+    surface: &mut SoftwareSurface,
+    vertices: TriangleVertices<'_>,
+    bounds: TriangleRasterBounds,
+    area: f32,
+    texture_color: [u8; 4],
+) {
+    if texture_color == [255, 255, 255, 255] {
+        rasterize_constant_texel_textured_triangle_no_stats_with_color(
+            surface,
+            vertices,
+            bounds,
+            area,
+            interpolate_constant_texel_vertex_color,
+        );
+    } else {
+        rasterize_constant_texel_textured_triangle_no_stats_with_color(
+            surface,
+            vertices,
+            bounds,
+            area,
+            |v0, v1, v2, w0, w1, w2| {
+                modulate_color(
+                    interpolate_constant_texel_vertex_color(v0, v1, v2, w0, w1, w2),
+                    texture_color,
+                )
+            },
+        );
+    }
+}
+
+fn rasterize_constant_texel_textured_triangle_no_stats_with_color(
+    surface: &mut SoftwareSurface,
+    vertices: TriangleVertices<'_>,
+    bounds: TriangleRasterBounds,
+    area: f32,
+    pixel_color: impl Fn(
+        &egui::epaint::Vertex,
+        &egui::epaint::Vertex,
+        &egui::epaint::Vertex,
+        f32,
+        f32,
+        f32,
+    ) -> [u8; 4],
+) {
+    let TriangleVertices { v0, v1, v2 } = vertices;
+    let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
+    let mut row_edge0 = raster.row_edge0;
+    let mut row_edge1 = raster.row_edge1;
+    let mut row_edge2 = raster.row_edge2;
+    let positions = triangle_positions(vertices);
+    let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
+
+    for y in bounds.min_y..bounds.max_y {
+        let (start_x, end_x) = if narrow_scanlines {
+            triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
+        } else {
+            (bounds.min_x, bounds.max_x)
+        };
+        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
+            let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
+            (
+                edge(v1.pos, v2.pos, pixel_center),
+                edge(v2.pos, v0.pos, pixel_center),
+                edge(v0.pos, v1.pos, pixel_center),
+            )
+        } else {
+            (row_edge0, row_edge1, row_edge2)
+        };
+        for x in start_x..end_x {
+            let w0 = pixel_edge0 * raster.inv_area;
+            let w1 = pixel_edge1 * raster.inv_area;
+            let w2 = pixel_edge2 * raster.inv_area;
+            if edge_covers_pixel(w0, raster.edge0_includes_boundary)
+                && edge_covers_pixel(w1, raster.edge1_includes_boundary)
+                && edge_covers_pixel(w2, raster.edge2_includes_boundary)
+            {
+                let color = pixel_color(v0, v1, v2, w0, w1, w2);
+                surface.blend_pixel(x, y, color);
+            }
+            pixel_edge0 += raster.w0_step_x;
+            pixel_edge1 += raster.w1_step_x;
+            pixel_edge2 += raster.w2_step_x;
+        }
+        row_edge0 += raster.w0_step_y;
+        row_edge1 += raster.w1_step_y;
+        row_edge2 += raster.w2_step_y;
+    }
+}
+
+fn rasterize_constant_texel_textured_triangle_with_stats(
+    surface: &mut SoftwareSurface,
+    vertices: TriangleVertices<'_>,
+    bounds: TriangleRasterBounds,
+    area: f32,
+    texture_color: [u8; 4],
+    stats: &mut RasterStats,
+) {
+    if texture_color == [255, 255, 255, 255] {
+        rasterize_constant_texel_textured_triangle_with_stats_and_color(
+            surface,
+            vertices,
+            bounds,
+            area,
+            stats,
+            interpolate_constant_texel_vertex_color,
+        );
+    } else {
+        rasterize_constant_texel_textured_triangle_with_stats_and_color(
+            surface,
+            vertices,
+            bounds,
+            area,
+            stats,
+            |v0, v1, v2, w0, w1, w2| {
+                modulate_color(
+                    interpolate_constant_texel_vertex_color(v0, v1, v2, w0, w1, w2),
+                    texture_color,
+                )
+            },
+        );
+    }
+}
+
+fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
+    surface: &mut SoftwareSurface,
+    vertices: TriangleVertices<'_>,
+    bounds: TriangleRasterBounds,
+    area: f32,
+    stats: &mut RasterStats,
+    pixel_color: impl Fn(
+        &egui::epaint::Vertex,
+        &egui::epaint::Vertex,
+        &egui::epaint::Vertex,
+        f32,
+        f32,
+        f32,
+    ) -> [u8; 4],
+) {
+    let TriangleVertices { v0, v1, v2 } = vertices;
+    let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
+    let mut row_edge0 = raster.row_edge0;
+    let mut row_edge1 = raster.row_edge1;
+    let mut row_edge2 = raster.row_edge2;
+    let positions = triangle_positions(vertices);
+    let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
+
+    for y in bounds.min_y..bounds.max_y {
+        let (start_x, end_x) = if narrow_scanlines {
+            triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
+        } else {
+            (bounds.min_x, bounds.max_x)
+        };
+        let candidate_px = end_x - start_x;
+        stats.textured_triangle_candidate_px += candidate_px;
+        if candidate_px < bounds.max_x - bounds.min_x {
+            stats.textured_triangle_narrowed_rows += 1;
+        } else {
+            stats.textured_triangle_full_scan_rows += 1;
+        }
+        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
+            let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
+            (
+                edge(v1.pos, v2.pos, pixel_center),
+                edge(v2.pos, v0.pos, pixel_center),
+                edge(v0.pos, v1.pos, pixel_center),
+            )
+        } else {
+            (row_edge0, row_edge1, row_edge2)
+        };
+        for x in start_x..end_x {
+            let w0 = pixel_edge0 * raster.inv_area;
+            let w1 = pixel_edge1 * raster.inv_area;
+            let w2 = pixel_edge2 * raster.inv_area;
+            if edge_covers_pixel(w0, raster.edge0_includes_boundary)
+                && edge_covers_pixel(w1, raster.edge1_includes_boundary)
+                && edge_covers_pixel(w2, raster.edge2_includes_boundary)
+            {
+                let color = pixel_color(v0, v1, v2, w0, w1, w2);
+                surface.blend_pixel(x, y, color);
+                stats.textured_triangle_covered_px += 1;
+                stats.record_alpha_px(color[3], 1);
+            }
+            pixel_edge0 += raster.w0_step_x;
+            pixel_edge1 += raster.w1_step_x;
+            pixel_edge2 += raster.w2_step_x;
+        }
+        row_edge0 += raster.w0_step_y;
+        row_edge1 += raster.w1_step_y;
+        row_edge2 += raster.w2_step_y;
+    }
+}
+
 fn rasterize_textured_triangle_no_stats(
     surface: &mut SoftwareSurface,
     vertices: TriangleVertices<'_>,
@@ -1163,6 +1404,17 @@ fn textured_triangle_pixel_color(
     let vertex_color = interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2);
     let texture_color = sample_nearest(texture, uv);
     modulate_color(vertex_color, texture_color)
+}
+
+fn interpolate_constant_texel_vertex_color(
+    v0: &egui::epaint::Vertex,
+    v1: &egui::epaint::Vertex,
+    v2: &egui::epaint::Vertex,
+    w0: f32,
+    w1: f32,
+    w2: f32,
+) -> [u8; 4] {
+    interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2)
 }
 
 pub(super) fn solid_triangle_color_decision(
@@ -1449,6 +1701,114 @@ mod tests {
         v2.uv = egui::pos2(0.0, 0.0);
 
         assert_eq!(solid_triangle_color(&v0, &v1, &v2, &texture), None);
+    }
+
+    #[test]
+    fn constant_texel_textured_triangle_matches_generic_for_white_texel() {
+        let texture = test_solid_2x2_texture([255, 255, 255, 255]);
+        let mut vertices = [
+            solid_vertex(0.5, 0.25, [32, 80, 120, 255]),
+            solid_vertex(5.25, 1.0, [200, 48, 16, 192]),
+            solid_vertex(1.25, 5.5, [64, 180, 220, 96]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(0.2, 0.1);
+        vertices[2].uv = egui::pos2(0.49, 0.49);
+
+        assert_eq!(
+            solid_triangle_color(&vertices[0], &vertices[1], &vertices[2], &texture),
+            None
+        );
+        assert_eq!(
+            triangle_nearest_texel_sample(&vertices[0], &vertices[1], &vertices[2], &texture)
+                .uniform_color,
+            Some([255, 255, 255, 255])
+        );
+        assert_eq!(
+            render_test_triangle_with(7, 7, &vertices[0], &vertices[1], &vertices[2], &texture,),
+            render_test_triangle_generic(7, 7, &vertices[0], &vertices[1], &vertices[2], &texture,)
+        );
+    }
+
+    #[test]
+    fn constant_texel_textured_triangle_matches_generic_for_non_white_translucent_texel() {
+        let texture_color = [77, 131, 199, 113];
+        let texture = test_solid_2x2_texture(texture_color);
+        let mut vertices = [
+            solid_vertex(0.5, 0.25, [17, 91, 203, 251]),
+            solid_vertex(5.25, 1.0, [241, 37, 71, 173]),
+            solid_vertex(1.25, 5.5, [83, 219, 29, 67]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(0.2, 0.1);
+        vertices[2].uv = egui::pos2(0.49, 0.49);
+
+        let routed =
+            render_test_triangle_with(7, 7, &vertices[0], &vertices[1], &vertices[2], &texture);
+        let generic =
+            render_test_triangle_generic(7, 7, &vertices[0], &vertices[1], &vertices[2], &texture);
+        let premodulated_vertices = vertices.map(|mut vertex| {
+            let color = modulate_color(color_to_array(vertex.color), texture_color);
+            vertex.color =
+                egui::Color32::from_rgba_premultiplied(color[0], color[1], color[2], color[3]);
+            vertex
+        });
+        let premodulated = render_test_triangle_with(
+            7,
+            7,
+            &premodulated_vertices[0],
+            &premodulated_vertices[1],
+            &premodulated_vertices[2],
+            &test_white_texture(),
+        );
+
+        assert_eq!(
+            triangle_nearest_texel_sample(&vertices[0], &vertices[1], &vertices[2], &texture)
+                .uniform_color,
+            Some(texture_color)
+        );
+        assert_eq!(routed, generic);
+        assert_ne!(routed, premodulated);
+    }
+
+    #[test]
+    fn constant_texel_textured_triangle_stats_use_textured_counters() {
+        let texture = test_solid_2x2_texture([77, 131, 199, 113]);
+        let mut vertices = [
+            solid_vertex(0.0, 0.0, [17, 91, 203, 251]),
+            solid_vertex(4.0, 0.0, [241, 37, 71, 173]),
+            solid_vertex(0.0, 4.0, [83, 219, 29, 67]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(0.2, 0.1);
+        vertices[2].uv = egui::pos2(0.49, 0.49);
+        let mut surface = test_surface(5, 5);
+        let mut stats = RasterStats::default();
+
+        assert_eq!(
+            triangle_nearest_texel_sample(&vertices[0], &vertices[1], &vertices[2], &texture)
+                .uniform_color,
+            Some([77, 131, 199, 113])
+        );
+
+        rasterize_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            full_clip(5, 5),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.solid_triangle_calls, 0);
+        assert_eq!(stats.textured_triangle_calls, 1);
+        assert_eq!(stats.textured_triangle_bbox_px, 16);
+        assert!(stats.textured_triangle_candidate_px >= stats.textured_triangle_covered_px);
+        assert!(stats.textured_triangle_covered_px > 0);
+        assert_eq!(stats.opaque_px, 0);
+        assert_eq!(stats.transparent_px, 0);
+        assert_eq!(stats.translucent_px, stats.textured_triangle_covered_px);
     }
 
     #[test]
