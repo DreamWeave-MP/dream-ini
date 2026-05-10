@@ -1390,6 +1390,47 @@ mod tests {
     }
 
     #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_giant_fan_sliver() {
+        let vertices = [
+            solid_vertex(124.7, 213.3, [160, 32, 64, 192]),
+            solid_vertex(517.5, 457.5, [160, 32, 64, 192]),
+            solid_vertex(125.5, 212.9, [160, 32, 64, 192]),
+        ];
+        let clip = full_clip(640, 480);
+
+        assert_solid_triangle_matches_reference(640, 480, clip, [30, 90, 150, 255], vertices);
+
+        let bounds = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+            .expect("triangle bounds");
+        assert_eq!(
+            bounds,
+            TriangleRasterBounds {
+                min_x: 124,
+                min_y: 212,
+                max_x: 518,
+                max_y: 458,
+            }
+        );
+
+        let mut surface = test_surface(640, 480);
+        let mut stats = RasterStats::default();
+        rasterize_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &test_white_texture(),
+            clip,
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.solid_triangle_calls, 1);
+        assert_eq!(stats.solid_triangle_bbox_px, 96_924);
+        assert!(stats.solid_triangle_covered_px > 0);
+        assert!(stats.solid_triangle_bbox_px >= stats.solid_triangle_covered_px * 8);
+    }
+
+    #[test]
     fn triangle_classification_matches_rasterizer_solid_and_textured_paths() {
         let texture = test_texture_2x2();
         let v0 = test_vertex(0.0, 0.0);
