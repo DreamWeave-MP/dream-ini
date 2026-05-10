@@ -1054,15 +1054,15 @@ struct TriangleBoundaryIncludes {
 }
 
 #[derive(Clone, Copy)]
-struct SolidTriangleCoverage {
+struct TriangleCoverage {
     inv_area: f32,
     includes_boundary: TriangleBoundaryIncludes,
 }
 
 #[derive(Clone, Copy)]
-struct SolidTriangleRowSearch<'a> {
+struct TriangleRowSearch<'a> {
     vertices: TriangleVertices<'a>,
-    coverage: SolidTriangleCoverage,
+    coverage: TriangleCoverage,
     y: usize,
     candidate_start_x: usize,
     candidate_end_x: usize,
@@ -1073,7 +1073,7 @@ struct SolidTriangleRowSearch<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct SolidTriangleHintSearch<'a> {
+struct TriangleHintSearch<'a> {
     vertices: TriangleVertices<'a>,
     inv_area: f32,
     bounds: TriangleRasterBounds,
@@ -1083,7 +1083,7 @@ struct SolidTriangleHintSearch<'a> {
     narrow_scanlines: bool,
 }
 
-struct SolidTriangleRowEndpoints {
+struct TriangleRowEndpoints {
     span: Option<(usize, usize)>,
     endpoint_probe_px: usize,
     hint_probe_px: usize,
@@ -1441,7 +1441,7 @@ fn rasterize_solid_triangle(
 ) {
     let TriangleVertices { v0, v1, v2 } = vertices;
     let inv_area = 1.0 / area;
-    let coverage = SolidTriangleCoverage {
+    let coverage = TriangleCoverage {
         inv_area,
         includes_boundary: TriangleBoundaryIncludes {
             edge0: edge_includes_boundary(v1.pos, v2.pos, area),
@@ -1469,8 +1469,8 @@ fn rasterize_solid_triangle(
         }
 
         let collect_stats = stats.is_some();
-        let hint_range = solid_triangle_hint_range_for_row(
-            SolidTriangleHintSearch {
+        let hint_range = triangle_hint_range_for_row(
+            TriangleHintSearch {
                 vertices,
                 inv_area: coverage.inv_area,
                 bounds,
@@ -1487,7 +1487,7 @@ fn rasterize_solid_triangle(
             stats.solid_triangle_hint_candidate_px += hint_end_x - hint_start_x;
         }
 
-        let search = SolidTriangleRowSearch {
+        let search = TriangleRowSearch {
             vertices,
             coverage,
             y,
@@ -1500,11 +1500,11 @@ fn rasterize_solid_triangle(
         };
         let endpoints = if let Some(stats) = &mut stats {
             let start = Instant::now();
-            let endpoints = solid_triangle_row_endpoints(search);
+            let endpoints = triangle_row_endpoints(search);
             stats.solid_triangle_endpoint_search_us += duration_as_us(start.elapsed());
             endpoints
         } else {
-            solid_triangle_row_endpoints(search)
+            triangle_row_endpoints(search)
         };
         if endpoints.fell_back
             && let Some(stats) = &mut stats
@@ -1540,8 +1540,8 @@ fn rasterize_solid_triangle(
     }
 }
 
-fn solid_triangle_hint_range_for_row(
-    search: SolidTriangleHintSearch<'_>,
+fn triangle_hint_range_for_row(
+    search: TriangleHintSearch<'_>,
     stats: &mut Option<&mut RasterStats>,
 ) -> Option<(usize, usize)> {
     if !search.narrow_scanlines {
@@ -1549,7 +1549,7 @@ fn solid_triangle_hint_range_for_row(
     }
     if let Some(stats) = stats {
         let start = Instant::now();
-        let hint_range = solid_triangle_hint_x_range(
+        let hint_range = triangle_hint_x_range(
             search.vertices,
             search.inv_area,
             search.bounds,
@@ -1560,7 +1560,7 @@ fn solid_triangle_hint_range_for_row(
         stats.solid_triangle_hint_build_us += duration_as_us(start.elapsed());
         hint_range
     } else {
-        solid_triangle_hint_x_range(
+        triangle_hint_x_range(
             search.vertices,
             search.inv_area,
             search.bounds,
@@ -1571,8 +1571,8 @@ fn solid_triangle_hint_range_for_row(
     }
 }
 
-fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTriangleRowEndpoints {
-    let (mut span_start, first_probe_px) = solid_triangle_first_covered_x(
+fn triangle_row_endpoints(search: TriangleRowSearch<'_>) -> TriangleRowEndpoints {
+    let (mut span_start, first_probe_px) = triangle_first_covered_x(
         search.probe_start_x,
         search.probe_end_x,
         search.y,
@@ -1591,9 +1591,9 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
     }
     let mut fell_back = false;
     if search.hinted {
-        fell_back = solid_triangle_hint_needs_fallback(&search, span_start, &mut canary_probe_px);
+        fell_back = triangle_hint_needs_fallback(&search, span_start, &mut canary_probe_px);
         if fell_back {
-            let (fallback_span_start, fallback_first_probe_px) = solid_triangle_first_covered_x(
+            let (fallback_span_start, fallback_first_probe_px) = triangle_first_covered_x(
                 search.candidate_start_x,
                 search.candidate_end_x,
                 search.y,
@@ -1607,7 +1607,7 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
     }
 
     let Some(span_start) = span_start else {
-        return SolidTriangleRowEndpoints {
+        return TriangleRowEndpoints {
             span: None,
             endpoint_probe_px: hint_probe_px
                 + canary_probe_px
@@ -1625,7 +1625,7 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
     } else {
         (search.probe_start_x, search.probe_end_x)
     };
-    let (last_x, last_probe_px) = solid_triangle_last_covered_x(
+    let (last_x, last_probe_px) = triangle_last_covered_x(
         last_start_x,
         last_end_x,
         search.y,
@@ -1641,7 +1641,7 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
         direct_probe_px += last_probe_px;
     }
     let span_end = last_x.map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
-    SolidTriangleRowEndpoints {
+    TriangleRowEndpoints {
         span: Some((span_start, span_end)),
         endpoint_probe_px: hint_probe_px + canary_probe_px + fallback_probe_px + direct_probe_px,
         hint_probe_px,
@@ -1652,8 +1652,8 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
     }
 }
 
-fn solid_triangle_hint_needs_fallback(
-    search: &SolidTriangleRowSearch<'_>,
+fn triangle_hint_needs_fallback(
+    search: &TriangleRowSearch<'_>,
     span_start: Option<usize>,
     endpoint_probe_px: &mut usize,
 ) -> bool {
@@ -1664,7 +1664,7 @@ fn solid_triangle_hint_needs_fallback(
         if search.collect_stats {
             *endpoint_probe_px += 1;
         }
-        if solid_triangle_covers_pixel(
+        if triangle_covers_pixel(
             search.probe_start_x - 1,
             search.y,
             search.vertices,
@@ -1677,7 +1677,7 @@ fn solid_triangle_hint_needs_fallback(
         if search.collect_stats {
             *endpoint_probe_px += 1;
         }
-        if solid_triangle_covers_pixel(
+        if triangle_covers_pixel(
             search.probe_end_x,
             search.y,
             search.vertices,
@@ -1689,12 +1689,12 @@ fn solid_triangle_hint_needs_fallback(
     false
 }
 
-fn solid_triangle_first_covered_x(
+fn triangle_first_covered_x(
     start_x: usize,
     end_x: usize,
     y: usize,
     vertices: TriangleVertices<'_>,
-    coverage: SolidTriangleCoverage,
+    coverage: TriangleCoverage,
     collect_stats: bool,
 ) -> (Option<usize>, usize) {
     let mut probe_px = 0;
@@ -1702,19 +1702,19 @@ fn solid_triangle_first_covered_x(
         if collect_stats {
             probe_px += 1;
         }
-        if solid_triangle_covers_pixel(x, y, vertices, coverage) {
+        if triangle_covers_pixel(x, y, vertices, coverage) {
             return (Some(x), probe_px);
         }
     }
     (None, probe_px)
 }
 
-fn solid_triangle_last_covered_x(
+fn triangle_last_covered_x(
     start_x: usize,
     end_x: usize,
     y: usize,
     vertices: TriangleVertices<'_>,
-    coverage: SolidTriangleCoverage,
+    coverage: TriangleCoverage,
     collect_stats: bool,
 ) -> (Option<usize>, usize) {
     let mut probe_px = 0;
@@ -1722,14 +1722,14 @@ fn solid_triangle_last_covered_x(
         if collect_stats {
             probe_px += 1;
         }
-        if solid_triangle_covers_pixel(x, y, vertices, coverage) {
+        if triangle_covers_pixel(x, y, vertices, coverage) {
             return (Some(x), probe_px);
         }
     }
     (None, probe_px)
 }
 
-fn solid_triangle_hint_x_range(
+fn triangle_hint_x_range(
     vertices: TriangleVertices<'_>,
     inv_area: f32,
     bounds: TriangleRasterBounds,
@@ -1782,11 +1782,11 @@ fn solid_triangle_hint_x_range(
     Some((start_x, end_x))
 }
 
-fn solid_triangle_covers_pixel(
+fn triangle_covers_pixel(
     x: usize,
     y: usize,
     vertices: TriangleVertices<'_>,
-    coverage: SolidTriangleCoverage,
+    coverage: TriangleCoverage,
 ) -> bool {
     let TriangleVertices { v0, v1, v2 } = vertices;
     let pixel_center = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
