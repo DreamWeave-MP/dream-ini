@@ -43,6 +43,14 @@ impl SoftwareSurface {
         let offset = (y * self.width + x) * 4;
         alpha_blend(&mut self.pixels[offset..offset + 4], color);
     }
+
+    pub(super) fn blend_span(&mut self, y: usize, start_x: usize, end_x: usize, color: [u8; 4]) {
+        let start = (y * self.width + start_x) * 4;
+        let end = (y * self.width + end_x) * 4;
+        for pixel in self.pixels[start..end].chunks_exact_mut(4) {
+            alpha_blend(pixel, color);
+        }
+    }
 }
 
 fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {

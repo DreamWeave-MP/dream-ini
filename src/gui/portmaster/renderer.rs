@@ -4,7 +4,9 @@ use std::io;
 use std::time::Instant;
 
 use super::log::write_log;
-use super::raster::{ClipBounds, rasterize_triangle, usize_to_f32};
+use super::raster::{
+    ClipBounds, rasterize_axis_aligned_solid_quad, rasterize_triangle, usize_to_f32,
+};
 use super::surface::SoftwareSurface;
 use super::texture::TextureStore;
 use super::{GuiFrame, GuiShell};
@@ -115,7 +117,37 @@ impl SoftwareRenderer {
             return Ok(());
         }
         let surface = &mut self.surface;
-        for triangle in mesh.indices.chunks_exact(3) {
+        let mut index_offset = 0;
+        while index_offset + 2 < mesh.indices.len() {
+            if index_offset + 5 < mesh.indices.len() {
+                let quad = &mesh.indices[index_offset..index_offset + 6];
+                if has_four_unique_indices(quad) {
+                    let i0 = mesh_index_to_usize(quad[0])?;
+                    let i1 = mesh_index_to_usize(quad[1])?;
+                    let i2 = mesh_index_to_usize(quad[2])?;
+                    let i3 = mesh_index_to_usize(quad[3])?;
+                    let i4 = mesh_index_to_usize(quad[4])?;
+                    let i5 = mesh_index_to_usize(quad[5])?;
+                    if let (Some(v0), Some(v1), Some(v2), Some(v3), Some(v4), Some(v5)) = (
+                        mesh.vertices.get(i0),
+                        mesh.vertices.get(i1),
+                        mesh.vertices.get(i2),
+                        mesh.vertices.get(i3),
+                        mesh.vertices.get(i4),
+                        mesh.vertices.get(i5),
+                    ) && rasterize_axis_aligned_solid_quad(
+                        surface,
+                        [v0, v1, v2, v3, v4, v5],
+                        texture,
+                        clip,
+                    ) {
+                        index_offset += 6;
+                        continue;
+                    }
+                }
+            }
+
+            let triangle = &mesh.indices[index_offset..index_offset + 3];
             let i0 = usize::try_from(triangle[0])
                 .map_err(|_| io::Error::other("mesh index does not fit usize"))?;
             let i1 = usize::try_from(triangle[1])
@@ -132,9 +164,30 @@ impl SoftwareRenderer {
                 continue;
             };
             rasterize_triangle(surface, v0, v1, v2, texture, clip);
+            index_offset += 3;
         }
         Ok(())
     }
+}
+
+fn mesh_index_to_usize(index: u32) -> io::Result<usize> {
+    usize::try_from(index).map_err(|_| io::Error::other("mesh index does not fit usize"))
+}
+
+fn has_four_unique_indices(indices: &[u32]) -> bool {
+    let mut unique = [0; 4];
+    let mut count = 0;
+    for &index in indices {
+        if unique[..count].contains(&index) {
+            continue;
+        }
+        if count == unique.len() {
+            return false;
+        }
+        unique[count] = index;
+        count += 1;
+    }
+    count == unique.len()
 }
 
 fn elapsed_micros(start: Option<Instant>) -> u128 {

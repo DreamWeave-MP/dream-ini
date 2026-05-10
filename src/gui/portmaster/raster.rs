@@ -133,6 +133,152 @@ pub(super) fn rasterize_triangle(
     rasterize_textured_triangle(surface, v0, v1, v2, texture, clip, area);
 }
 
+pub(super) fn rasterize_axis_aligned_solid_quad(
+    surface: &mut SoftwareSurface,
+    vertices: [&egui::epaint::Vertex; 6],
+    texture: &TextureImage,
+    clip: ClipBounds,
+) -> bool {
+    let Some(color) = solid_triangle_color(vertices[0], vertices[1], vertices[2], texture) else {
+        return false;
+    };
+    if solid_triangle_color(vertices[3], vertices[4], vertices[5], texture) != Some(color) {
+        return false;
+    }
+    if !triangles_share_rectangle_diagonal(vertices) {
+        return false;
+    }
+
+    let Some((min_x, min_y, max_x, max_y)) = axis_aligned_quad_bounds(vertices) else {
+        return false;
+    };
+    rasterize_solid_rect(surface, min_x, min_y, max_x, max_y, clip, color);
+    true
+}
+
+fn triangles_share_rectangle_diagonal(vertices: [&egui::epaint::Vertex; 6]) -> bool {
+    if edge(vertices[0].pos, vertices[1].pos, vertices[2].pos).abs() <= f32::EPSILON
+        || edge(vertices[3].pos, vertices[4].pos, vertices[5].pos).abs() <= f32::EPSILON
+    {
+        return false;
+    }
+
+    let first = [vertices[0].pos, vertices[1].pos, vertices[2].pos];
+    let second = [vertices[3].pos, vertices[4].pos, vertices[5].pos];
+    if first[0] == first[1]
+        || first[0] == first[2]
+        || first[1] == first[2]
+        || second[0] == second[1]
+        || second[0] == second[2]
+        || second[1] == second[2]
+    {
+        return false;
+    }
+
+    let mut shared = [egui::Pos2::ZERO; 2];
+    let mut shared_count = 0;
+    for position in first {
+        if second.contains(&position) {
+            if shared_count == shared.len() {
+                return false;
+            }
+            shared[shared_count] = position;
+            shared_count += 1;
+        }
+    }
+
+    shared_count == shared.len() && shared[0].x != shared[1].x && shared[0].y != shared[1].y
+}
+
+fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32, f32, f32, f32)> {
+    let mut positions = [egui::Pos2::ZERO; 4];
+    let mut position_count = 0;
+    for vertex in vertices {
+        if !vertex.pos.x.is_finite() || !vertex.pos.y.is_finite() {
+            return None;
+        }
+        if positions[..position_count]
+            .iter()
+            .any(|position| *position == vertex.pos)
+        {
+            continue;
+        }
+        if position_count == positions.len() {
+            return None;
+        }
+        positions[position_count] = vertex.pos;
+        position_count += 1;
+    }
+    if position_count != positions.len() {
+        return None;
+    }
+
+    let mut xs = [0.0; 2];
+    let mut ys = [0.0; 2];
+    let mut x_count = 0;
+    let mut y_count = 0;
+    for position in positions {
+        if !push_unique_f32(&mut xs, &mut x_count, position.x)
+            || !push_unique_f32(&mut ys, &mut y_count, position.y)
+        {
+            return None;
+        }
+    }
+    if x_count != xs.len() || y_count != ys.len() || xs[0] == xs[1] || ys[0] == ys[1] {
+        return None;
+    }
+
+    let min_x = xs[0].min(xs[1]);
+    let max_x = xs[0].max(xs[1]);
+    let min_y = ys[0].min(ys[1]);
+    let max_y = ys[0].max(ys[1]);
+    for x in xs {
+        for y in ys {
+            if !positions.contains(&egui::pos2(x, y)) {
+                return None;
+            }
+        }
+    }
+    Some((min_x, min_y, max_x, max_y))
+}
+
+fn push_unique_f32(values: &mut [f32; 2], count: &mut usize, value: f32) -> bool {
+    if values[..*count].contains(&value) {
+        return true;
+    }
+    if *count == values.len() {
+        return false;
+    }
+    values[*count] = value;
+    *count += 1;
+    true
+}
+
+fn rasterize_solid_rect(
+    surface: &mut SoftwareSurface,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    clip: ClipBounds,
+    color: [u8; 4],
+) {
+    let start_x = f32_to_usize_ceil_clamped(min_x - 0.5, clip.max_x).max(clip.min_x);
+    let end_x = f32_to_usize_floor_clamped(max_x - 0.5, clip.max_x)
+        .saturating_add(1)
+        .min(clip.max_x);
+    let start_y = f32_to_usize_ceil_clamped(min_y - 0.5, clip.max_y).max(clip.min_y);
+    let end_y = f32_to_usize_floor_clamped(max_y - 0.5, clip.max_y)
+        .saturating_add(1)
+        .min(clip.max_y);
+    if start_x >= end_x || start_y >= end_y {
+        return;
+    }
+    for y in start_y..end_y {
+        surface.blend_span(y, start_x, end_x, color);
+    }
+}
+
 fn rasterize_solid_triangle(
     surface: &mut SoftwareSurface,
     v0: &egui::epaint::Vertex,
@@ -485,6 +631,72 @@ mod tests {
         assert_eq!(solid_triangle_color(&v0, &v1, &v2, &texture), None);
     }
 
+    #[test]
+    fn axis_aligned_quad_fast_path_accepts_solid_rectangle() {
+        let vertices = test_quad_vertices();
+
+        let (accepted, pixels) = render_test_quad(5, 5, vertices, full_clip(5, 5));
+
+        assert!(accepted);
+        assert_eq!(white_pixel_count(&pixels), 6);
+    }
+
+    #[test]
+    fn axis_aligned_quad_fast_path_clips_solid_rectangle() {
+        let vertices = test_quad_vertices();
+
+        let (accepted, pixels) = render_test_quad(
+            5,
+            5,
+            vertices,
+            ClipBounds {
+                min_x: 2,
+                min_y: 2,
+                max_x: 4,
+                max_y: 3,
+            },
+        );
+
+        assert!(accepted);
+        assert_eq!(white_pixel_count(&pixels), 2);
+    }
+
+    #[test]
+    fn axis_aligned_quad_fast_path_rejects_non_axis_aligned_quad() {
+        let mut vertices = test_quad_vertices();
+        vertices[3].pos.x = 4.5;
+
+        let (accepted, pixels) = render_test_quad(5, 5, vertices, full_clip(5, 5));
+
+        assert!(!accepted);
+        assert_eq!(white_pixel_count(&pixels), 0);
+    }
+
+    #[test]
+    fn axis_aligned_quad_fast_path_rejects_non_solid_quad() {
+        let texture = test_texture_2x2();
+        let mut vertices = test_quad_vertices();
+        vertices[3].uv = egui::pos2(1.0, 1.0);
+        let mut surface = test_surface(5, 5);
+
+        let accepted = rasterize_axis_aligned_solid_quad(
+            &mut surface,
+            [
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &vertices[1],
+                &vertices[3],
+                &vertices[2],
+            ],
+            &texture,
+            full_clip(5, 5),
+        );
+
+        assert!(!accepted);
+        assert_eq!(white_pixel_count(&surface.pixels), 0);
+    }
+
     fn render_test_triangle(
         width: usize,
         height: usize,
@@ -526,6 +738,45 @@ mod tests {
         );
 
         surface.pixels
+    }
+
+    fn render_test_quad(
+        width: usize,
+        height: usize,
+        vertices: [egui::epaint::Vertex; 4],
+        clip: ClipBounds,
+    ) -> (bool, Vec<u8>) {
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let mut surface = test_surface(width, height);
+
+        let accepted = rasterize_axis_aligned_solid_quad(
+            &mut surface,
+            [
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &vertices[1],
+                &vertices[3],
+                &vertices[2],
+            ],
+            &texture,
+            clip,
+        );
+
+        (accepted, surface.pixels)
+    }
+
+    const fn full_clip(width: usize, height: usize) -> ClipBounds {
+        ClipBounds {
+            min_x: 0,
+            min_y: 0,
+            max_x: width,
+            max_y: height,
+        }
     }
 
     fn render_test_triangle_generic(
@@ -577,6 +828,15 @@ mod tests {
             color: egui::Color32::WHITE,
             uv: egui::Pos2::ZERO,
         }
+    }
+
+    fn test_quad_vertices() -> [egui::epaint::Vertex; 4] {
+        [
+            test_vertex(1.0, 1.0),
+            test_vertex(4.0, 1.0),
+            test_vertex(1.0, 3.0),
+            test_vertex(4.0, 3.0),
+        ]
     }
 
     fn test_texture_2x2() -> TextureImage {
