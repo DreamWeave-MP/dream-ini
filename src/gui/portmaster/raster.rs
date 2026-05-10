@@ -7,8 +7,8 @@ use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
 
 const UV_AFFINE_EPSILON: f32 = 1.0 / 1_048_576.0;
-const SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA: usize = 1024;
-const SOLID_TRIANGLE_SCANLINE_NARROWING_GUARD_PX: usize = 2;
+const TRIANGLE_SCANLINE_NARROWING_MIN_AREA: usize = 1024;
+const TRIANGLE_SCANLINE_NARROWING_GUARD_PX: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TriangleClassification {
@@ -790,7 +790,7 @@ fn rasterize_solid_triangle(
     let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
     let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
     let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
-    let narrow_scanlines = bounds.pixel_area() > SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
+    let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
@@ -885,10 +885,10 @@ fn triangle_scanline_x_range(
 
     let start_x = f32_to_usize_floor_clamped(min_x - 0.5, bounds.max_x)
         .max(bounds.min_x)
-        .saturating_sub(SOLID_TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
+        .saturating_sub(TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
         .max(bounds.min_x);
     let end_x = f32_to_usize_ceil_clamped(max_x - 0.5, bounds.max_x)
-        .saturating_add(1 + SOLID_TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
+        .saturating_add(1 + TRIANGLE_SCANLINE_NARROWING_GUARD_PX)
         .min(bounds.max_x)
         .max(start_x);
     if start_x >= end_x {
@@ -924,7 +924,7 @@ fn rasterize_textured_triangle_no_stats(
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
-    let narrow_scanlines = bounds.pixel_area() > SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
+    let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
@@ -976,7 +976,7 @@ fn rasterize_textured_triangle_with_stats(
     let mut row_edge0 = raster.row_edge0;
     let mut row_edge1 = raster.row_edge1;
     let mut row_edge2 = raster.row_edge2;
-    let narrow_scanlines = bounds.pixel_area() > SOLID_TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
+    let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
     for y in bounds.min_y..bounds.max_y {
         let (start_x, end_x) = if narrow_scanlines {
