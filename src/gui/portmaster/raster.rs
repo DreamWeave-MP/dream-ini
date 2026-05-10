@@ -303,19 +303,24 @@ fn rasterize_solid_rect(
     clip: ClipBounds,
     color: [u8; 4],
 ) {
-    let start_x = f32_to_usize_ceil_clamped(min_x - 0.5, clip.max_x).max(clip.min_x);
-    let end_x = f32_to_usize_floor_clamped(max_x - 0.5, clip.max_x)
-        .saturating_add(1)
-        .min(clip.max_x);
-    let start_y = f32_to_usize_ceil_clamped(min_y - 0.5, clip.max_y).max(clip.min_y);
-    let end_y = f32_to_usize_floor_clamped(max_y - 0.5, clip.max_y)
-        .saturating_add(1)
-        .min(clip.max_y);
+    let start_x = solid_rect_boundary_index(min_x, clip.max_x).max(clip.min_x);
+    let end_x = solid_rect_boundary_index(max_x, clip.max_x).min(clip.max_x);
+    let start_y = solid_rect_boundary_index(min_y, clip.max_y).max(clip.min_y);
+    let end_y = solid_rect_boundary_index(max_y, clip.max_y).min(clip.max_y);
     if start_x >= end_x || start_y >= end_y {
         return;
     }
     for y in start_y..end_y {
         surface.blend_span(y, start_x, end_x, color);
+    }
+}
+
+fn solid_rect_boundary_index(boundary: f32, clip_max: usize) -> usize {
+    let threshold = boundary - 0.5;
+    if threshold < 0.0 {
+        0
+    } else {
+        f32_to_usize_floor_clamped(threshold, clip_max).saturating_add(1)
     }
 }
 
@@ -877,6 +882,39 @@ mod tests {
         assert_eq!(pixel_at(&pixels, 5, 1, 2), [0, 0, 0, 255]);
     }
 
+    #[test]
+    fn axis_aligned_quad_fast_path_matches_generic_half_pixel_translucent_solid_rectangle() {
+        let vertices = translucent_quad_vertices(1.5, 1.5, 4.5, 4.5, [96, 48, 24, 128]);
+
+        let (accepted, pixels) = render_test_quad(6, 6, vertices, full_clip(6, 6));
+        let generic = render_test_quad_generic(6, 6, vertices, full_clip(6, 6));
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+        assert_eq!(pixel_at(&pixels, 6, 1, 1), [0, 0, 0, 255]);
+        assert_eq!(pixel_at(&pixels, 6, 4, 4), [96, 48, 24, 255]);
+    }
+
+    #[test]
+    fn axis_aligned_quad_fast_path_matches_generic_fractional_clipped_translucent_solid_rectangle()
+    {
+        let vertices = translucent_quad_vertices(1.25, 1.5, 4.5, 4.25, [32, 80, 120, 128]);
+        let clip = ClipBounds {
+            min_x: 2,
+            min_y: 1,
+            max_x: 5,
+            max_y: 4,
+        };
+
+        let (accepted, pixels) = render_test_quad(6, 6, vertices, clip);
+        let generic = render_test_quad_generic(6, 6, vertices, clip);
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+        assert_eq!(pixel_at(&pixels, 6, 2, 1), [0, 0, 0, 255]);
+        assert_eq!(pixel_at(&pixels, 6, 4, 2), [32, 80, 120, 255]);
+    }
+
     fn render_test_triangle(
         width: usize,
         height: usize,
@@ -1065,6 +1103,26 @@ mod tests {
             test_vertex(1.0, 3.0),
             test_vertex(4.0, 3.0),
         ]
+    }
+
+    fn translucent_quad_vertices(
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+        color: [u8; 4],
+    ) -> [egui::epaint::Vertex; 4] {
+        let mut vertices = [
+            test_vertex(min_x, min_y),
+            test_vertex(max_x, min_y),
+            test_vertex(min_x, max_y),
+            test_vertex(max_x, max_y),
+        ];
+        for vertex in &mut vertices {
+            vertex.color =
+                egui::Color32::from_rgba_premultiplied(color[0], color[1], color[2], color[3]);
+        }
+        vertices
     }
 
     fn test_texture_2x2() -> TextureImage {
