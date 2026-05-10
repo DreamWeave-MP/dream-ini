@@ -604,6 +604,27 @@ struct TriangleVertices<'a> {
 }
 
 #[derive(Clone, Copy)]
+struct TriangleEdgeValues {
+    edge0: f32,
+    edge1: f32,
+    edge2: f32,
+}
+
+#[derive(Clone, Copy)]
+struct TriangleBoundaryIncludes {
+    edge0: bool,
+    edge1: bool,
+    edge2: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SolidTriangleCoverage {
+    inv_area: f32,
+    step_x: TriangleEdgeValues,
+    includes_boundary: TriangleBoundaryIncludes,
+}
+
+#[derive(Clone, Copy)]
 struct TexturedQuadCorners {
     tl: egui::epaint::Vertex,
     tr: egui::epaint::Vertex,
@@ -869,12 +890,24 @@ fn rasterize_solid_triangle(
     let w0_step_y = edge_step_y(v1.pos, v2.pos);
     let w1_step_y = edge_step_y(v2.pos, v0.pos);
     let w2_step_y = edge_step_y(v0.pos, v1.pos);
-    let mut row_edge0 = edge(v1.pos, v2.pos, start);
-    let mut row_edge1 = edge(v2.pos, v0.pos, start);
-    let mut row_edge2 = edge(v0.pos, v1.pos, start);
-    let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
-    let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
-    let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
+    let mut row_edges = TriangleEdgeValues {
+        edge0: edge(v1.pos, v2.pos, start),
+        edge1: edge(v2.pos, v0.pos, start),
+        edge2: edge(v0.pos, v1.pos, start),
+    };
+    let coverage = SolidTriangleCoverage {
+        inv_area,
+        step_x: TriangleEdgeValues {
+            edge0: w0_step_x,
+            edge1: w1_step_x,
+            edge2: w2_step_x,
+        },
+        includes_boundary: TriangleBoundaryIncludes {
+            edge0: edge_includes_boundary(v1.pos, v2.pos, area),
+            edge1: edge_includes_boundary(v2.pos, v0.pos, area),
+            edge2: edge_includes_boundary(v0.pos, v1.pos, area),
+        },
+    };
     let positions = triangle_positions(vertices);
     let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
 
@@ -893,49 +926,102 @@ fn rasterize_solid_triangle(
                 stats.solid_triangle_full_scan_rows += 1;
             }
         }
-        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
+        let start_edges = if narrow_scanlines {
             let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
-            (
-                edge(v1.pos, v2.pos, pixel_center),
-                edge(v2.pos, v0.pos, pixel_center),
-                edge(v0.pos, v1.pos, pixel_center),
-            )
-        } else {
-            (row_edge0, row_edge1, row_edge2)
-        };
-        let mut span_start = None;
-        let mut span_end = start_x;
-        for x in start_x..end_x {
-            let w0 = pixel_edge0 * inv_area;
-            let w1 = pixel_edge1 * inv_area;
-            let w2 = pixel_edge2 * inv_area;
-            if edge_covers_pixel(w0, edge0_includes_boundary)
-                && edge_covers_pixel(w1, edge1_includes_boundary)
-                && edge_covers_pixel(w2, edge2_includes_boundary)
-            {
-                if span_start.is_none() {
-                    span_start = Some(x);
-                }
-                span_end = x + 1;
-            } else if span_start.is_some() {
-                break;
+            TriangleEdgeValues {
+                edge0: edge(v1.pos, v2.pos, pixel_center),
+                edge1: edge(v2.pos, v0.pos, pixel_center),
+                edge2: edge(v0.pos, v1.pos, pixel_center),
             }
-            pixel_edge0 += w0_step_x;
-            pixel_edge1 += w1_step_x;
-            pixel_edge2 += w2_step_x;
-        }
-        if let Some(start_x) = span_start {
-            surface.blend_span(y, start_x, span_end, color);
+        } else {
+            row_edges
+        };
+
+        if let Some(span_start) =
+            solid_triangle_first_covered_x(start_x, end_x, start_edges, coverage)
+        {
+            let span_end = solid_triangle_last_covered_x(start_x, end_x, start_edges, coverage)
+                .map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
+            surface.blend_span(y, span_start, span_end, color);
             if let Some(stats) = &mut stats {
-                let px = span_end - start_x;
+                let px = span_end - span_start;
                 stats.solid_triangle_covered_px += px;
                 stats.solid_triangle_span_rows += 1;
                 stats.record_alpha_px(color[3], px);
             }
         }
-        row_edge0 += w0_step_y;
-        row_edge1 += w1_step_y;
-        row_edge2 += w2_step_y;
+        row_edges.edge0 += w0_step_y;
+        row_edges.edge1 += w1_step_y;
+        row_edges.edge2 += w2_step_y;
+    }
+}
+
+fn solid_triangle_first_covered_x(
+    start_x: usize,
+    end_x: usize,
+    start_edges: TriangleEdgeValues,
+    coverage: SolidTriangleCoverage,
+) -> Option<usize> {
+    let mut edges = start_edges;
+    for x in start_x..end_x {
+        if solid_triangle_covers_pixel(edges, coverage) {
+            return Some(x);
+        }
+        edges = edges.step(coverage.step_x);
+    }
+    None
+}
+
+fn solid_triangle_last_covered_x(
+    start_x: usize,
+    end_x: usize,
+    start_edges: TriangleEdgeValues,
+    coverage: SolidTriangleCoverage,
+) -> Option<usize> {
+    let last_offset = end_x.checked_sub(start_x + 1)?;
+    let mut edges = start_edges.offset(coverage.step_x, last_offset);
+    for x in (start_x..end_x).rev() {
+        if solid_triangle_covers_pixel(edges, coverage) {
+            return Some(x);
+        }
+        edges = edges.step_back(coverage.step_x);
+    }
+    None
+}
+
+fn solid_triangle_covers_pixel(edges: TriangleEdgeValues, coverage: SolidTriangleCoverage) -> bool {
+    let w0 = edges.edge0 * coverage.inv_area;
+    let w1 = edges.edge1 * coverage.inv_area;
+    let w2 = edges.edge2 * coverage.inv_area;
+    edge_covers_pixel(w0, coverage.includes_boundary.edge0)
+        && edge_covers_pixel(w1, coverage.includes_boundary.edge1)
+        && edge_covers_pixel(w2, coverage.includes_boundary.edge2)
+}
+
+impl TriangleEdgeValues {
+    fn offset(self, step: Self, pixels: usize) -> Self {
+        let pixels = usize_to_f32(pixels);
+        Self {
+            edge0: step.edge0.mul_add(pixels, self.edge0),
+            edge1: step.edge1.mul_add(pixels, self.edge1),
+            edge2: step.edge2.mul_add(pixels, self.edge2),
+        }
+    }
+
+    const fn step(self, step: Self) -> Self {
+        Self {
+            edge0: self.edge0 + step.edge0,
+            edge1: self.edge1 + step.edge1,
+            edge2: self.edge2 + step.edge2,
+        }
+    }
+
+    const fn step_back(self, step: Self) -> Self {
+        Self {
+            edge0: self.edge0 - step.edge0,
+            edge1: self.edge1 - step.edge1,
+            edge2: self.edge2 - step.edge2,
+        }
     }
 }
 
