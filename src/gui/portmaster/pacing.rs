@@ -375,7 +375,12 @@ mod tests {
             FrameScheduleAction::Draw
         );
         assert_eq!(
-            frame_schedule_action(now, Some(now - Duration::from_millis(1)), false, idle_poll),
+            frame_schedule_action(
+                now,
+                Some(now.checked_sub(Duration::from_millis(1)).unwrap_or(now)),
+                false,
+                idle_poll
+            ),
             FrameScheduleAction::Draw
         );
     }

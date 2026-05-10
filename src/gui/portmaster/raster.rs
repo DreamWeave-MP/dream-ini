@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::cmp::Ordering;
 use std::io;
 
 use super::surface::SoftwareSurface;
@@ -101,6 +102,14 @@ fn edge_step_y(a: egui::Pos2, b: egui::Pos2) -> f32 {
     -(b.x - a.x)
 }
 
+fn same_f32(left: f32, right: f32) -> bool {
+    matches!(left.partial_cmp(&right), Some(Ordering::Equal))
+}
+
+fn same_pos2(left: egui::Pos2, right: egui::Pos2) -> bool {
+    same_f32(left.x, right.x) && same_f32(left.y, right.y)
+}
+
 pub(super) fn rasterize_triangle(
     surface: &mut SoftwareSurface,
     v0: &egui::epaint::Vertex,
@@ -165,12 +174,12 @@ fn triangles_share_rectangle_diagonal(vertices: [&egui::epaint::Vertex; 6]) -> b
 
     let first = [vertices[0].pos, vertices[1].pos, vertices[2].pos];
     let second = [vertices[3].pos, vertices[4].pos, vertices[5].pos];
-    if first[0] == first[1]
-        || first[0] == first[2]
-        || first[1] == first[2]
-        || second[0] == second[1]
-        || second[0] == second[2]
-        || second[1] == second[2]
+    if same_pos2(first[0], first[1])
+        || same_pos2(first[0], first[2])
+        || same_pos2(first[1], first[2])
+        || same_pos2(second[0], second[1])
+        || same_pos2(second[0], second[2])
+        || same_pos2(second[1], second[2])
     {
         return false;
     }
@@ -178,7 +187,10 @@ fn triangles_share_rectangle_diagonal(vertices: [&egui::epaint::Vertex; 6]) -> b
     let mut shared = [egui::Pos2::ZERO; 2];
     let mut shared_count = 0;
     for position in first {
-        if second.contains(&position) {
+        if second
+            .iter()
+            .any(|candidate| same_pos2(*candidate, position))
+        {
             if shared_count == shared.len() {
                 return false;
             }
@@ -187,7 +199,9 @@ fn triangles_share_rectangle_diagonal(vertices: [&egui::epaint::Vertex; 6]) -> b
         }
     }
 
-    shared_count == shared.len() && shared[0].x != shared[1].x && shared[0].y != shared[1].y
+    shared_count == shared.len()
+        && !same_f32(shared[0].x, shared[1].x)
+        && !same_f32(shared[0].y, shared[1].y)
 }
 
 fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32, f32, f32, f32)> {
@@ -199,7 +213,7 @@ fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32
         }
         if positions[..position_count]
             .iter()
-            .any(|position| *position == vertex.pos)
+            .any(|position| same_pos2(*position, vertex.pos))
         {
             continue;
         }
@@ -224,7 +238,11 @@ fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32
             return None;
         }
     }
-    if x_count != xs.len() || y_count != ys.len() || xs[0] == xs[1] || ys[0] == ys[1] {
+    if x_count != xs.len()
+        || y_count != ys.len()
+        || same_f32(xs[0], xs[1])
+        || same_f32(ys[0], ys[1])
+    {
         return None;
     }
 
@@ -234,7 +252,10 @@ fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32
     let max_y = ys[0].max(ys[1]);
     for x in xs {
         for y in ys {
-            if !positions.contains(&egui::pos2(x, y)) {
+            if !positions
+                .iter()
+                .any(|position| same_pos2(*position, egui::pos2(x, y)))
+            {
                 return None;
             }
         }
@@ -243,7 +264,10 @@ fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32
 }
 
 fn push_unique_f32(values: &mut [f32; 2], count: &mut usize, value: f32) -> bool {
-    if values[..*count].contains(&value) {
+    if values[..*count]
+        .iter()
+        .any(|candidate| same_f32(*candidate, value))
+    {
         return true;
     }
     if *count == values.len() {
@@ -305,28 +329,28 @@ fn rasterize_solid_triangle(
     let w0_step_y = edge_step_y(v1.pos, v2.pos);
     let w1_step_y = edge_step_y(v2.pos, v0.pos);
     let w2_step_y = edge_step_y(v0.pos, v1.pos);
-    let mut row_w0 = edge(v1.pos, v2.pos, start);
-    let mut row_w1 = edge(v2.pos, v0.pos, start);
-    let mut row_w2 = edge(v0.pos, v1.pos, start);
+    let mut row_edge0 = edge(v1.pos, v2.pos, start);
+    let mut row_edge1 = edge(v2.pos, v0.pos, start);
+    let mut row_edge2 = edge(v0.pos, v1.pos, start);
 
     for y in min_y..max_y {
-        let mut raw_w0 = row_w0;
-        let mut raw_w1 = row_w1;
-        let mut raw_w2 = row_w2;
+        let mut pixel_edge0 = row_edge0;
+        let mut pixel_edge1 = row_edge1;
+        let mut pixel_edge2 = row_edge2;
         for x in min_x..max_x {
-            let w0 = raw_w0 * inv_area;
-            let w1 = raw_w1 * inv_area;
-            let w2 = raw_w2 * inv_area;
+            let w0 = pixel_edge0 * inv_area;
+            let w1 = pixel_edge1 * inv_area;
+            let w2 = pixel_edge2 * inv_area;
             if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
                 surface.blend_pixel(x, y, color);
             }
-            raw_w0 += w0_step_x;
-            raw_w1 += w1_step_x;
-            raw_w2 += w2_step_x;
+            pixel_edge0 += w0_step_x;
+            pixel_edge1 += w1_step_x;
+            pixel_edge2 += w2_step_x;
         }
-        row_w0 += w0_step_y;
-        row_w1 += w1_step_y;
-        row_w2 += w2_step_y;
+        row_edge0 += w0_step_y;
+        row_edge1 += w1_step_y;
+        row_edge2 += w2_step_y;
     }
 }
 
@@ -356,18 +380,18 @@ fn rasterize_textured_triangle(
     let w0_step_y = edge_step_y(v1.pos, v2.pos);
     let w1_step_y = edge_step_y(v2.pos, v0.pos);
     let w2_step_y = edge_step_y(v0.pos, v1.pos);
-    let mut row_w0 = edge(v1.pos, v2.pos, start);
-    let mut row_w1 = edge(v2.pos, v0.pos, start);
-    let mut row_w2 = edge(v0.pos, v1.pos, start);
+    let mut row_edge0 = edge(v1.pos, v2.pos, start);
+    let mut row_edge1 = edge(v2.pos, v0.pos, start);
+    let mut row_edge2 = edge(v0.pos, v1.pos, start);
 
     for y in min_y..max_y {
-        let mut raw_w0 = row_w0;
-        let mut raw_w1 = row_w1;
-        let mut raw_w2 = row_w2;
+        let mut pixel_edge0 = row_edge0;
+        let mut pixel_edge1 = row_edge1;
+        let mut pixel_edge2 = row_edge2;
         for x in min_x..max_x {
-            let w0 = raw_w0 * inv_area;
-            let w1 = raw_w1 * inv_area;
-            let w2 = raw_w2 * inv_area;
+            let w0 = pixel_edge0 * inv_area;
+            let w1 = pixel_edge1 * inv_area;
+            let w2 = pixel_edge2 * inv_area;
             if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
                 let uv = egui::pos2(
                     v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
@@ -378,13 +402,13 @@ fn rasterize_textured_triangle(
                 let color = modulate_color(vertex_color, texture_color);
                 surface.blend_pixel(x, y, color);
             }
-            raw_w0 += w0_step_x;
-            raw_w1 += w1_step_x;
-            raw_w2 += w2_step_x;
+            pixel_edge0 += w0_step_x;
+            pixel_edge1 += w1_step_x;
+            pixel_edge2 += w2_step_x;
         }
-        row_w0 += w0_step_y;
-        row_w1 += w1_step_y;
-        row_w2 += w2_step_y;
+        row_edge0 += w0_step_y;
+        row_edge1 += w1_step_y;
+        row_edge2 += w2_step_y;
     }
 }
 
