@@ -500,12 +500,16 @@ pub(super) fn rasterize_solid_fan(
 
     for y in bounds.min_y..bounds.max_y {
         let scanline = polygon_scanline_span(polygon, bounds, y, area_sign, stats.is_some());
-        let Some((span_start, span_end)) = scanline.span else {
+        let span = if scanline.fell_back {
             if let Some(stats) = &mut stats {
-                stats.solid_fan_edge_intersections += scanline.edge_intersections;
-                stats.solid_fan_endpoint_probe_px += scanline.endpoint_probe_px;
-                stats.solid_fan_fallback_rows += usize::from(scanline.fell_back);
+                stats.solid_fan_fallback_rows += 1;
             }
+            polygon_fallback_scanline_span(polygon, bounds, y, area_sign)
+        } else {
+            scanline.span
+        };
+        let Some((span_start, span_end)) = span else {
+            record_solid_fan_scanline_stats(&mut stats, scanline);
             continue;
         };
         surface.blend_span(y, span_start, span_end, color);
@@ -513,11 +517,19 @@ pub(super) fn rasterize_solid_fan(
             let px = span_end - span_start;
             stats.solid_fan_rows += 1;
             stats.solid_fan_px += px;
-            stats.solid_fan_edge_intersections += scanline.edge_intersections;
-            stats.solid_fan_endpoint_probe_px += scanline.endpoint_probe_px;
-            stats.solid_fan_fallback_rows += usize::from(scanline.fell_back);
             stats.record_alpha_px(color[3], px);
         }
+        record_solid_fan_scanline_stats(&mut stats, scanline);
+    }
+}
+
+fn record_solid_fan_scanline_stats(
+    stats: &mut Option<&mut RasterStats>,
+    scanline: PolygonScanlineSpan,
+) {
+    if let Some(stats) = stats {
+        stats.solid_fan_edge_intersections += scanline.edge_intersections;
+        stats.solid_fan_endpoint_probe_px += scanline.endpoint_probe_px;
     }
 }
 
@@ -637,6 +649,25 @@ fn polygon_scanline_span(
         endpoint_probe_px,
         fell_back: false,
     }
+}
+
+fn polygon_fallback_scanline_span(
+    polygon: &[&egui::epaint::Vertex],
+    bounds: TriangleRasterBounds,
+    y: usize,
+    area_sign: f32,
+) -> Option<(usize, usize)> {
+    let mut span_start = None;
+    let mut span_end = None;
+    for x in bounds.min_x..bounds.max_x {
+        if polygon_covers_pixel(x, y, polygon, area_sign) {
+            span_start.get_or_insert(x);
+            span_end = Some(x + 1);
+        } else if span_start.is_some() {
+            break;
+        }
+    }
+    span_start.zip(span_end)
 }
 
 fn tighter_lower_bound(
@@ -3068,6 +3099,82 @@ mod tests {
             render_test_solid_fan(11, 8, &vertices, &texture),
             render_test_solid_fan_reference(11, 8, &vertices, &texture)
         );
+    }
+
+    #[test]
+    fn solid_fan_matches_reference_for_fractional_internal_radials() {
+        let texture = test_white_texture();
+        let vertices = vec![
+            solid_vertex(1.5, 1.5, [96, 32, 0, 128]),
+            solid_vertex(5.5, 0.5, [96, 32, 0, 128]),
+            solid_vertex(9.5, 3.5, [96, 32, 0, 128]),
+            solid_vertex(8.5, 8.5, [96, 32, 0, 128]),
+            solid_vertex(3.5, 9.5, [96, 32, 0, 128]),
+            solid_vertex(0.5, 5.5, [96, 32, 0, 128]),
+        ];
+
+        assert_eq!(
+            render_test_solid_fan(12, 12, &vertices, &texture),
+            render_test_solid_fan_reference(12, 12, &vertices, &texture)
+        );
+    }
+
+    #[test]
+    fn solid_fan_matches_reference_for_fractional_near_radial_edges() {
+        let texture = test_white_texture();
+        let vertices = vec![
+            solid_vertex(2.25, 1.75, [40, 120, 20, 192]),
+            solid_vertex(6.75, 0.75, [40, 120, 20, 192]),
+            solid_vertex(10.25, 4.25, [40, 120, 20, 192]),
+            solid_vertex(9.75, 8.75, [40, 120, 20, 192]),
+            solid_vertex(4.25, 10.25, [40, 120, 20, 192]),
+            solid_vertex(0.75, 6.75, [40, 120, 20, 192]),
+        ];
+
+        assert_eq!(
+            render_test_solid_fan(12, 12, &vertices, &texture),
+            render_test_solid_fan_reference(12, 12, &vertices, &texture)
+        );
+    }
+
+    #[test]
+    fn solid_fan_non_finite_scanline_uses_real_fallback() {
+        let vertices = [
+            solid_vertex(0.0, 0.0, [255, 255, 255, 255]),
+            solid_vertex(f32::INFINITY, 0.0, [255, 255, 255, 255]),
+            solid_vertex(0.0, 2.0, [255, 255, 255, 255]),
+        ];
+        let polygon: Vec<_> = vertices.iter().collect();
+        let bounds = TriangleRasterBounds {
+            min_x: 0,
+            min_y: 0,
+            max_x: 3,
+            max_y: 3,
+        };
+        let scanline = polygon_scanline_span(&polygon, bounds, 0, 1.0, true);
+
+        assert!(scanline.fell_back);
+        assert_eq!(scanline.span, None);
+        assert_eq!(
+            polygon_fallback_scanline_span(&polygon, bounds, 0, 1.0),
+            None
+        );
+
+        let mut surface = test_surface(3, 3);
+        let mut stats = RasterStats::default();
+        rasterize_solid_fan(
+            &mut surface,
+            &polygon,
+            1,
+            [255, 255, 255, 255],
+            full_clip(3, 3),
+            Some(&mut stats),
+        );
+
+        assert!(stats.solid_fan_fallback_rows > 0);
+        assert_eq!(stats.solid_fan_rows, 0);
+        assert_eq!(stats.solid_fan_px, 0);
+        assert_eq!(stats.solid_fan_endpoint_probe_px, 0);
     }
 
     #[test]
