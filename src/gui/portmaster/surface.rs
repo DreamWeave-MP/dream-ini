@@ -112,13 +112,34 @@ fn blend_translucent_premultiplied_over_opaque_destination(
 }
 
 fn blend_premultiplied_channel(source: u8, destination: u8, inverse_alpha: u16) -> u8 {
-    u8::try_from(u16::from(source) + ((u16::from(destination) * inverse_alpha + 127) / 255))
-        .unwrap_or(u8::MAX)
+    u8::try_from(
+        u16::from(source)
+            + divide_blend_product_by_255_rounded(u16::from(destination) * inverse_alpha),
+    )
+    .unwrap_or(u8::MAX)
+}
+
+fn divide_blend_product_by_255_rounded(product: u16) -> u16 {
+    debug_assert!(product <= u16::from(u8::MAX) * u16::from(u8::MAX));
+    let biased = product + 128;
+    (biased + (biased >> 8)) >> 8
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rounded_divide_by_255_matches_reference_for_blend_products() {
+        for destination in u8::MIN..=u8::MAX {
+            for inverse_alpha in u8::MIN..=u8::MAX {
+                let product = u16::from(destination) * u16::from(inverse_alpha);
+                let reference = (product + 127) / 255;
+
+                assert_eq!(divide_blend_product_by_255_rounded(product), reference);
+            }
+        }
+    }
 
     #[test]
     fn alpha_blend_skips_transparent_source() {
