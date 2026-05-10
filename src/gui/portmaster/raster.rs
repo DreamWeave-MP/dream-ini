@@ -2013,6 +2013,55 @@ mod tests {
     }
 
     #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_logged_fan_sliver_both_windings() {
+        let vertices = [
+            solid_vertex(124.7, 213.3, [88, 144, 200, 255]),
+            solid_vertex(517.5, 457.5, [88, 144, 200, 255]),
+            solid_vertex(125.5, 212.9, [88, 144, 200, 255]),
+        ];
+        let reversed = [vertices[0], vertices[2], vertices[1]];
+        let clip = full_clip(640, 480);
+
+        assert_solid_triangle_matches_reference(640, 480, clip, [30, 90, 150, 255], vertices);
+        assert_solid_triangle_matches_reference(640, 480, clip, [30, 90, 150, 255], reversed);
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_clipped_logged_fan_sliver() {
+        assert_solid_triangle_matches_reference(
+            640,
+            480,
+            ClipBounds {
+                min_x: 123,
+                min_y: 212,
+                max_x: 220,
+                max_y: 274,
+            },
+            [30, 90, 150, 255],
+            [
+                solid_vertex(124.7, 213.3, [88, 144, 200, 255]),
+                solid_vertex(517.5, 457.5, [88, 144, 200, 255]),
+                solid_vertex(125.5, 212.9, [88, 144, 200, 255]),
+            ],
+        );
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_translucent_logged_fan_sliver() {
+        assert_solid_triangle_matches_reference(
+            640,
+            480,
+            full_clip(640, 480),
+            [30, 90, 150, 255],
+            [
+                solid_vertex(124.7, 213.3, [192, 96, 48, 160]),
+                solid_vertex(517.5, 457.5, [192, 96, 48, 160]),
+                solid_vertex(125.5, 212.9, [192, 96, 48, 160]),
+            ],
+        );
+    }
+
+    #[test]
     fn textured_triangle_rasterizer_matches_reference_for_giant_sliver() {
         let mut vertices = [
             solid_vertex(124.7, 213.3, [192, 96, 48, 224]),
