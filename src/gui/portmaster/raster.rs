@@ -32,6 +32,20 @@ pub(super) struct ClipBounds {
     max_y: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TriangleRasterBounds {
+    pub(super) min_x: usize,
+    pub(super) min_y: usize,
+    pub(super) max_x: usize,
+    pub(super) max_y: usize,
+}
+
+impl TriangleRasterBounds {
+    pub(super) const fn pixel_area(self) -> usize {
+        (self.max_x - self.min_x) * (self.max_y - self.min_y)
+    }
+}
+
 impl ClipBounds {
     pub(super) fn new(rect: egui::Rect, width: usize, height: usize) -> io::Result<Self> {
         let min_x = clamp_rect_value(rect.min.x.floor(), width)?;
@@ -165,6 +179,24 @@ pub(super) fn rasterize_triangle(
     if area.abs() <= f32::EPSILON {
         return;
     }
+    let Some(bounds) = triangle_raster_bounds(v0, v1, v2, clip) else {
+        return;
+    };
+
+    if let Some(color) = solid_triangle_color(v0, v1, v2, texture) {
+        rasterize_solid_triangle(surface, v0, v1, v2, bounds, area, color);
+        return;
+    }
+
+    rasterize_textured_triangle(surface, v0, v1, v2, texture, bounds, area);
+}
+
+pub(super) fn triangle_raster_bounds(
+    v0: &egui::epaint::Vertex,
+    v1: &egui::epaint::Vertex,
+    v2: &egui::epaint::Vertex,
+    clip: ClipBounds,
+) -> Option<TriangleRasterBounds> {
     let min_x = f32_to_usize_floor_clamped(v0.pos.x.min(v1.pos.x).min(v2.pos.x), clip.max_x)
         .max(clip.min_x);
     let max_x =
@@ -174,15 +206,15 @@ pub(super) fn rasterize_triangle(
     let max_y =
         f32_to_usize_ceil_clamped(v0.pos.y.max(v1.pos.y).max(v2.pos.y), clip.max_y).min(clip.max_y);
     if min_x >= max_x || min_y >= max_y {
-        return;
+        return None;
     }
 
-    if let Some(color) = solid_triangle_color(v0, v1, v2, texture) {
-        rasterize_solid_triangle(surface, v0, v1, v2, clip, area, color);
-        return;
-    }
-
-    rasterize_textured_triangle(surface, v0, v1, v2, texture, clip, area);
+    Some(TriangleRasterBounds {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    })
 }
 
 pub(super) fn classify_triangle(
@@ -551,21 +583,15 @@ fn rasterize_solid_triangle(
     v0: &egui::epaint::Vertex,
     v1: &egui::epaint::Vertex,
     v2: &egui::epaint::Vertex,
-    clip: ClipBounds,
+    bounds: TriangleRasterBounds,
     area: f32,
     color: [u8; 4],
 ) {
-    let min_x = f32_to_usize_floor_clamped(v0.pos.x.min(v1.pos.x).min(v2.pos.x), clip.max_x)
-        .max(clip.min_x);
-    let max_x =
-        f32_to_usize_ceil_clamped(v0.pos.x.max(v1.pos.x).max(v2.pos.x), clip.max_x).min(clip.max_x);
-    let min_y = f32_to_usize_floor_clamped(v0.pos.y.min(v1.pos.y).min(v2.pos.y), clip.max_y)
-        .max(clip.min_y);
-    let max_y =
-        f32_to_usize_ceil_clamped(v0.pos.y.max(v1.pos.y).max(v2.pos.y), clip.max_y).min(clip.max_y);
-
     let inv_area = 1.0 / area;
-    let start = egui::pos2(usize_to_f32(min_x) + 0.5, usize_to_f32(min_y) + 0.5);
+    let start = egui::pos2(
+        usize_to_f32(bounds.min_x) + 0.5,
+        usize_to_f32(bounds.min_y) + 0.5,
+    );
     let w0_step_x = edge_step_x(v1.pos, v2.pos);
     let w1_step_x = edge_step_x(v2.pos, v0.pos);
     let w2_step_x = edge_step_x(v0.pos, v1.pos);
@@ -579,11 +605,11 @@ fn rasterize_solid_triangle(
     let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
     let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
 
-    for y in min_y..max_y {
+    for y in bounds.min_y..bounds.max_y {
         let mut pixel_edge0 = row_edge0;
         let mut pixel_edge1 = row_edge1;
         let mut pixel_edge2 = row_edge2;
-        for x in min_x..max_x {
+        for x in bounds.min_x..bounds.max_x {
             let w0 = pixel_edge0 * inv_area;
             let w1 = pixel_edge1 * inv_area;
             let w2 = pixel_edge2 * inv_area;
@@ -609,20 +635,14 @@ fn rasterize_textured_triangle(
     v1: &egui::epaint::Vertex,
     v2: &egui::epaint::Vertex,
     texture: &TextureImage,
-    clip: ClipBounds,
+    bounds: TriangleRasterBounds,
     area: f32,
 ) {
-    let min_x = f32_to_usize_floor_clamped(v0.pos.x.min(v1.pos.x).min(v2.pos.x), clip.max_x)
-        .max(clip.min_x);
-    let max_x =
-        f32_to_usize_ceil_clamped(v0.pos.x.max(v1.pos.x).max(v2.pos.x), clip.max_x).min(clip.max_x);
-    let min_y = f32_to_usize_floor_clamped(v0.pos.y.min(v1.pos.y).min(v2.pos.y), clip.max_y)
-        .max(clip.min_y);
-    let max_y =
-        f32_to_usize_ceil_clamped(v0.pos.y.max(v1.pos.y).max(v2.pos.y), clip.max_y).min(clip.max_y);
-
     let inv_area = 1.0 / area;
-    let start = egui::pos2(usize_to_f32(min_x) + 0.5, usize_to_f32(min_y) + 0.5);
+    let start = egui::pos2(
+        usize_to_f32(bounds.min_x) + 0.5,
+        usize_to_f32(bounds.min_y) + 0.5,
+    );
     let w0_step_x = edge_step_x(v1.pos, v2.pos);
     let w1_step_x = edge_step_x(v2.pos, v0.pos);
     let w2_step_x = edge_step_x(v0.pos, v1.pos);
@@ -636,11 +656,11 @@ fn rasterize_textured_triangle(
     let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
     let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
 
-    for y in min_y..max_y {
+    for y in bounds.min_y..bounds.max_y {
         let mut pixel_edge0 = row_edge0;
         let mut pixel_edge1 = row_edge1;
         let mut pixel_edge2 = row_edge2;
-        for x in min_x..max_x {
+        for x in bounds.min_x..bounds.max_x {
             let w0 = pixel_edge0 * inv_area;
             let w1 = pixel_edge1 * inv_area;
             let w2 = pixel_edge2 * inv_area;
@@ -1373,23 +1393,21 @@ mod tests {
         let texture = test_white_texture();
         let mut surface = test_surface(width, height);
 
-        rasterize_textured_triangle(
+        rasterize_test_textured_triangle(
             &mut surface,
             &vertices[0],
             &vertices[1],
             &vertices[2],
             &texture,
             clip,
-            edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
         );
-        rasterize_textured_triangle(
+        rasterize_test_textured_triangle(
             &mut surface,
             &vertices[1],
             &vertices[3],
             &vertices[2],
             &texture,
             clip,
-            edge(vertices[1].pos, vertices[3].pos, vertices[2].pos),
         );
 
         surface.pixels
@@ -1430,23 +1448,21 @@ mod tests {
     ) -> Vec<u8> {
         let mut surface = test_surface(width, height);
 
-        rasterize_textured_triangle(
+        rasterize_test_textured_triangle(
             &mut surface,
             &vertices[0],
             &vertices[1],
             &vertices[2],
             texture,
             clip,
-            edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
         );
-        rasterize_textured_triangle(
+        rasterize_test_textured_triangle(
             &mut surface,
             &vertices[1],
             &vertices[3],
             &vertices[2],
             texture,
             clip,
-            edge(vertices[1].pos, vertices[3].pos, vertices[2].pos),
         );
 
         surface.pixels
@@ -1470,24 +1486,35 @@ mod tests {
         texture: &TextureImage,
     ) -> Vec<u8> {
         let mut surface = test_surface(width, height);
-        let area = edge(v0.pos, v1.pos, v2.pos);
-
-        rasterize_textured_triangle(
+        rasterize_test_textured_triangle(
             &mut surface,
             v0,
             v1,
             v2,
             texture,
-            ClipBounds {
-                min_x: 0,
-                min_y: 0,
-                max_x: width,
-                max_y: height,
-            },
-            area,
+            full_clip(width, height),
         );
 
         surface.pixels
+    }
+
+    fn rasterize_test_textured_triangle(
+        surface: &mut SoftwareSurface,
+        v0: &egui::epaint::Vertex,
+        v1: &egui::epaint::Vertex,
+        v2: &egui::epaint::Vertex,
+        texture: &TextureImage,
+        clip: ClipBounds,
+    ) {
+        rasterize_textured_triangle(
+            surface,
+            v0,
+            v1,
+            v2,
+            texture,
+            triangle_raster_bounds(v0, v1, v2, clip).expect("triangle bounds"),
+            edge(v0.pos, v1.pos, v2.pos),
+        );
     }
 
     fn test_surface(width: usize, height: usize) -> SoftwareSurface {

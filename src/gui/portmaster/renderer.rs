@@ -9,7 +9,7 @@ use super::pacing::format_repaint_delay;
 use super::raster::{
     ClipBounds, TexturedQuadFastPathRejection, TriangleClassification, classify_triangle,
     is_axis_aligned_quad, rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad,
-    rasterize_triangle, textured_quad_fast_path_rejection, usize_to_f32,
+    rasterize_triangle, textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -187,7 +187,7 @@ impl SoftwareRenderer {
                 continue;
             };
             if let Some(stats) = stats.as_deref_mut() {
-                stats.record_generic_triangle(v0, v1, v2, texture);
+                stats.record_generic_triangle(v0, v1, v2, texture, clip);
             }
             rasterize_triangle(surface, v0, v1, v2, texture, clip);
             index_offset += 3;
@@ -305,16 +305,16 @@ const TRIANGLE_BBOX_BUCKET_LE4: usize = 0;
 const TRIANGLE_BBOX_BUCKET_GT1024: usize = 5;
 
 impl TriangleBboxBuckets {
-    fn record(&mut self, area: f32) {
-        let bucket = if area <= 4.0 {
+    fn record(&mut self, area: usize) {
+        let bucket = if area <= 4 {
             0
-        } else if area <= 16.0 {
+        } else if area <= 16 {
             1
-        } else if area <= 64.0 {
+        } else if area <= 64 {
             2
-        } else if area <= 256.0 {
+        } else if area <= 256 {
             3
-        } else if area <= 1024.0 {
+        } else if area <= 1024 {
             4
         } else {
             TRIANGLE_BBOX_BUCKET_GT1024
@@ -359,6 +359,7 @@ impl PrimitiveStats {
         v1: &egui::epaint::Vertex,
         v2: &egui::epaint::Vertex,
         texture: &TextureImage,
+        clip: ClipBounds,
     ) {
         self.generic_triangles_rasterized += 1;
         let classification = classify_triangle(v0, v1, v2, texture);
@@ -371,7 +372,10 @@ impl PrimitiveStats {
                 self.generic_textured_triangles += 1;
             }
         }
-        self.record_generic_triangle_bbox(v0, v1, v2, classification);
+        if classification == TriangleClassification::Degenerate {
+            return;
+        }
+        self.record_generic_triangle_bbox(v0, v1, v2, classification, clip);
     }
 
     fn record_generic_triangle_bbox(
@@ -380,25 +384,26 @@ impl PrimitiveStats {
         v1: &egui::epaint::Vertex,
         v2: &egui::epaint::Vertex,
         classification: TriangleClassification,
+        clip: ClipBounds,
     ) {
-        let min_x = v0.pos.x.min(v1.pos.x).min(v2.pos.x);
-        let max_x = v0.pos.x.max(v1.pos.x).max(v2.pos.x);
-        let min_y = v0.pos.y.min(v1.pos.y).min(v2.pos.y);
-        let max_y = v0.pos.y.max(v1.pos.y).max(v2.pos.y);
-        let width = (max_x.ceil() - min_x.floor()).max(0.0);
-        let height = (max_y.ceil() - min_y.floor()).max(0.0);
-        let area = width * height;
+        if classification == TriangleClassification::Degenerate {
+            return;
+        }
         if !v0.pos.x.is_finite()
             || !v0.pos.y.is_finite()
             || !v1.pos.x.is_finite()
             || !v1.pos.y.is_finite()
             || !v2.pos.x.is_finite()
             || !v2.pos.y.is_finite()
-            || !area.is_finite()
         {
             self.generic_triangle_bbox_non_finite += 1;
             return;
         }
+
+        let Some(bounds) = triangle_raster_bounds(v0, v1, v2, clip) else {
+            return;
+        };
+        let area = bounds.pixel_area();
 
         self.generic_triangle_bbox_px_buckets.record(area);
         match classification {
@@ -557,12 +562,13 @@ mod tests {
         let v0 = test_vertex(0.0, 0.0);
         let v1 = test_vertex(2.0, 0.0);
         let mut v2 = test_vertex(0.0, 2.0);
+        let clip = clip_bounds(64, 64);
         let mut stats = PrimitiveStats::default();
 
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture);
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip);
         v2.color = egui::Color32::BLACK;
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture);
-        stats.record_generic_triangle(&v0, &v1, &v0, &texture);
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip);
+        stats.record_generic_triangle(&v0, &v1, &v0, &texture, clip);
 
         assert_eq!(stats.generic_triangles_rasterized, 3);
         assert_eq!(stats.generic_solid_triangles, 1);
@@ -570,7 +576,7 @@ mod tests {
         assert_eq!(stats.degenerate_triangles, 1);
         assert_eq!(
             stats.generic_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
-            3
+            2
         );
         assert_eq!(
             stats.generic_solid_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
@@ -582,7 +588,7 @@ mod tests {
         );
         assert_eq!(
             stats.generic_degenerate_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
-            1
+            0
         );
         stats.textured_quad_fast_path_hits = 2;
         stats.textured_quad_reject_non_affine_uv = 1;
@@ -592,7 +598,7 @@ mod tests {
         assert!(log_line.contains("textured_quad_reject_non_affine_uv=1"));
         assert!(log_line.contains("degenerate_triangles=1"));
         assert!(log_line.contains(
-            "generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=3,0,0,0,0,0"
+            "generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=2,0,0,0,0,0"
         ));
         assert!(log_line.contains(
             "generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=1,0,0,0,0,0"
@@ -601,7 +607,7 @@ mod tests {
             "generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=1,0,0,0,0,0"
         ));
         assert!(log_line.contains(
-            "generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=1,0,0,0,0,0"
+            "generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=0,0,0,0,0,0"
         ));
         assert!(log_line.contains("generic_triangle_bbox_non_finite=0"));
     }
@@ -617,9 +623,10 @@ mod tests {
         let v1 = test_vertex(33.0, 0.0);
         let mut v2 = test_vertex(0.0, 33.0);
         v2.color = egui::Color32::BLACK;
+        let clip = clip_bounds(64, 64);
         let mut stats = PrimitiveStats::default();
 
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture);
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip);
 
         assert_eq!(stats.generic_textured_triangles, 1);
         assert_eq!(
@@ -629,6 +636,93 @@ mod tests {
         assert_eq!(
             stats.generic_textured_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_GT1024],
             1
+        );
+    }
+
+    #[test]
+    fn primitive_stats_buckets_mostly_offscreen_triangle_by_clipped_raster_bounds() {
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let v0 = test_vertex(-4096.0, -4096.0);
+        let v1 = test_vertex(8.0, 0.0);
+        let mut v2 = test_vertex(0.0, 8.0);
+        v2.color = egui::Color32::BLACK;
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip_bounds(16, 16));
+
+        assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(stats.generic_triangle_bbox_non_finite, 0);
+        assert_eq!(
+            stats.generic_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_GT1024],
+            0
+        );
+        assert_eq!(
+            stats.generic_textured_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_GT1024],
+            0
+        );
+        assert_eq!(
+            triangle_bucket_total(&stats.generic_triangle_bbox_px_buckets),
+            1
+        );
+    }
+
+    #[test]
+    fn primitive_stats_classifies_fully_clipped_triangle_without_bbox_bucket() {
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let v0 = test_vertex(20.0, 20.0);
+        let v1 = test_vertex(24.0, 20.0);
+        let v2 = test_vertex(20.0, 24.0);
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip_bounds(16, 16));
+
+        assert_eq!(stats.generic_triangles_rasterized, 1);
+        assert_eq!(stats.generic_solid_triangles, 1);
+        assert_eq!(stats.generic_textured_triangles, 0);
+        assert_eq!(stats.degenerate_triangles, 0);
+        assert_eq!(
+            triangle_bucket_total(&stats.generic_triangle_bbox_px_buckets),
+            0
+        );
+        assert_eq!(
+            triangle_bucket_total(&stats.generic_solid_triangle_bbox_px_buckets),
+            0
+        );
+    }
+
+    #[test]
+    fn primitive_stats_classifies_collinear_triangle_without_bbox_bucket() {
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let v0 = test_vertex(0.0, 0.0);
+        let v1 = test_vertex(4.0, 4.0);
+        let v2 = test_vertex(8.0, 8.0);
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip_bounds(16, 16));
+
+        assert_eq!(stats.generic_triangles_rasterized, 1);
+        assert_eq!(stats.generic_solid_triangles, 0);
+        assert_eq!(stats.generic_textured_triangles, 0);
+        assert_eq!(stats.degenerate_triangles, 1);
+        assert_eq!(
+            triangle_bucket_total(&stats.generic_triangle_bbox_px_buckets),
+            0
+        );
+        assert_eq!(
+            triangle_bucket_total(&stats.generic_degenerate_triangle_bbox_px_buckets),
+            0
         );
     }
 
@@ -724,6 +818,22 @@ mod tests {
             )],
             free: Vec::new(),
         }
+    }
+
+    fn clip_bounds(width: usize, height: usize) -> ClipBounds {
+        ClipBounds::new(
+            egui::Rect::from_min_max(
+                egui::Pos2::ZERO,
+                egui::pos2(usize_to_f32(width), usize_to_f32(height)),
+            ),
+            width,
+            height,
+        )
+        .expect("clip bounds")
+    }
+
+    fn triangle_bucket_total(buckets: &TriangleBboxBuckets) -> usize {
+        buckets.counts.iter().sum()
     }
 
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
