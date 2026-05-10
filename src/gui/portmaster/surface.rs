@@ -45,8 +45,20 @@ impl SoftwareSurface {
     }
 
     pub(super) fn blend_span(&mut self, y: usize, start_x: usize, end_x: usize, color: [u8; 4]) {
+        if color[3] == 0 {
+            return;
+        }
+
         let start = (y * self.width + start_x) * 4;
         let end = (y * self.width + end_x) * 4;
+
+        if color[3] == u8::MAX {
+            for pixel in self.pixels[start..end].chunks_exact_mut(4) {
+                pixel.copy_from_slice(&color);
+            }
+            return;
+        }
+
         for pixel in self.pixels[start..end].chunks_exact_mut(4) {
             alpha_blend(pixel, color);
         }
@@ -107,6 +119,58 @@ mod tests {
         alpha_blend(&mut destination, [128, 0, 0, 128]);
 
         assert_eq!(destination, [128, 0, 127, 255]);
+    }
+
+    #[test]
+    fn blend_span_skips_transparent_source() {
+        let mut surface = SoftwareSurface::default();
+        surface.resize(4, 1).expect("surface");
+        surface
+            .pixels
+            .copy_from_slice(&[1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]);
+
+        surface.blend_span(0, 1, 3, [200, 100, 50, 0]);
+
+        assert_eq!(
+            surface.pixels,
+            [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]
+        );
+    }
+
+    #[test]
+    fn blend_span_overwrites_opaque_source_over_multiple_pixels() {
+        let mut surface = SoftwareSurface::default();
+        surface.resize(4, 1).expect("surface");
+        surface
+            .pixels
+            .copy_from_slice(&[1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]);
+
+        surface.blend_span(0, 1, 3, [44, 55, 66, 255]);
+
+        assert_eq!(
+            surface.pixels,
+            [
+                1, 2, 3, 255, 44, 55, 66, 255, 44, 55, 66, 255, 10, 11, 12, 255
+            ]
+        );
+    }
+
+    #[test]
+    fn blend_span_matches_alpha_blend_for_translucent_source() {
+        let color = [100, 25, 0, 128];
+        let mut surface = SoftwareSurface::default();
+        surface.resize(4, 1).expect("surface");
+        surface.pixels.copy_from_slice(&[
+            1, 2, 3, 255, 20, 40, 60, 255, 70, 80, 90, 255, 10, 11, 12, 255,
+        ]);
+        let mut expected = surface.pixels.clone();
+
+        for pixel in expected[4..12].chunks_exact_mut(4) {
+            alpha_blend(pixel, color);
+        }
+        surface.blend_span(0, 1, 3, color);
+
+        assert_eq!(surface.pixels, expected);
     }
 
     #[test]
