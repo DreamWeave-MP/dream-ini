@@ -604,13 +604,6 @@ struct TriangleVertices<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct TriangleEdgeValues {
-    edge0: f32,
-    edge1: f32,
-    edge2: f32,
-}
-
-#[derive(Clone, Copy)]
 struct TriangleBoundaryIncludes {
     edge0: bool,
     edge1: bool,
@@ -620,7 +613,6 @@ struct TriangleBoundaryIncludes {
 #[derive(Clone, Copy)]
 struct SolidTriangleCoverage {
     inv_area: f32,
-    step_x: TriangleEdgeValues,
     includes_boundary: TriangleBoundaryIncludes,
 }
 
@@ -880,28 +872,8 @@ fn rasterize_solid_triangle(
 ) {
     let TriangleVertices { v0, v1, v2 } = vertices;
     let inv_area = 1.0 / area;
-    let start = egui::pos2(
-        usize_to_f32(bounds.min_x) + 0.5,
-        usize_to_f32(bounds.min_y) + 0.5,
-    );
-    let w0_step_x = edge_step_x(v1.pos, v2.pos);
-    let w1_step_x = edge_step_x(v2.pos, v0.pos);
-    let w2_step_x = edge_step_x(v0.pos, v1.pos);
-    let w0_step_y = edge_step_y(v1.pos, v2.pos);
-    let w1_step_y = edge_step_y(v2.pos, v0.pos);
-    let w2_step_y = edge_step_y(v0.pos, v1.pos);
-    let mut row_edges = TriangleEdgeValues {
-        edge0: edge(v1.pos, v2.pos, start),
-        edge1: edge(v2.pos, v0.pos, start),
-        edge2: edge(v0.pos, v1.pos, start),
-    };
     let coverage = SolidTriangleCoverage {
         inv_area,
-        step_x: TriangleEdgeValues {
-            edge0: w0_step_x,
-            edge1: w1_step_x,
-            edge2: w2_step_x,
-        },
         includes_boundary: TriangleBoundaryIncludes {
             edge0: edge_includes_boundary(v1.pos, v2.pos, area),
             edge1: edge_includes_boundary(v2.pos, v0.pos, area),
@@ -926,21 +898,11 @@ fn rasterize_solid_triangle(
                 stats.solid_triangle_full_scan_rows += 1;
             }
         }
-        let start_edges = if narrow_scanlines {
-            let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
-            TriangleEdgeValues {
-                edge0: edge(v1.pos, v2.pos, pixel_center),
-                edge1: edge(v2.pos, v0.pos, pixel_center),
-                edge2: edge(v0.pos, v1.pos, pixel_center),
-            }
-        } else {
-            row_edges
-        };
 
         if let Some(span_start) =
-            solid_triangle_first_covered_x(start_x, end_x, start_edges, coverage)
+            solid_triangle_first_covered_x(start_x, end_x, y, vertices, coverage)
         {
-            let span_end = solid_triangle_last_covered_x(start_x, end_x, start_edges, coverage)
+            let span_end = solid_triangle_last_covered_x(start_x, end_x, y, vertices, coverage)
                 .map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
             surface.blend_span(y, span_start, span_end, color);
             if let Some(stats) = &mut stats {
@@ -950,79 +912,45 @@ fn rasterize_solid_triangle(
                 stats.record_alpha_px(color[3], px);
             }
         }
-        row_edges.edge0 += w0_step_y;
-        row_edges.edge1 += w1_step_y;
-        row_edges.edge2 += w2_step_y;
     }
 }
 
 fn solid_triangle_first_covered_x(
     start_x: usize,
     end_x: usize,
-    start_edges: TriangleEdgeValues,
+    y: usize,
+    vertices: TriangleVertices<'_>,
     coverage: SolidTriangleCoverage,
 ) -> Option<usize> {
-    let mut edges = start_edges;
-    for x in start_x..end_x {
-        if solid_triangle_covers_pixel(edges, coverage) {
-            return Some(x);
-        }
-        edges = edges.step(coverage.step_x);
-    }
-    None
+    (start_x..end_x).find(|&x| solid_triangle_covers_pixel(x, y, vertices, coverage))
 }
 
 fn solid_triangle_last_covered_x(
     start_x: usize,
     end_x: usize,
-    start_edges: TriangleEdgeValues,
+    y: usize,
+    vertices: TriangleVertices<'_>,
     coverage: SolidTriangleCoverage,
 ) -> Option<usize> {
-    let last_offset = end_x.checked_sub(start_x + 1)?;
-    let mut edges = start_edges.offset(coverage.step_x, last_offset);
-    for x in (start_x..end_x).rev() {
-        if solid_triangle_covers_pixel(edges, coverage) {
-            return Some(x);
-        }
-        edges = edges.step_back(coverage.step_x);
-    }
-    None
+    (start_x..end_x)
+        .rev()
+        .find(|&x| solid_triangle_covers_pixel(x, y, vertices, coverage))
 }
 
-fn solid_triangle_covers_pixel(edges: TriangleEdgeValues, coverage: SolidTriangleCoverage) -> bool {
-    let w0 = edges.edge0 * coverage.inv_area;
-    let w1 = edges.edge1 * coverage.inv_area;
-    let w2 = edges.edge2 * coverage.inv_area;
+fn solid_triangle_covers_pixel(
+    x: usize,
+    y: usize,
+    vertices: TriangleVertices<'_>,
+    coverage: SolidTriangleCoverage,
+) -> bool {
+    let TriangleVertices { v0, v1, v2 } = vertices;
+    let pixel_center = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
+    let w0 = edge(v1.pos, v2.pos, pixel_center) * coverage.inv_area;
+    let w1 = edge(v2.pos, v0.pos, pixel_center) * coverage.inv_area;
+    let w2 = edge(v0.pos, v1.pos, pixel_center) * coverage.inv_area;
     edge_covers_pixel(w0, coverage.includes_boundary.edge0)
         && edge_covers_pixel(w1, coverage.includes_boundary.edge1)
         && edge_covers_pixel(w2, coverage.includes_boundary.edge2)
-}
-
-impl TriangleEdgeValues {
-    fn offset(self, step: Self, pixels: usize) -> Self {
-        let pixels = usize_to_f32(pixels);
-        Self {
-            edge0: step.edge0.mul_add(pixels, self.edge0),
-            edge1: step.edge1.mul_add(pixels, self.edge1),
-            edge2: step.edge2.mul_add(pixels, self.edge2),
-        }
-    }
-
-    const fn step(self, step: Self) -> Self {
-        Self {
-            edge0: self.edge0 + step.edge0,
-            edge1: self.edge1 + step.edge1,
-            edge2: self.edge2 + step.edge2,
-        }
-    }
-
-    const fn step_back(self, step: Self) -> Self {
-        Self {
-            edge0: self.edge0 - step.edge0,
-            edge1: self.edge1 - step.edge1,
-            edge2: self.edge2 - step.edge2,
-        }
-    }
 }
 
 fn triangle_scanline_x_range(
@@ -2039,6 +1967,40 @@ mod tests {
                 solid_vertex(2.5, 5.75, [100, 20, 140, 128]),
             ],
         );
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_boundary_drift_triangle() {
+        let vertices = [
+            solid_vertex(159.34012, 59.640_804, [88, 144, 200, 255]),
+            solid_vertex(98.330_84, 448.938_54, [88, 144, 200, 255]),
+            solid_vertex(482.737_18, 307.795_17, [88, 144, 200, 255]),
+        ];
+        let clip = full_clip(512, 512);
+
+        assert_solid_triangle_matches_reference(512, 512, clip, [30, 90, 150, 255], vertices);
+
+        let bounds = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+            .expect("triangle bounds");
+        assert!(bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA);
+        assert!(bounds.min_x <= 98 && bounds.max_x > 482);
+        assert!(bounds.min_y <= 59 && bounds.max_y > 448);
+
+        let mut surface = test_surface(512, 512);
+        let mut stats = RasterStats::default();
+        rasterize_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &test_white_texture(),
+            clip,
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.solid_triangle_calls, 1);
+        assert!(stats.solid_triangle_covered_px > 0);
+        assert!(stats.solid_triangle_candidate_px < stats.solid_triangle_bbox_px);
     }
 
     #[test]
