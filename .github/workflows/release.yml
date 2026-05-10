@@ -22,3 +22,91 @@ jobs:
       # .github/nexus_group_ids.template.json as the NEXUS_GROUP_IDS shape.
       enable_android: true
       enable_portmaster: true
+
+  package_muxapp:
+    name: Package muxapp
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create and upload muxapp asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            release_tag="${{ github.ref_name }}"
+          else
+            release_tag="development"
+          fi
+
+          work_dir="muxapp-work"
+          archive_dir="$work_dir/dream-archive"
+          source_asset_name="dream-ini-Portmaster-ARM64.zip"
+          zip_asset_name="dream-ini-Portmaster-ARM64.muxapp.zip"
+          asset_name="dream-ini-Portmaster-ARM64.muxapp"
+
+          rm -rf "$work_dir"
+          mkdir -p "$work_dir" "$archive_dir"
+
+          echo "Downloading Portmaster ARM64 asset from release: $release_tag"
+          gh release download "$release_tag" \
+            --pattern "$source_asset_name" \
+            --dir "$work_dir" \
+            --clobber
+
+          echo "Downloaded files:"
+          ls -la "$work_dir"
+
+          downloaded_asset="$work_dir/$source_asset_name"
+          if [[ ! -f "$downloaded_asset" ]]; then
+            echo "Expected Portmaster asset not found: $downloaded_asset" >&2
+            exit 1
+          fi
+
+          echo "Extracting asset: $downloaded_asset"
+          case "$downloaded_asset" in
+            *.zip)
+              unzip -q "$downloaded_asset" -d "$archive_dir"
+              ;;
+            *.tar)
+              tar -xf "$downloaded_asset" -C "$archive_dir"
+              ;;
+            *.tar.gz|*.tgz)
+              tar -xzf "$downloaded_asset" -C "$archive_dir"
+              ;;
+            *)
+              echo "Unsupported archive extension: $downloaded_asset" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "Extracted archive contents:"
+          find "$archive_dir" -maxdepth 3 -print | sort
+
+          echo "Copying committed Dream INI files into archive"
+          cp -a "Dream INI/." "$archive_dir/"
+          if [[ -f "$archive_dir/mux_launch.sh" ]]; then
+            chmod +x "$archive_dir/mux_launch.sh"
+          fi
+
+          echo "Final muxapp contents:"
+          find "$archive_dir" -maxdepth 3 -print | sort
+
+          (
+            cd "$archive_dir"
+            zip -qr "../$zip_asset_name" .
+          )
+          mv "$work_dir/$zip_asset_name" "$work_dir/$asset_name"
+
+          echo "Created muxapp asset: $work_dir/$asset_name"
+          ls -lh "$work_dir/$asset_name"
+
+          gh release upload "$release_tag" "$work_dir/$asset_name" --clobber
