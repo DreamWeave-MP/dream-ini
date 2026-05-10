@@ -42,6 +42,9 @@ use renderer::SoftwareRenderer;
 #[cfg(target_os = "linux")]
 use shell::PortMasterGuiShell;
 
+#[cfg(target_os = "linux")]
+const IDLE_POLL_LOG_INTERVAL: u64 = 600;
+
 pub(crate) fn run() -> ExitCode {
     let log = open_log().map(Mutex::new).map(Arc::new);
     install_panic_hook(log.clone());
@@ -168,7 +171,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
     fn run_loop(&mut self, framebuffer: &mut Framebuffer) -> GuiLoopOutcome {
         let mut frame_count = 0_u64;
         let mut next_repaint_at = Some(Instant::now());
-        let mut skipped_idle_polls = 0_u64;
+        let mut idle_poll_log = IdlePollLogState::default();
         let mut gui_error = None;
         let exit_reason = 'gui: loop {
             let now = Instant::now();
@@ -188,13 +191,25 @@ impl<'a> FramebufferGuiRuntime<'a> {
             ) {
                 FrameScheduleAction::Draw => {}
                 FrameScheduleAction::Sleep(duration) => {
-                    skipped_idle_polls =
-                        self.sleep_until_next_frame(duration, skipped_idle_polls, next_repaint_at);
+                    let continuous_idle_polls = idle_poll_log.record_sleep();
+                    self.sleep_until_next_frame(
+                        duration,
+                        continuous_idle_polls,
+                        idle_poll_log.skipped_since_frame_log(),
+                        next_repaint_at,
+                    );
                     continue 'gui;
                 }
             }
 
-            skipped_idle_polls = 0;
+            let log_frame = should_log_frame(frame_count);
+            if log_frame {
+                self.log_skipped_idle_poll_summary(
+                    idle_poll_log.take_skipped_since_frame_log(),
+                    next_repaint_at,
+                );
+            }
+            idle_poll_log.record_draw();
             let frame_started_at = Instant::now();
             match self.draw_frame(framebuffer, frame_count) {
                 Ok(draw_outcome) => {
@@ -228,21 +243,37 @@ impl<'a> FramebufferGuiRuntime<'a> {
     fn sleep_until_next_frame(
         &self,
         duration: Duration,
-        skipped_idle_polls: u64,
+        continuous_idle_polls: u64,
+        skipped_since_frame_log: u64,
         next_repaint_at: Option<Instant>,
-    ) -> u64 {
-        let skipped_idle_polls = skipped_idle_polls.saturating_add(1);
-        if skipped_idle_polls == 1 || skipped_idle_polls.is_multiple_of(600) {
+    ) {
+        if should_log_idle_poll(continuous_idle_polls, next_repaint_at) {
             write_log(
                 self.log,
                 format!(
-                    "framebuffer idle poll skipped_render_count={skipped_idle_polls} sleep_for={duration:?} next_repaint_at={next_repaint_at:?} has_requested_repaint={}",
+                    "framebuffer idle polling continuous_skipped_polls={continuous_idle_polls} skipped_polls_since_frame_log={skipped_since_frame_log} sleep_for={duration:?} next_repaint_at={next_repaint_at:?} has_requested_repaint={}",
                     self.egui_context.has_requested_repaint()
                 ),
             );
         }
         sleep_for_frame_schedule(duration);
-        skipped_idle_polls
+    }
+
+    fn log_skipped_idle_poll_summary(
+        &self,
+        skipped_since_frame_log: u64,
+        next_repaint_at: Option<Instant>,
+    ) {
+        if skipped_since_frame_log == 0 {
+            return;
+        }
+        write_log(
+            self.log,
+            format!(
+                "framebuffer frame scheduling skipped_idle_polls_since_last_frame_log={skipped_since_frame_log} next_repaint_at={next_repaint_at:?} has_requested_repaint={}",
+                self.egui_context.has_requested_repaint()
+            ),
+        );
     }
 
     fn draw_frame(
@@ -250,7 +281,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
         framebuffer: &mut Framebuffer,
         frame_count: u64,
     ) -> io::Result<FramebufferDrawOutcome> {
-        let log_frame = frame_count == 0 || frame_count.is_multiple_of(30);
+        let log_frame = should_log_frame(frame_count);
         let mut frame = GuiFrame {
             context: &self.egui_context,
             app: &mut self.app,
@@ -292,6 +323,48 @@ impl<'a> FramebufferGuiRuntime<'a> {
         }
         next_repaint_at
     }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct IdlePollLogState {
+    continuous_idle_polls: u64,
+    skipped_since_frame_log: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl IdlePollLogState {
+    fn record_sleep(&mut self) -> u64 {
+        self.continuous_idle_polls = self.continuous_idle_polls.saturating_add(1);
+        self.skipped_since_frame_log = self.skipped_since_frame_log.saturating_add(1);
+        self.continuous_idle_polls
+    }
+
+    fn record_draw(&mut self) {
+        self.continuous_idle_polls = 0;
+    }
+
+    const fn skipped_since_frame_log(&self) -> u64 {
+        self.skipped_since_frame_log
+    }
+
+    fn take_skipped_since_frame_log(&mut self) -> u64 {
+        let skipped = self.skipped_since_frame_log;
+        self.skipped_since_frame_log = 0;
+        skipped
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn should_log_frame(frame_count: u64) -> bool {
+    frame_count == 0 || frame_count.is_multiple_of(30)
+}
+
+#[cfg(target_os = "linux")]
+fn should_log_idle_poll(continuous_idle_polls: u64, next_repaint_at: Option<Instant>) -> bool {
+    continuous_idle_polls != 0
+        && ((continuous_idle_polls == 1 && next_repaint_at.is_none())
+            || continuous_idle_polls.is_multiple_of(IDLE_POLL_LOG_INTERVAL))
 }
 
 #[cfg(target_os = "linux")]
@@ -361,4 +434,43 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
     write_log(log, message);
     eprintln!("{message}");
     Err(io::Error::other(message))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_poll_state_tracks_continuous_and_aggregate_counts_separately() {
+        let mut state = IdlePollLogState::default();
+
+        assert_eq!(state.record_sleep(), 1);
+        assert_eq!(state.record_sleep(), 2);
+        assert_eq!(state.skipped_since_frame_log(), 2);
+
+        state.record_draw();
+        assert_eq!(state.record_sleep(), 1);
+        assert_eq!(state.skipped_since_frame_log(), 3);
+
+        assert_eq!(state.take_skipped_since_frame_log(), 3);
+        assert_eq!(state.skipped_since_frame_log(), 0);
+    }
+
+    #[test]
+    fn idle_poll_logging_distinguishes_true_idle_from_scheduled_frame_sleep() {
+        let now = Instant::now();
+
+        assert!(should_log_idle_poll(1, None));
+        assert!(!should_log_idle_poll(1, Some(now)));
+        assert!(!should_log_idle_poll(0, None));
+        assert!(should_log_idle_poll(IDLE_POLL_LOG_INTERVAL, Some(now)));
+    }
+
+    #[test]
+    fn frame_logging_samples_first_frame_and_every_thirtieth_frame() {
+        assert!(should_log_frame(0));
+        assert!(!should_log_frame(1));
+        assert!(!should_log_frame(29));
+        assert!(should_log_frame(30));
+    }
 }
