@@ -102,6 +102,22 @@ fn edge_step_y(a: egui::Pos2, b: egui::Pos2) -> f32 {
     -(b.x - a.x)
 }
 
+fn edge_is_top_left(a: egui::Pos2, b: egui::Pos2) -> bool {
+    a.y < b.y || (same_f32(a.y, b.y) && a.x > b.x)
+}
+
+fn edge_includes_boundary(a: egui::Pos2, b: egui::Pos2, area: f32) -> bool {
+    if area < 0.0 {
+        edge_is_top_left(a, b)
+    } else {
+        !edge_is_top_left(a, b)
+    }
+}
+
+fn edge_covers_pixel(weight: f32, includes_boundary: bool) -> bool {
+    weight > 0.0 || (same_f32(weight, 0.0) && includes_boundary)
+}
+
 fn same_f32(left: f32, right: f32) -> bool {
     matches!(left.partial_cmp(&right), Some(Ordering::Equal))
 }
@@ -335,6 +351,9 @@ fn rasterize_solid_triangle(
     let mut row_edge0 = edge(v1.pos, v2.pos, start);
     let mut row_edge1 = edge(v2.pos, v0.pos, start);
     let mut row_edge2 = edge(v0.pos, v1.pos, start);
+    let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
+    let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
+    let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
 
     for y in min_y..max_y {
         let mut pixel_edge0 = row_edge0;
@@ -344,7 +363,10 @@ fn rasterize_solid_triangle(
             let w0 = pixel_edge0 * inv_area;
             let w1 = pixel_edge1 * inv_area;
             let w2 = pixel_edge2 * inv_area;
-            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+            if edge_covers_pixel(w0, edge0_includes_boundary)
+                && edge_covers_pixel(w1, edge1_includes_boundary)
+                && edge_covers_pixel(w2, edge2_includes_boundary)
+            {
                 surface.blend_pixel(x, y, color);
             }
             pixel_edge0 += w0_step_x;
@@ -386,6 +408,9 @@ fn rasterize_textured_triangle(
     let mut row_edge0 = edge(v1.pos, v2.pos, start);
     let mut row_edge1 = edge(v2.pos, v0.pos, start);
     let mut row_edge2 = edge(v0.pos, v1.pos, start);
+    let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
+    let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
+    let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
 
     for y in min_y..max_y {
         let mut pixel_edge0 = row_edge0;
@@ -395,7 +420,10 @@ fn rasterize_textured_triangle(
             let w0 = pixel_edge0 * inv_area;
             let w1 = pixel_edge1 * inv_area;
             let w2 = pixel_edge2 * inv_area;
-            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+            if edge_covers_pixel(w0, edge0_includes_boundary)
+                && edge_covers_pixel(w1, edge1_includes_boundary)
+                && edge_covers_pixel(w2, edge2_includes_boundary)
+            {
                 let uv = egui::pos2(
                     v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
                     v0.uv.y.mul_add(w0, v1.uv.y.mul_add(w1, v2.uv.y * w2)),
@@ -659,6 +687,96 @@ mod tests {
     }
 
     #[test]
+    fn solid_triangle_edges_cover_shared_diagonal_once() {
+        let color = egui::Color32::from_rgba_premultiplied(128, 0, 0, 128);
+        let mut top_left = test_vertex(0.0, 0.0);
+        let mut top_right = test_vertex(3.0, 0.0);
+        let mut bottom_left = test_vertex(0.0, 3.0);
+        let mut bottom_right = test_vertex(3.0, 3.0);
+        for vertex in [
+            &mut top_left,
+            &mut top_right,
+            &mut bottom_left,
+            &mut bottom_right,
+        ] {
+            vertex.color = color;
+        }
+        let texture = test_white_texture();
+        let mut surface = test_surface(3, 3);
+
+        rasterize_triangle(
+            &mut surface,
+            &top_left,
+            &top_right,
+            &bottom_left,
+            &texture,
+            full_clip(3, 3),
+        );
+        rasterize_triangle(
+            &mut surface,
+            &top_right,
+            &bottom_right,
+            &bottom_left,
+            &texture,
+            full_clip(3, 3),
+        );
+
+        assert_eq!(red_pixel_count(&surface.pixels), 9);
+        assert_eq!(pixel_at(&surface.pixels, 3, 2, 0), [128, 0, 0, 255]);
+        assert_eq!(pixel_at(&surface.pixels, 3, 1, 1), [128, 0, 0, 255]);
+        assert_eq!(pixel_at(&surface.pixels, 3, 0, 2), [128, 0, 0, 255]);
+    }
+
+    #[test]
+    fn textured_triangle_edges_cover_shared_diagonal_once() {
+        let color = egui::Color32::from_rgba_premultiplied(128, 0, 0, 128);
+        let mut top_left = test_vertex(0.0, 0.0);
+        let mut top_right = test_vertex(3.0, 0.0);
+        let mut bottom_left = test_vertex(0.0, 3.0);
+        let mut bottom_right = test_vertex(3.0, 3.0);
+        top_left.uv = egui::pos2(0.0, 0.0);
+        top_right.uv = egui::pos2(1.0, 0.0);
+        bottom_left.uv = egui::pos2(0.0, 1.0);
+        bottom_right.uv = egui::pos2(1.0, 1.0);
+        for vertex in [
+            &mut top_left,
+            &mut top_right,
+            &mut bottom_left,
+            &mut bottom_right,
+        ] {
+            vertex.color = color;
+        }
+        let texture = test_solid_2x2_texture([255, 255, 255, 255]);
+        let mut surface = test_surface(3, 3);
+
+        assert_eq!(
+            solid_triangle_color(&top_left, &top_right, &bottom_left, &texture),
+            None
+        );
+        rasterize_triangle(
+            &mut surface,
+            &top_left,
+            &top_right,
+            &bottom_left,
+            &texture,
+            full_clip(3, 3),
+        );
+        rasterize_triangle(
+            &mut surface,
+            &top_right,
+            &bottom_right,
+            &bottom_left,
+            &texture,
+            full_clip(3, 3),
+        );
+
+        assert_eq!(red_pixel_count(&surface.pixels), 9);
+        assert_eq!(pixel_at(&surface.pixels, 3, 2, 0), [128, 0, 0, 255]);
+        assert_eq!(pixel_at(&surface.pixels, 3, 1, 1), [128, 0, 0, 255]);
+        assert_eq!(pixel_at(&surface.pixels, 3, 0, 2), [128, 0, 0, 255]);
+    }
+
+    #[test]
     fn axis_aligned_quad_fast_path_accepts_opaque_solid_rectangle() {
         let vertices = test_quad_vertices();
 
@@ -862,6 +980,23 @@ mod tests {
             .count()
     }
 
+    fn red_pixel_count(pixels: &[u8]) -> usize {
+        pixels
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] == 128 && pixel[1] == 0 && pixel[2] == 0)
+            .count()
+    }
+
+    fn pixel_at(pixels: &[u8], width: usize, x: usize, y: usize) -> [u8; 4] {
+        let offset = (y * width + x) * 4;
+        [
+            pixels[offset],
+            pixels[offset + 1],
+            pixels[offset + 2],
+            pixels[offset + 3],
+        ]
+    }
+
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
         egui::epaint::Vertex {
             pos: egui::pos2(x, y),
@@ -889,6 +1024,22 @@ mod tests {
                 0, 255, 0, 255, // bottom-left
                 0, 0, 255, 255, // bottom-right
             ],
+        }
+    }
+
+    fn test_white_texture() -> TextureImage {
+        TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        }
+    }
+
+    fn test_solid_2x2_texture(color: [u8; 4]) -> TextureImage {
+        TextureImage {
+            width: 2,
+            height: 2,
+            pixels: color.repeat(4),
         }
     }
 }
