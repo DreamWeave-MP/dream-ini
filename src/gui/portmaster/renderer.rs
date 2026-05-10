@@ -512,6 +512,15 @@ struct TriangleSource {
     mesh_index_offset: usize,
 }
 
+#[derive(Clone, Copy)]
+struct GenericTriangleBboxRecord<'a> {
+    vertices: [&'a egui::epaint::Vertex; 3],
+    texture: &'a TextureImage,
+    classification: TriangleClassification,
+    clip: ClipBounds,
+    source: TriangleSource,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SolidTriangleOffender {
     clipped_bbox_px: usize,
@@ -734,19 +743,18 @@ impl PrimitiveStats {
         if classification == TriangleClassification::Degenerate {
             return;
         }
-        self.record_generic_triangle_bbox(v0, v1, v2, texture, classification, clip, source);
+        self.record_generic_triangle_bbox(GenericTriangleBboxRecord {
+            vertices: [v0, v1, v2],
+            texture,
+            classification,
+            clip,
+            source,
+        });
     }
 
-    fn record_generic_triangle_bbox(
-        &mut self,
-        v0: &egui::epaint::Vertex,
-        v1: &egui::epaint::Vertex,
-        v2: &egui::epaint::Vertex,
-        texture: &TextureImage,
-        classification: TriangleClassification,
-        clip: ClipBounds,
-        source: TriangleSource,
-    ) {
+    fn record_generic_triangle_bbox(&mut self, record: GenericTriangleBboxRecord<'_>) {
+        let [v0, v1, v2] = record.vertices;
+        let classification = record.classification;
         if classification == TriangleClassification::Degenerate {
             return;
         }
@@ -761,7 +769,7 @@ impl PrimitiveStats {
             return;
         }
 
-        let Some(bounds) = triangle_raster_bounds(v0, v1, v2, clip) else {
+        let Some(bounds) = triangle_raster_bounds(v0, v1, v2, record.clip) else {
             return;
         };
         let clipped_bbox_px = bounds.pixel_area();
@@ -779,12 +787,12 @@ impl PrimitiveStats {
                 self.solid_triangle_offenders.record(SolidTriangleOffender {
                     clipped_bbox_px,
                     bounds,
-                    source,
+                    source: record.source,
                     positions: [v0.pos, v1.pos, v2.pos],
                 });
             }
             TriangleClassification::Textured => {
-                match solid_triangle_color_decision(v0, v1, v2, texture) {
+                match solid_triangle_color_decision(v0, v1, v2, record.texture) {
                     SolidTriangleColorDecision::Solid(_) => {}
                     SolidTriangleColorDecision::NonUniformVertexColor => {
                         self.generic_textured_solid_reject_non_uniform_vertex_color += 1;
@@ -801,7 +809,7 @@ impl PrimitiveStats {
                         clipped_bbox_px,
                         scan_work: estimate_triangle_scan_work(positions, bounds),
                         bounds,
-                        source,
+                        source: record.source,
                         positions,
                         uvs: [v0.uv, v1.uv, v2.uv],
                     });
