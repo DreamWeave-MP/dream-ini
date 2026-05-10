@@ -2,7 +2,8 @@
 
 use std::io;
 
-const MAX_RENDER_PIXELS: usize = 1024 * 768;
+// Covers 640x480 and 1280x720 handheld fbdev targets, while still rejecting surprise desktop-sized framebuffers.
+const MAX_RENDER_PIXELS: usize = 1280 * 720;
 
 #[derive(Debug, Default)]
 pub(super) struct SoftwareSurface {
@@ -71,6 +72,17 @@ mod tests {
         alpha_blend(&mut destination, [128, 0, 0, 128]);
 
         assert_eq!(destination, [128, 0, 127, 255]);
+    }
+
+    #[test]
+    fn software_surface_accepts_hd_handheld_framebuffer() {
+        let mut surface = SoftwareSurface::default();
+
+        surface.resize(1280, 720).expect("HD handheld surface");
+
+        assert_eq!(surface.width, 1280);
+        assert_eq!(surface.height, 720);
+        assert_eq!(surface.pixels.len(), MAX_RENDER_PIXELS * 4);
     }
 
     #[test]
