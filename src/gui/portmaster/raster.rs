@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 use std::io;
+use std::time::{Duration, Instant};
 
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -46,7 +47,16 @@ pub(super) struct RasterStats {
     pub(super) solid_triangle_candidate_px: usize,
     pub(super) solid_triangle_hint_rows: usize,
     pub(super) solid_triangle_hint_fallback_rows: usize,
+    pub(super) solid_triangle_hint_build_us: usize,
+    pub(super) solid_triangle_endpoint_search_us: usize,
+    pub(super) solid_triangle_blend_span_us: usize,
+    pub(super) solid_triangle_blend_span_calls: usize,
+    pub(super) solid_triangle_span_px: usize,
     pub(super) solid_triangle_endpoint_probe_px: usize,
+    pub(super) solid_triangle_hint_probe_px: usize,
+    pub(super) solid_triangle_canary_probe_px: usize,
+    pub(super) solid_triangle_fallback_probe_px: usize,
+    pub(super) solid_triangle_direct_probe_px: usize,
     pub(super) solid_triangle_hint_candidate_px: usize,
     pub(super) solid_triangle_narrowed_rows: usize,
     pub(super) solid_triangle_full_scan_rows: usize,
@@ -93,7 +103,7 @@ impl RasterStats {
 
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -105,7 +115,16 @@ impl RasterStats {
             self.solid_triangle_candidate_px,
             self.solid_triangle_hint_rows,
             self.solid_triangle_hint_fallback_rows,
+            self.solid_triangle_hint_build_us,
+            self.solid_triangle_endpoint_search_us,
+            self.solid_triangle_blend_span_us,
+            self.solid_triangle_blend_span_calls,
+            self.solid_triangle_span_px,
             self.solid_triangle_endpoint_probe_px,
+            self.solid_triangle_hint_probe_px,
+            self.solid_triangle_canary_probe_px,
+            self.solid_triangle_fallback_probe_px,
+            self.solid_triangle_direct_probe_px,
             self.solid_triangle_hint_candidate_px,
             self.solid_triangle_narrowed_rows,
             self.solid_triangle_full_scan_rows,
@@ -122,6 +141,10 @@ impl RasterStats {
             self.transparent_px,
         )
     }
+}
+
+fn duration_as_us(duration: Duration) -> usize {
+    usize::try_from(duration.as_micros()).unwrap_or(usize::MAX)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -637,9 +660,24 @@ struct SolidTriangleRowSearch<'a> {
     collect_stats: bool,
 }
 
+#[derive(Clone, Copy)]
+struct SolidTriangleHintSearch<'a> {
+    vertices: TriangleVertices<'a>,
+    inv_area: f32,
+    bounds: TriangleRasterBounds,
+    pixel_center_y: f32,
+    start_x: usize,
+    end_x: usize,
+    narrow_scanlines: bool,
+}
+
 struct SolidTriangleRowEndpoints {
     span: Option<(usize, usize)>,
     endpoint_probe_px: usize,
+    hint_probe_px: usize,
+    canary_probe_px: usize,
+    fallback_probe_px: usize,
+    direct_probe_px: usize,
     fell_back: bool,
 }
 
@@ -927,25 +965,25 @@ fn rasterize_solid_triangle(
         }
 
         let collect_stats = stats.is_some();
-        let hint_range = if narrow_scanlines {
-            solid_triangle_hint_x_range(
+        let hint_range = solid_triangle_hint_range_for_row(
+            SolidTriangleHintSearch {
                 vertices,
-                coverage.inv_area,
+                inv_area: coverage.inv_area,
                 bounds,
-                usize_to_f32(y) + 0.5,
+                pixel_center_y: usize_to_f32(y) + 0.5,
                 start_x,
                 end_x,
-            )
-        } else {
-            None
-        };
+                narrow_scanlines,
+            },
+            &mut stats,
+        );
         let (probe_start_x, probe_end_x) = hint_range.unwrap_or((start_x, end_x));
         if let (Some((hint_start_x, hint_end_x)), Some(stats)) = (hint_range, &mut stats) {
             stats.solid_triangle_hint_rows += 1;
             stats.solid_triangle_hint_candidate_px += hint_end_x - hint_start_x;
         }
 
-        let endpoints = solid_triangle_row_endpoints(SolidTriangleRowSearch {
+        let search = SolidTriangleRowSearch {
             vertices,
             coverage,
             y,
@@ -955,24 +993,77 @@ fn rasterize_solid_triangle(
             probe_end_x,
             hinted: hint_range.is_some(),
             collect_stats,
-        });
+        };
+        let endpoints = if let Some(stats) = &mut stats {
+            let start = Instant::now();
+            let endpoints = solid_triangle_row_endpoints(search);
+            stats.solid_triangle_endpoint_search_us += duration_as_us(start.elapsed());
+            endpoints
+        } else {
+            solid_triangle_row_endpoints(search)
+        };
         if endpoints.fell_back
             && let Some(stats) = &mut stats
         {
             stats.solid_triangle_hint_fallback_rows += 1;
         }
         if let Some((span_start, span_end)) = endpoints.span {
-            surface.blend_span(y, span_start, span_end, color);
             if let Some(stats) = &mut stats {
+                let start = Instant::now();
+                surface.blend_span(y, span_start, span_end, color);
+                stats.solid_triangle_blend_span_us += duration_as_us(start.elapsed());
                 let px = span_end - span_start;
                 stats.solid_triangle_endpoint_probe_px += endpoints.endpoint_probe_px;
+                stats.solid_triangle_hint_probe_px += endpoints.hint_probe_px;
+                stats.solid_triangle_canary_probe_px += endpoints.canary_probe_px;
+                stats.solid_triangle_fallback_probe_px += endpoints.fallback_probe_px;
+                stats.solid_triangle_direct_probe_px += endpoints.direct_probe_px;
                 stats.solid_triangle_covered_px += px;
                 stats.solid_triangle_span_rows += 1;
+                stats.solid_triangle_blend_span_calls += 1;
+                stats.solid_triangle_span_px += px;
                 stats.record_alpha_px(color[3], px);
+            } else {
+                surface.blend_span(y, span_start, span_end, color);
             }
         } else if let Some(stats) = &mut stats {
             stats.solid_triangle_endpoint_probe_px += endpoints.endpoint_probe_px;
+            stats.solid_triangle_hint_probe_px += endpoints.hint_probe_px;
+            stats.solid_triangle_canary_probe_px += endpoints.canary_probe_px;
+            stats.solid_triangle_fallback_probe_px += endpoints.fallback_probe_px;
+            stats.solid_triangle_direct_probe_px += endpoints.direct_probe_px;
         }
+    }
+}
+
+fn solid_triangle_hint_range_for_row(
+    search: SolidTriangleHintSearch<'_>,
+    stats: &mut Option<&mut RasterStats>,
+) -> Option<(usize, usize)> {
+    if !search.narrow_scanlines {
+        return None;
+    }
+    if let Some(stats) = stats {
+        let start = Instant::now();
+        let hint_range = solid_triangle_hint_x_range(
+            search.vertices,
+            search.inv_area,
+            search.bounds,
+            search.pixel_center_y,
+            search.start_x,
+            search.end_x,
+        );
+        stats.solid_triangle_hint_build_us += duration_as_us(start.elapsed());
+        hint_range
+    } else {
+        solid_triangle_hint_x_range(
+            search.vertices,
+            search.inv_area,
+            search.bounds,
+            search.pixel_center_y,
+            search.start_x,
+            search.end_x,
+        )
     }
 }
 
@@ -985,12 +1076,20 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
         search.coverage,
         search.collect_stats,
     );
-    let mut endpoint_probe_px = first_probe_px;
+    let mut hint_probe_px = 0;
+    let mut canary_probe_px = 0;
+    let mut fallback_probe_px = 0;
+    let mut direct_probe_px = 0;
+    if search.hinted {
+        hint_probe_px += first_probe_px;
+    } else {
+        direct_probe_px += first_probe_px;
+    }
     let mut fell_back = false;
     if search.hinted {
-        fell_back = solid_triangle_hint_needs_fallback(&search, span_start, &mut endpoint_probe_px);
+        fell_back = solid_triangle_hint_needs_fallback(&search, span_start, &mut canary_probe_px);
         if fell_back {
-            let (fallback_span_start, fallback_probe_px) = solid_triangle_first_covered_x(
+            let (fallback_span_start, fallback_first_probe_px) = solid_triangle_first_covered_x(
                 search.candidate_start_x,
                 search.candidate_end_x,
                 search.y,
@@ -998,7 +1097,7 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
                 search.coverage,
                 search.collect_stats,
             );
-            endpoint_probe_px += fallback_probe_px;
+            fallback_probe_px += fallback_first_probe_px;
             span_start = fallback_span_start;
         }
     }
@@ -1006,7 +1105,14 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
     let Some(span_start) = span_start else {
         return SolidTriangleRowEndpoints {
             span: None,
-            endpoint_probe_px,
+            endpoint_probe_px: hint_probe_px
+                + canary_probe_px
+                + fallback_probe_px
+                + direct_probe_px,
+            hint_probe_px,
+            canary_probe_px,
+            fallback_probe_px,
+            direct_probe_px,
             fell_back,
         };
     };
@@ -1023,11 +1129,21 @@ fn solid_triangle_row_endpoints(search: SolidTriangleRowSearch<'_>) -> SolidTria
         search.coverage,
         search.collect_stats,
     );
-    endpoint_probe_px += last_probe_px;
+    if fell_back {
+        fallback_probe_px += last_probe_px;
+    } else if search.hinted {
+        hint_probe_px += last_probe_px;
+    } else {
+        direct_probe_px += last_probe_px;
+    }
     let span_end = last_x.map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
     SolidTriangleRowEndpoints {
         span: Some((span_start, span_end)),
-        endpoint_probe_px,
+        endpoint_probe_px: hint_probe_px + canary_probe_px + fallback_probe_px + direct_probe_px,
+        hint_probe_px,
+        canary_probe_px,
+        fallback_probe_px,
+        direct_probe_px,
         fell_back,
     }
 }
@@ -2253,6 +2369,21 @@ mod tests {
         assert!(stats.solid_triangle_hint_rows > 0);
         assert!(stats.solid_triangle_hint_candidate_px > 0);
         assert!(stats.solid_triangle_endpoint_probe_px > 0);
+        assert_eq!(
+            stats.solid_triangle_span_px,
+            stats.solid_triangle_covered_px
+        );
+        assert_eq!(
+            stats.solid_triangle_blend_span_calls,
+            stats.solid_triangle_span_rows
+        );
+        assert_eq!(
+            stats.solid_triangle_endpoint_probe_px,
+            stats.solid_triangle_hint_probe_px
+                + stats.solid_triangle_canary_probe_px
+                + stats.solid_triangle_fallback_probe_px
+                + stats.solid_triangle_direct_probe_px
+        );
         assert!(stats.solid_triangle_candidate_px >= stats.solid_triangle_hint_candidate_px);
         assert!(stats.solid_triangle_hint_fallback_rows < stats.solid_triangle_hint_rows);
     }
@@ -2280,6 +2411,18 @@ mod tests {
 
         assert_eq!(stats.solid_triangle_calls, 1);
         assert!(stats.solid_triangle_endpoint_probe_px > 0);
+        assert_eq!(
+            stats.solid_triangle_span_px,
+            stats.solid_triangle_covered_px
+        );
+        assert_eq!(
+            stats.solid_triangle_blend_span_calls,
+            stats.solid_triangle_span_rows
+        );
+        assert_eq!(
+            stats.solid_triangle_endpoint_probe_px,
+            stats.solid_triangle_direct_probe_px
+        );
         assert_eq!(stats.solid_triangle_hint_rows, 0);
         assert_eq!(stats.solid_triangle_hint_fallback_rows, 0);
         assert_eq!(stats.solid_triangle_hint_candidate_px, 0);
@@ -2528,26 +2671,35 @@ mod tests {
             solid_triangle_candidate_px: 9,
             solid_triangle_hint_rows: 10,
             solid_triangle_hint_fallback_rows: 11,
-            solid_triangle_endpoint_probe_px: 12,
-            solid_triangle_hint_candidate_px: 13,
-            solid_triangle_narrowed_rows: 14,
-            solid_triangle_full_scan_rows: 15,
-            textured_triangle_calls: 16,
-            textured_triangle_bbox_px: 17,
-            textured_triangle_covered_px: 18,
-            textured_triangle_candidate_px: 19,
-            textured_triangle_narrowed_rows: 20,
-            textured_triangle_full_scan_rows: 21,
-            degenerate_triangle_skips: 22,
-            fully_clipped_triangle_skips: 23,
-            opaque_px: 24,
-            translucent_px: 25,
-            transparent_px: 26,
+            solid_triangle_hint_build_us: 12,
+            solid_triangle_endpoint_search_us: 13,
+            solid_triangle_blend_span_us: 14,
+            solid_triangle_blend_span_calls: 15,
+            solid_triangle_span_px: 16,
+            solid_triangle_endpoint_probe_px: 17,
+            solid_triangle_hint_probe_px: 18,
+            solid_triangle_canary_probe_px: 19,
+            solid_triangle_fallback_probe_px: 20,
+            solid_triangle_direct_probe_px: 21,
+            solid_triangle_hint_candidate_px: 22,
+            solid_triangle_narrowed_rows: 23,
+            solid_triangle_full_scan_rows: 24,
+            textured_triangle_calls: 25,
+            textured_triangle_bbox_px: 26,
+            textured_triangle_covered_px: 27,
+            textured_triangle_candidate_px: 28,
+            textured_triangle_narrowed_rows: 29,
+            textured_triangle_full_scan_rows: 30,
+            degenerate_triangle_skips: 31,
+            fully_clipped_triangle_skips: 32,
+            opaque_px: 33,
+            translucent_px: 34,
+            transparent_px: 35,
         };
 
         assert_eq!(
             stats.log_line(),
-            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_endpoint_probe_px=12 solid_triangle_hint_candidate_px=13 solid_triangle_narrowed_rows=14 solid_triangle_full_scan_rows=15 textured_triangle_calls=16 textured_triangle_bbox_px=17 textured_triangle_covered_px=18 textured_triangle_candidate_px=19 textured_triangle_narrowed_rows=20 textured_triangle_full_scan_rows=21 degenerate_triangle_skips=22 fully_clipped_triangle_skips=23 opaque_px=24 translucent_px=25 transparent_px=26"
+            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_hint_build_us=12 solid_triangle_endpoint_search_us=13 solid_triangle_blend_span_us=14 solid_triangle_blend_span_calls=15 solid_triangle_span_px=16 solid_triangle_endpoint_probe_px=17 solid_triangle_hint_probe_px=18 solid_triangle_canary_probe_px=19 solid_triangle_fallback_probe_px=20 solid_triangle_direct_probe_px=21 solid_triangle_hint_candidate_px=22 solid_triangle_narrowed_rows=23 solid_triangle_full_scan_rows=24 textured_triangle_calls=25 textured_triangle_bbox_px=26 textured_triangle_covered_px=27 textured_triangle_candidate_px=28 textured_triangle_narrowed_rows=29 textured_triangle_full_scan_rows=30 degenerate_triangle_skips=31 fully_clipped_triangle_skips=32 opaque_px=33 translucent_px=34 transparent_px=35"
         );
     }
 
