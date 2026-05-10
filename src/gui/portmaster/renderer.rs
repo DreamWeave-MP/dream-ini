@@ -119,18 +119,18 @@ impl SoftwareRenderer {
         for primitive in primitives {
             match &primitive.primitive {
                 egui::epaint::Primitive::Mesh(mesh) => {
-                    if let Some(stats) = stats.as_deref_mut() {
+                    if let Some(stats) = borrow_optional_mut(&mut stats) {
                         stats.mesh_primitives += 1;
                     }
                     self.rasterize_mesh(
                         mesh,
                         primitive.clip_rect,
-                        stats.as_deref_mut(),
-                        raster_stats.as_deref_mut(),
+                        borrow_optional_mut(&mut stats),
+                        borrow_optional_mut(&mut raster_stats),
                     )?;
                 }
                 egui::epaint::Primitive::Callback(_) => {
-                    if let Some(stats) = stats.as_deref_mut() {
+                    if let Some(stats) = borrow_optional_mut(&mut stats) {
                         stats.callback_primitives += 1;
                     }
                     return Err(io::Error::other(
@@ -149,18 +149,18 @@ impl SoftwareRenderer {
         mut stats: Option<&mut PrimitiveStats>,
         mut raster_stats: Option<&mut RasterStats>,
     ) -> io::Result<()> {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = borrow_optional_mut(&mut stats) {
             stats.mesh_indices += mesh.indices.len();
         }
         let Some(texture) = self.textures.get(&mesh.texture_id) else {
-            if let Some(stats) = stats.as_deref_mut() {
+            if let Some(stats) = borrow_optional_mut(&mut stats) {
                 stats.missing_texture_meshes += 1;
             }
             return Ok(());
         };
         let clip = ClipBounds::new(clip_rect, self.surface.width, self.surface.height)?;
         if clip.is_empty() {
-            if let Some(stats) = stats.as_deref_mut() {
+            if let Some(stats) = borrow_optional_mut(&mut stats) {
                 stats.empty_clip_meshes += 1;
             }
             return Ok(());
@@ -176,8 +176,8 @@ impl SoftwareRenderer {
                     texture,
                     clip,
                     quad,
-                    stats.as_deref_mut(),
-                    raster_stats.as_deref_mut(),
+                    borrow_optional_mut(&mut stats),
+                    borrow_optional_mut(&mut raster_stats),
                 )? {
                     index_offset += 6;
                     continue;
@@ -200,7 +200,7 @@ impl SoftwareRenderer {
             let Some(v2) = mesh.vertices.get(i2) else {
                 continue;
             };
-            if let Some(stats) = stats.as_deref_mut() {
+            if let Some(stats) = borrow_optional_mut(&mut stats) {
                 stats.record_generic_triangle(v0, v1, v2, texture, clip);
             }
             rasterize_triangle(
@@ -210,7 +210,7 @@ impl SoftwareRenderer {
                 v2,
                 texture,
                 clip,
-                raster_stats.as_deref_mut(),
+                borrow_optional_mut(&mut raster_stats),
             );
             index_offset += 3;
         }
@@ -227,15 +227,15 @@ fn try_rasterize_quad_window(
     mut stats: Option<&mut PrimitiveStats>,
     mut raster_stats: Option<&mut RasterStats>,
 ) -> io::Result<bool> {
-    if let Some(stats) = stats.as_deref_mut() {
+    if let Some(stats) = borrow_optional_mut(&mut stats) {
         stats.quad_windows += 1;
     }
     if has_four_unique_indices(quad) {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = borrow_optional_mut(&mut stats) {
             stats.four_unique_quad_windows += 1;
         }
     } else {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = borrow_optional_mut(&mut stats) {
             stats.quad_windows_not_four_unique_indices += 1;
         }
         return Ok(false);
@@ -255,14 +255,14 @@ fn try_rasterize_quad_window(
         mesh.vertices.get(i4),
         mesh.vertices.get(i5),
     ) else {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = borrow_optional_mut(&mut stats) {
             stats.quad_window_vertex_lookup_failures += 1;
         }
         return Ok(false);
     };
 
     let vertices = [v0, v1, v2, v3, v4, v5];
-    if let Some(stats) = stats.as_deref_mut() {
+    if let Some(stats) = borrow_optional_mut(&mut stats) {
         stats.record_quad_window(vertices, texture);
     }
     if rasterize_axis_aligned_solid_quad(
@@ -270,9 +270,9 @@ fn try_rasterize_quad_window(
         vertices,
         texture,
         clip,
-        raster_stats.as_deref_mut(),
+        borrow_optional_mut(&mut raster_stats),
     ) {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = borrow_optional_mut(&mut stats) {
             stats.solid_quad_fast_path_hits += 1;
         }
         return Ok(true);
@@ -282,9 +282,9 @@ fn try_rasterize_quad_window(
         vertices,
         texture,
         clip,
-        raster_stats.as_deref_mut(),
+        borrow_optional_mut(&mut raster_stats),
     ) {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = borrow_optional_mut(&mut stats) {
             stats.textured_quad_fast_path_hits += 1;
         }
         return Ok(true);
@@ -539,6 +539,10 @@ fn root_repaint_delay(output: &egui::FullOutput) -> Duration {
 
 fn elapsed_micros(start: Option<Instant>) -> u128 {
     start.map_or(0, |start| start.elapsed().as_micros())
+}
+
+fn borrow_optional_mut<'a, T>(option: &'a mut Option<&mut T>) -> Option<&'a mut T> {
+    option.as_mut().map(|value| &mut **value)
 }
 
 #[cfg(test)]

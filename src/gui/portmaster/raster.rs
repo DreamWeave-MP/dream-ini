@@ -242,20 +242,21 @@ pub(super) fn rasterize_triangle(
         return;
     };
 
+    let vertices = TriangleVertices { v0, v1, v2 };
     if let Some(color) = solid_triangle_color(v0, v1, v2, texture) {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = &mut stats {
             stats.solid_triangle_calls += 1;
             stats.solid_triangle_bbox_px += bounds.pixel_area();
         }
-        rasterize_solid_triangle(surface, v0, v1, v2, bounds, area, color, stats);
+        rasterize_solid_triangle(surface, vertices, bounds, area, color, stats);
         return;
     }
 
-    if let Some(stats) = stats.as_deref_mut() {
+    if let Some(stats) = &mut stats {
         stats.textured_triangle_calls += 1;
         stats.textured_triangle_bbox_px += bounds.pixel_area();
     }
-    rasterize_textured_triangle(surface, v0, v1, v2, texture, bounds, area, stats);
+    rasterize_textured_triangle(surface, vertices, texture, bounds, area, stats);
 }
 
 pub(super) fn triangle_raster_bounds(
@@ -320,16 +321,7 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
     let Some(bounds) = axis_aligned_quad_bounds(vertices) else {
         return false;
     };
-    rasterize_solid_rect(
-        surface,
-        bounds.min_x,
-        bounds.min_y,
-        bounds.max_x,
-        bounds.max_y,
-        clip,
-        color,
-        stats,
-    );
+    rasterize_solid_rect(surface, bounds, clip, color, stats);
     true
 }
 
@@ -518,6 +510,13 @@ struct QuadBounds {
 }
 
 #[derive(Clone, Copy)]
+struct TriangleVertices<'a> {
+    v0: &'a egui::epaint::Vertex,
+    v1: &'a egui::epaint::Vertex,
+    v2: &'a egui::epaint::Vertex,
+}
+
+#[derive(Clone, Copy)]
 struct TexturedQuadCorners {
     tl: egui::epaint::Vertex,
     tr: egui::epaint::Vertex,
@@ -580,14 +579,17 @@ fn push_unique_f32(values: &mut [f32; 2], count: &mut usize, value: f32) -> bool
 
 fn rasterize_solid_rect(
     surface: &mut SoftwareSurface,
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
+    bounds: QuadBounds,
     clip: ClipBounds,
     color: [u8; 4],
     mut stats: Option<&mut RasterStats>,
 ) {
+    let QuadBounds {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    } = bounds;
     let start_x = solid_rect_boundary_index(min_x, clip.max_x).max(clip.min_x);
     let end_x = solid_rect_boundary_index(max_x, clip.max_x).min(clip.max_x);
     let start_y = solid_rect_boundary_index(min_y, clip.max_y).max(clip.min_y);
@@ -595,7 +597,7 @@ fn rasterize_solid_rect(
     if start_x >= end_x || start_y >= end_y {
         return;
     }
-    if let Some(stats) = stats.as_deref_mut() {
+    if let Some(stats) = &mut stats {
         let px = (end_x - start_x) * (end_y - start_y);
         stats.solid_rect_calls += 1;
         stats.solid_rect_px += px;
@@ -612,7 +614,7 @@ fn rasterize_textured_rect(
     bounds: QuadBounds,
     texture: &TextureImage,
     clip: ClipBounds,
-    mut stats: Option<&mut RasterStats>,
+    stats: Option<&mut RasterStats>,
 ) {
     let QuadBounds {
         min_x,
@@ -627,38 +629,128 @@ fn rasterize_textured_rect(
     if start_x >= end_x || start_y >= end_y {
         return;
     }
-    if let Some(stats) = stats.as_deref_mut() {
-        stats.textured_rect_calls += 1;
-        stats.textured_rect_px += (end_x - start_x) * (end_y - start_y);
-    }
-
     let inv_width = 1.0 / (max_x - min_x);
     let inv_height = 1.0 / (max_y - min_y);
     let vertex_color = color_to_array(corners.tl.color);
-    for y in start_y..end_y {
-        let sy = (usize_to_f32(y) + 0.5 - min_y) * inv_height;
-        for x in start_x..end_x {
-            let sx = (usize_to_f32(x) + 0.5 - min_x) * inv_width;
-            let tl_weight = 1.0 - sx - sy;
-            let uv = egui::pos2(
-                corners
-                    .tl
-                    .uv
-                    .x
-                    .mul_add(tl_weight, corners.tr.uv.x.mul_add(sx, corners.bl.uv.x * sy)),
-                corners
-                    .tl
-                    .uv
-                    .y
-                    .mul_add(tl_weight, corners.tr.uv.y.mul_add(sx, corners.bl.uv.y * sy)),
-            );
-            let color = modulate_color(vertex_color, sample_nearest(texture, uv));
-            if let Some(stats) = stats.as_deref_mut() {
-                stats.record_alpha_px(color[3], 1);
-            }
+    if let Some(stats) = stats {
+        stats.textured_rect_calls += 1;
+        stats.textured_rect_px += (end_x - start_x) * (end_y - start_y);
+        rasterize_textured_rect_with_stats(
+            surface,
+            corners,
+            texture,
+            RectRasterRange {
+                start_x,
+                end_x,
+                start_y,
+                end_y,
+            },
+            RectUvBasis {
+                min_x,
+                min_y,
+                inv_width,
+                inv_height,
+            },
+            vertex_color,
+            stats,
+        );
+    } else {
+        rasterize_textured_rect_no_stats(
+            surface,
+            corners,
+            texture,
+            RectRasterRange {
+                start_x,
+                end_x,
+                start_y,
+                end_y,
+            },
+            RectUvBasis {
+                min_x,
+                min_y,
+                inv_width,
+                inv_height,
+            },
+            vertex_color,
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RectRasterRange {
+    start_x: usize,
+    end_x: usize,
+    start_y: usize,
+    end_y: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RectUvBasis {
+    min_x: f32,
+    min_y: f32,
+    inv_width: f32,
+    inv_height: f32,
+}
+
+fn rasterize_textured_rect_no_stats(
+    surface: &mut SoftwareSurface,
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    vertex_color: [u8; 4],
+) {
+    for y in range.start_y..range.end_y {
+        let sy = (usize_to_f32(y) + 0.5 - uv_basis.min_y) * uv_basis.inv_height;
+        for x in range.start_x..range.end_x {
+            let sx = (usize_to_f32(x) + 0.5 - uv_basis.min_x) * uv_basis.inv_width;
+            let color = textured_rect_pixel_color(corners, texture, vertex_color, sx, sy);
             surface.blend_pixel(x, y, color);
         }
     }
+}
+
+fn rasterize_textured_rect_with_stats(
+    surface: &mut SoftwareSurface,
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    vertex_color: [u8; 4],
+    stats: &mut RasterStats,
+) {
+    for y in range.start_y..range.end_y {
+        let sy = (usize_to_f32(y) + 0.5 - uv_basis.min_y) * uv_basis.inv_height;
+        for x in range.start_x..range.end_x {
+            let sx = (usize_to_f32(x) + 0.5 - uv_basis.min_x) * uv_basis.inv_width;
+            let color = textured_rect_pixel_color(corners, texture, vertex_color, sx, sy);
+            stats.record_alpha_px(color[3], 1);
+            surface.blend_pixel(x, y, color);
+        }
+    }
+}
+
+fn textured_rect_pixel_color(
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    vertex_color: [u8; 4],
+    sx: f32,
+    sy: f32,
+) -> [u8; 4] {
+    let tl_weight = 1.0 - sx - sy;
+    let uv = egui::pos2(
+        corners
+            .tl
+            .uv
+            .x
+            .mul_add(tl_weight, corners.tr.uv.x.mul_add(sx, corners.bl.uv.x * sy)),
+        corners
+            .tl
+            .uv
+            .y
+            .mul_add(tl_weight, corners.tr.uv.y.mul_add(sx, corners.bl.uv.y * sy)),
+    );
+    modulate_color(vertex_color, sample_nearest(texture, uv))
 }
 
 fn solid_rect_boundary_index(boundary: f32, clip_max: usize) -> usize {
@@ -672,14 +764,13 @@ fn solid_rect_boundary_index(boundary: f32, clip_max: usize) -> usize {
 
 fn rasterize_solid_triangle(
     surface: &mut SoftwareSurface,
-    v0: &egui::epaint::Vertex,
-    v1: &egui::epaint::Vertex,
-    v2: &egui::epaint::Vertex,
+    vertices: TriangleVertices<'_>,
     bounds: TriangleRasterBounds,
     area: f32,
     color: [u8; 4],
     mut stats: Option<&mut RasterStats>,
 ) {
+    let TriangleVertices { v0, v1, v2 } = vertices;
     let inv_area = 1.0 / area;
     let start = egui::pos2(
         usize_to_f32(bounds.min_x) + 0.5,
@@ -725,7 +816,7 @@ fn rasterize_solid_triangle(
         }
         if let Some(start_x) = span_start {
             surface.blend_span(y, start_x, span_end, color);
-            if let Some(stats) = stats.as_deref_mut() {
+            if let Some(stats) = &mut stats {
                 let px = span_end - start_x;
                 stats.solid_triangle_covered_px += px;
                 stats.solid_triangle_span_rows += 1;
@@ -740,65 +831,160 @@ fn rasterize_solid_triangle(
 
 fn rasterize_textured_triangle(
     surface: &mut SoftwareSurface,
-    v0: &egui::epaint::Vertex,
-    v1: &egui::epaint::Vertex,
-    v2: &egui::epaint::Vertex,
+    vertices: TriangleVertices<'_>,
     texture: &TextureImage,
     bounds: TriangleRasterBounds,
     area: f32,
-    mut stats: Option<&mut RasterStats>,
+    stats: Option<&mut RasterStats>,
 ) {
-    let inv_area = 1.0 / area;
-    let start = egui::pos2(
-        usize_to_f32(bounds.min_x) + 0.5,
-        usize_to_f32(bounds.min_y) + 0.5,
-    );
-    let w0_step_x = edge_step_x(v1.pos, v2.pos);
-    let w1_step_x = edge_step_x(v2.pos, v0.pos);
-    let w2_step_x = edge_step_x(v0.pos, v1.pos);
-    let w0_step_y = edge_step_y(v1.pos, v2.pos);
-    let w1_step_y = edge_step_y(v2.pos, v0.pos);
-    let w2_step_y = edge_step_y(v0.pos, v1.pos);
-    let mut row_edge0 = edge(v1.pos, v2.pos, start);
-    let mut row_edge1 = edge(v2.pos, v0.pos, start);
-    let mut row_edge2 = edge(v0.pos, v1.pos, start);
-    let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
-    let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
-    let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
+    if let Some(stats) = stats {
+        rasterize_textured_triangle_with_stats(surface, vertices, texture, bounds, area, stats);
+    } else {
+        rasterize_textured_triangle_no_stats(surface, vertices, texture, bounds, area);
+    }
+}
+
+fn rasterize_textured_triangle_no_stats(
+    surface: &mut SoftwareSurface,
+    vertices: TriangleVertices<'_>,
+    texture: &TextureImage,
+    bounds: TriangleRasterBounds,
+    area: f32,
+) {
+    let TriangleVertices { v0, v1, v2 } = vertices;
+    let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
+    let mut row_edge0 = raster.row_edge0;
+    let mut row_edge1 = raster.row_edge1;
+    let mut row_edge2 = raster.row_edge2;
 
     for y in bounds.min_y..bounds.max_y {
         let mut pixel_edge0 = row_edge0;
         let mut pixel_edge1 = row_edge1;
         let mut pixel_edge2 = row_edge2;
         for x in bounds.min_x..bounds.max_x {
-            let w0 = pixel_edge0 * inv_area;
-            let w1 = pixel_edge1 * inv_area;
-            let w2 = pixel_edge2 * inv_area;
-            if edge_covers_pixel(w0, edge0_includes_boundary)
-                && edge_covers_pixel(w1, edge1_includes_boundary)
-                && edge_covers_pixel(w2, edge2_includes_boundary)
+            let w0 = pixel_edge0 * raster.inv_area;
+            let w1 = pixel_edge1 * raster.inv_area;
+            let w2 = pixel_edge2 * raster.inv_area;
+            if edge_covers_pixel(w0, raster.edge0_includes_boundary)
+                && edge_covers_pixel(w1, raster.edge1_includes_boundary)
+                && edge_covers_pixel(w2, raster.edge2_includes_boundary)
             {
-                let uv = egui::pos2(
-                    v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
-                    v0.uv.y.mul_add(w0, v1.uv.y.mul_add(w1, v2.uv.y * w2)),
-                );
-                let vertex_color = interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2);
-                let texture_color = sample_nearest(texture, uv);
-                let color = modulate_color(vertex_color, texture_color);
+                let color = textured_triangle_pixel_color(v0, v1, v2, texture, w0, w1, w2);
                 surface.blend_pixel(x, y, color);
-                if let Some(stats) = stats.as_deref_mut() {
-                    stats.textured_triangle_covered_px += 1;
-                    stats.record_alpha_px(color[3], 1);
-                }
             }
-            pixel_edge0 += w0_step_x;
-            pixel_edge1 += w1_step_x;
-            pixel_edge2 += w2_step_x;
+            pixel_edge0 += raster.w0_step_x;
+            pixel_edge1 += raster.w1_step_x;
+            pixel_edge2 += raster.w2_step_x;
         }
-        row_edge0 += w0_step_y;
-        row_edge1 += w1_step_y;
-        row_edge2 += w2_step_y;
+        row_edge0 += raster.w0_step_y;
+        row_edge1 += raster.w1_step_y;
+        row_edge2 += raster.w2_step_y;
     }
+}
+
+fn rasterize_textured_triangle_with_stats(
+    surface: &mut SoftwareSurface,
+    vertices: TriangleVertices<'_>,
+    texture: &TextureImage,
+    bounds: TriangleRasterBounds,
+    area: f32,
+    stats: &mut RasterStats,
+) {
+    let TriangleVertices { v0, v1, v2 } = vertices;
+    let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
+    let mut row_edge0 = raster.row_edge0;
+    let mut row_edge1 = raster.row_edge1;
+    let mut row_edge2 = raster.row_edge2;
+
+    for y in bounds.min_y..bounds.max_y {
+        let mut pixel_edge0 = row_edge0;
+        let mut pixel_edge1 = row_edge1;
+        let mut pixel_edge2 = row_edge2;
+        for x in bounds.min_x..bounds.max_x {
+            let w0 = pixel_edge0 * raster.inv_area;
+            let w1 = pixel_edge1 * raster.inv_area;
+            let w2 = pixel_edge2 * raster.inv_area;
+            if edge_covers_pixel(w0, raster.edge0_includes_boundary)
+                && edge_covers_pixel(w1, raster.edge1_includes_boundary)
+                && edge_covers_pixel(w2, raster.edge2_includes_boundary)
+            {
+                let color = textured_triangle_pixel_color(v0, v1, v2, texture, w0, w1, w2);
+                surface.blend_pixel(x, y, color);
+                stats.textured_triangle_covered_px += 1;
+                stats.record_alpha_px(color[3], 1);
+            }
+            pixel_edge0 += raster.w0_step_x;
+            pixel_edge1 += raster.w1_step_x;
+            pixel_edge2 += raster.w2_step_x;
+        }
+        row_edge0 += raster.w0_step_y;
+        row_edge1 += raster.w1_step_y;
+        row_edge2 += raster.w2_step_y;
+    }
+}
+
+struct TriangleRasterState {
+    inv_area: f32,
+    w0_step_x: f32,
+    w1_step_x: f32,
+    w2_step_x: f32,
+    w0_step_y: f32,
+    w1_step_y: f32,
+    w2_step_y: f32,
+    row_edge0: f32,
+    row_edge1: f32,
+    row_edge2: f32,
+    edge0_includes_boundary: bool,
+    edge1_includes_boundary: bool,
+    edge2_includes_boundary: bool,
+}
+
+impl TriangleRasterState {
+    fn new(
+        v0: &egui::epaint::Vertex,
+        v1: &egui::epaint::Vertex,
+        v2: &egui::epaint::Vertex,
+        bounds: TriangleRasterBounds,
+        area: f32,
+    ) -> Self {
+        let start = egui::pos2(
+            usize_to_f32(bounds.min_x) + 0.5,
+            usize_to_f32(bounds.min_y) + 0.5,
+        );
+        Self {
+            inv_area: 1.0 / area,
+            w0_step_x: edge_step_x(v1.pos, v2.pos),
+            w1_step_x: edge_step_x(v2.pos, v0.pos),
+            w2_step_x: edge_step_x(v0.pos, v1.pos),
+            w0_step_y: edge_step_y(v1.pos, v2.pos),
+            w1_step_y: edge_step_y(v2.pos, v0.pos),
+            w2_step_y: edge_step_y(v0.pos, v1.pos),
+            row_edge0: edge(v1.pos, v2.pos, start),
+            row_edge1: edge(v2.pos, v0.pos, start),
+            row_edge2: edge(v0.pos, v1.pos, start),
+            edge0_includes_boundary: edge_includes_boundary(v1.pos, v2.pos, area),
+            edge1_includes_boundary: edge_includes_boundary(v2.pos, v0.pos, area),
+            edge2_includes_boundary: edge_includes_boundary(v0.pos, v1.pos, area),
+        }
+    }
+}
+
+fn textured_triangle_pixel_color(
+    v0: &egui::epaint::Vertex,
+    v1: &egui::epaint::Vertex,
+    v2: &egui::epaint::Vertex,
+    texture: &TextureImage,
+    w0: f32,
+    w1: f32,
+    w2: f32,
+) -> [u8; 4] {
+    let uv = egui::pos2(
+        v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
+        v0.uv.y.mul_add(w0, v1.uv.y.mul_add(w1, v2.uv.y * w2)),
+    );
+    let vertex_color = interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2);
+    let texture_color = sample_nearest(texture, uv);
+    modulate_color(vertex_color, texture_color)
 }
 
 fn solid_triangle_color(
@@ -1887,9 +2073,11 @@ mod tests {
         {
             rasterize_solid_triangle(
                 &mut direct,
-                &vertices[0],
-                &vertices[1],
-                &vertices[2],
+                TriangleVertices {
+                    v0: &vertices[0],
+                    v1: &vertices[1],
+                    v2: &vertices[2],
+                },
                 bounds,
                 edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
                 color,
@@ -2112,9 +2300,7 @@ mod tests {
     ) {
         rasterize_textured_triangle(
             surface,
-            v0,
-            v1,
-            v2,
+            TriangleVertices { v0, v1, v2 },
             texture,
             triangle_raster_bounds(v0, v1, v2, clip).expect("triangle bounds"),
             edge(v0.pos, v1.pos, v2.pos),
