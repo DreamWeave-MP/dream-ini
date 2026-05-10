@@ -167,9 +167,6 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
     let Some(color) = solid_triangle_color(vertices[0], vertices[1], vertices[2], texture) else {
         return false;
     };
-    if color[3] != u8::MAX {
-        return false;
-    }
     if solid_triangle_color(vertices[3], vertices[4], vertices[5], texture) != Some(color) {
         return false;
     }
@@ -843,16 +840,41 @@ mod tests {
     }
 
     #[test]
-    fn axis_aligned_quad_fast_path_rejects_translucent_solid_quad() {
+    fn axis_aligned_quad_fast_path_matches_generic_translucent_solid_rectangle() {
         let mut vertices = test_quad_vertices();
         for vertex in &mut vertices {
             vertex.color = egui::Color32::from_rgba_premultiplied(128, 128, 128, 128);
         }
 
         let (accepted, pixels) = render_test_quad(5, 5, vertices, full_clip(5, 5));
+        let generic = render_test_quad_generic(5, 5, vertices, full_clip(5, 5));
 
-        assert!(!accepted);
-        assert_eq!(white_pixel_count(&pixels), 0);
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+        assert_eq!(pixel_at(&pixels, 5, 1, 1), [128, 128, 128, 255]);
+        assert_eq!(pixel_at(&pixels, 5, 3, 2), [128, 128, 128, 255]);
+    }
+
+    #[test]
+    fn axis_aligned_quad_fast_path_matches_generic_clipped_translucent_solid_rectangle() {
+        let mut vertices = test_quad_vertices();
+        for vertex in &mut vertices {
+            vertex.color = egui::Color32::from_rgba_premultiplied(64, 32, 16, 128);
+        }
+        let clip = ClipBounds {
+            min_x: 2,
+            min_y: 2,
+            max_x: 4,
+            max_y: 3,
+        };
+
+        let (accepted, pixels) = render_test_quad(5, 5, vertices, clip);
+        let generic = render_test_quad_generic(5, 5, vertices, clip);
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+        assert_eq!(pixel_at(&pixels, 5, 2, 2), [64, 32, 16, 255]);
+        assert_eq!(pixel_at(&pixels, 5, 1, 2), [0, 0, 0, 255]);
     }
 
     fn render_test_triangle(
@@ -926,6 +948,37 @@ mod tests {
         );
 
         (accepted, surface.pixels)
+    }
+
+    fn render_test_quad_generic(
+        width: usize,
+        height: usize,
+        vertices: [egui::epaint::Vertex; 4],
+        clip: ClipBounds,
+    ) -> Vec<u8> {
+        let texture = test_white_texture();
+        let mut surface = test_surface(width, height);
+
+        rasterize_textured_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            clip,
+            edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
+        );
+        rasterize_textured_triangle(
+            &mut surface,
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+            &texture,
+            clip,
+            edge(vertices[1].pos, vertices[3].pos, vertices[2].pos),
+        );
+
+        surface.pixels
     }
 
     const fn full_clip(width: usize, height: usize) -> ClipBounds {
