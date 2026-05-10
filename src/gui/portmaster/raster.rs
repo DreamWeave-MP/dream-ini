@@ -1375,10 +1375,39 @@ fn rasterize_textured_rect_no_stats(
     uv_basis: RectUvBasis,
     vertex_color: [u8; 4],
 ) {
+    if vertex_color == [255, 255, 255, 255] {
+        rasterize_textured_rect_no_stats_with_color(
+            surface,
+            corners,
+            texture,
+            range,
+            uv_basis,
+            sample_nearest,
+        );
+    } else {
+        rasterize_textured_rect_no_stats_with_color(
+            surface,
+            corners,
+            texture,
+            range,
+            uv_basis,
+            |texture, uv| modulate_color(vertex_color, sample_nearest(texture, uv)),
+        );
+    }
+}
+
+fn rasterize_textured_rect_no_stats_with_color(
+    surface: &mut SoftwareSurface,
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    pixel_color: impl Fn(&TextureImage, egui::Pos2) -> [u8; 4],
+) {
     for y in range.start_y..range.end_y {
         let mut row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         for x in range.start_x..range.end_x {
-            let color = modulate_color(vertex_color, sample_nearest(texture, row.uv));
+            let color = pixel_color(texture, row.uv);
             surface.blend_pixel(x, y, color);
             row.uv += row.step_x;
         }
@@ -1394,10 +1423,42 @@ fn rasterize_textured_rect_with_stats(
     vertex_color: [u8; 4],
     stats: &mut RasterStats,
 ) {
+    if vertex_color == [255, 255, 255, 255] {
+        rasterize_textured_rect_with_stats_and_color(
+            surface,
+            corners,
+            texture,
+            range,
+            uv_basis,
+            stats,
+            sample_nearest,
+        );
+    } else {
+        rasterize_textured_rect_with_stats_and_color(
+            surface,
+            corners,
+            texture,
+            range,
+            uv_basis,
+            stats,
+            |texture, uv| modulate_color(vertex_color, sample_nearest(texture, uv)),
+        );
+    }
+}
+
+fn rasterize_textured_rect_with_stats_and_color(
+    surface: &mut SoftwareSurface,
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    stats: &mut RasterStats,
+    pixel_color: impl Fn(&TextureImage, egui::Pos2) -> [u8; 4],
+) {
     for y in range.start_y..range.end_y {
         let mut row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         for x in range.start_x..range.end_x {
-            let color = modulate_color(vertex_color, sample_nearest(texture, row.uv));
+            let color = pixel_color(texture, row.uv);
             stats.record_alpha_px(color[3], 1);
             surface.blend_pixel(x, y, color);
             row.uv += row.step_x;
@@ -3935,6 +3996,19 @@ mod tests {
     #[test]
     fn textured_quad_fast_path_matches_generic_atlas_rectangle() {
         let vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [192, 96, 48, 128]);
+        let texture = test_texture_4x4();
+
+        let (accepted, pixels) =
+            render_test_textured_quad(7, 6, vertices, &texture, full_clip(7, 6));
+        let generic = render_test_textured_quad_generic(7, 6, vertices, &texture, full_clip(7, 6));
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+    }
+
+    #[test]
+    fn textured_quad_fast_path_matches_generic_with_white_vertex_color() {
+        let vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [255, 255, 255, 255]);
         let texture = test_texture_4x4();
 
         let (accepted, pixels) =
