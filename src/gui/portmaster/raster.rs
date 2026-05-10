@@ -64,6 +64,9 @@ pub(super) struct RasterStats {
     pub(super) solid_fan_triangles: usize,
     pub(super) solid_fan_rows: usize,
     pub(super) solid_fan_px: usize,
+    pub(super) solid_fan_edge_intersections: usize,
+    pub(super) solid_fan_endpoint_probe_px: usize,
+    pub(super) solid_fan_fallback_rows: usize,
     pub(super) textured_triangle_calls: usize,
     pub(super) textured_triangle_bbox_px: usize,
     pub(super) textured_triangle_covered_px: usize,
@@ -107,7 +110,7 @@ impl RasterStats {
 
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} solid_fan_edge_intersections={} solid_fan_endpoint_probe_px={} solid_fan_fallback_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -136,6 +139,9 @@ impl RasterStats {
             self.solid_fan_triangles,
             self.solid_fan_rows,
             self.solid_fan_px,
+            self.solid_fan_edge_intersections,
+            self.solid_fan_endpoint_probe_px,
+            self.solid_fan_fallback_rows,
             self.textured_triangle_calls,
             self.textured_triangle_bbox_px,
             self.textured_triangle_covered_px,
@@ -493,19 +499,13 @@ pub(super) fn rasterize_solid_fan(
     }
 
     for y in bounds.min_y..bounds.max_y {
-        let (candidate_start_x, candidate_end_x) =
-            polygon_scanline_x_range(polygon, bounds, usize_to_f32(y) + 0.5);
-        let mut span_start = None;
-        let mut span_end = None;
-        for x in candidate_start_x..candidate_end_x {
-            if polygon_covers_pixel(x, y, polygon, area_sign) {
-                span_start.get_or_insert(x);
-                span_end = Some(x + 1);
-            } else if span_start.is_some() && span_end.is_some() {
-                break;
+        let scanline = polygon_scanline_span(polygon, bounds, y, area_sign, stats.is_some());
+        let Some((span_start, span_end)) = scanline.span else {
+            if let Some(stats) = &mut stats {
+                stats.solid_fan_edge_intersections += scanline.edge_intersections;
+                stats.solid_fan_endpoint_probe_px += scanline.endpoint_probe_px;
+                stats.solid_fan_fallback_rows += usize::from(scanline.fell_back);
             }
-        }
-        let (Some(span_start), Some(span_end)) = (span_start, span_end) else {
             continue;
         };
         surface.blend_span(y, span_start, span_end, color);
@@ -513,9 +513,20 @@ pub(super) fn rasterize_solid_fan(
             let px = span_end - span_start;
             stats.solid_fan_rows += 1;
             stats.solid_fan_px += px;
+            stats.solid_fan_edge_intersections += scanline.edge_intersections;
+            stats.solid_fan_endpoint_probe_px += scanline.endpoint_probe_px;
+            stats.solid_fan_fallback_rows += usize::from(scanline.fell_back);
             stats.record_alpha_px(color[3], px);
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PolygonScanlineSpan {
+    span: Option<(usize, usize)>,
+    edge_intersections: usize,
+    endpoint_probe_px: usize,
+    fell_back: bool,
 }
 
 fn polygon_raster_bounds(
@@ -565,44 +576,205 @@ fn polygon_area_sign(polygon: &[&egui::epaint::Vertex]) -> Option<f32> {
     Some(-twice_area.signum())
 }
 
-fn polygon_scanline_x_range(
+fn polygon_scanline_span(
     polygon: &[&egui::epaint::Vertex],
     bounds: TriangleRasterBounds,
-    pixel_center_y: f32,
-) -> (usize, usize) {
-    let mut min_x = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut intersections = 0;
+    y: usize,
+    area_sign: f32,
+    collect_stats: bool,
+) -> PolygonScanlineSpan {
+    let pixel_center_y = usize_to_f32(y) + 0.5;
+    let mut lower = None;
+    let mut upper = None;
+    let mut edge_intersections = 0;
     for edge_index in 0..polygon.len() {
         let a = polygon[edge_index].pos;
         let b = polygon[(edge_index + 1) % polygon.len()].pos;
-        if same_f32(a.y, b.y) {
+        let slope_x = edge_step_x(a, b) * area_sign;
+        let at_origin = edge(a, b, egui::pos2(0.0, pixel_center_y)) * area_sign;
+        if !slope_x.is_finite() || !at_origin.is_finite() {
+            return PolygonScanlineSpan {
+                fell_back: true,
+                ..PolygonScanlineSpan::default()
+            };
+        }
+        if same_f32(slope_x, 0.0) {
+            if !edge_covers_pixel(at_origin, edge_includes_boundary(a, b, area_sign)) {
+                return PolygonScanlineSpan::default();
+            }
             continue;
         }
-        let min_y = a.y.min(b.y);
-        let max_y = a.y.max(b.y);
-        if pixel_center_y < min_y || pixel_center_y > max_y {
-            continue;
+        let boundary = -at_origin / slope_x;
+        if !boundary.is_finite() {
+            return PolygonScanlineSpan {
+                fell_back: true,
+                ..PolygonScanlineSpan::default()
+            };
         }
-        let t = (pixel_center_y - a.y) / (b.y - a.y);
-        let intersection = a.x + (b.x - a.x) * t;
-        if !intersection.is_finite() {
-            return (bounds.min_x, bounds.max_x);
+        edge_intersections += 1;
+        let includes_boundary = edge_includes_boundary(a, b, area_sign);
+        if slope_x > 0.0 {
+            lower = Some(tighter_lower_bound(lower, boundary, includes_boundary));
+        } else {
+            upper = Some(tighter_upper_bound(upper, boundary, includes_boundary));
         }
-        min_x = min_x.min(intersection);
-        max_x = max_x.max(intersection);
-        intersections += 1;
     }
-    if intersections < 2 {
-        return (bounds.min_x, bounds.max_x);
+    let start_x = polygon_lower_bound_x(lower, bounds);
+    let end_x = polygon_upper_bound_x(upper, bounds).max(start_x);
+    if start_x >= end_x {
+        return PolygonScanlineSpan {
+            edge_intersections,
+            ..PolygonScanlineSpan::default()
+        };
     }
 
-    let start_x = f32_to_usize_floor_clamped(min_x - 0.5, bounds.max_x).max(bounds.min_x);
-    let end_x = f32_to_usize_ceil_clamped(max_x - 0.5, bounds.max_x)
-        .saturating_add(1)
-        .min(bounds.max_x)
-        .max(start_x);
-    (start_x, end_x)
+    let mut span = (start_x, end_x);
+    let endpoint_probe_px =
+        polygon_correct_span_endpoints(&mut span, y, polygon, area_sign, bounds, collect_stats);
+    PolygonScanlineSpan {
+        span: (span.0 < span.1).then_some(span),
+        edge_intersections,
+        endpoint_probe_px,
+        fell_back: false,
+    }
+}
+
+fn tighter_lower_bound(
+    current: Option<(f32, bool)>,
+    boundary: f32,
+    includes_boundary: bool,
+) -> (f32, bool) {
+    match current {
+        None => (boundary, includes_boundary),
+        Some((value, _include)) if boundary > value => (boundary, includes_boundary),
+        Some((value, include)) if same_f32(boundary, value) => {
+            (value, include && includes_boundary)
+        }
+        Some(current) => current,
+    }
+}
+
+fn tighter_upper_bound(
+    current: Option<(f32, bool)>,
+    boundary: f32,
+    includes_boundary: bool,
+) -> (f32, bool) {
+    match current {
+        None => (boundary, includes_boundary),
+        Some((value, _include)) if boundary < value => (boundary, includes_boundary),
+        Some((value, include)) if same_f32(boundary, value) => {
+            (value, include && includes_boundary)
+        }
+        Some(current) => current,
+    }
+}
+
+fn polygon_lower_bound_x(lower: Option<(f32, bool)>, bounds: TriangleRasterBounds) -> usize {
+    let Some((center_x, includes_boundary)) = lower else {
+        return bounds.min_x;
+    };
+    let threshold = center_x - 0.5;
+    let x = if includes_boundary {
+        f32_to_usize_ceil_clamped(threshold, bounds.max_x)
+    } else {
+        f32_to_usize_floor_clamped(threshold, bounds.max_x).saturating_add(1)
+    };
+    x.max(bounds.min_x).min(bounds.max_x)
+}
+
+fn polygon_upper_bound_x(upper: Option<(f32, bool)>, bounds: TriangleRasterBounds) -> usize {
+    let Some((center_x, includes_boundary)) = upper else {
+        return bounds.max_x;
+    };
+    let threshold = center_x - 0.5;
+    let x = if includes_boundary {
+        f32_to_usize_floor_clamped(threshold, bounds.max_x).saturating_add(1)
+    } else {
+        f32_to_usize_ceil_clamped(threshold, bounds.max_x)
+    };
+    x.max(bounds.min_x).min(bounds.max_x)
+}
+
+fn polygon_correct_span_endpoints(
+    span: &mut (usize, usize),
+    y: usize,
+    polygon: &[&egui::epaint::Vertex],
+    area_sign: f32,
+    bounds: TriangleRasterBounds,
+    collect_stats: bool,
+) -> usize {
+    const MAX_ENDPOINT_CORRECTION_PX: usize = 2;
+    let mut probe_px = 0;
+    let mut correction_px = 0;
+    while span.0 < span.1
+        && !polygon_endpoint_probe(span.0, y, polygon, area_sign, collect_stats, &mut probe_px)
+        && correction_px < MAX_ENDPOINT_CORRECTION_PX
+    {
+        span.0 += 1;
+        correction_px += 1;
+    }
+    if span.0 < span.1
+        && !polygon_endpoint_probe(span.0, y, polygon, area_sign, collect_stats, &mut probe_px)
+    {
+        span.1 = span.0;
+        return probe_px;
+    }
+    correction_px = 0;
+    while span.0 < span.1
+        && !polygon_endpoint_probe(
+            span.1 - 1,
+            y,
+            polygon,
+            area_sign,
+            collect_stats,
+            &mut probe_px,
+        )
+        && correction_px < MAX_ENDPOINT_CORRECTION_PX
+    {
+        span.1 -= 1;
+        correction_px += 1;
+    }
+    if span.0 < span.1
+        && !polygon_endpoint_probe(
+            span.1 - 1,
+            y,
+            polygon,
+            area_sign,
+            collect_stats,
+            &mut probe_px,
+        )
+    {
+        span.1 = span.0;
+        return probe_px;
+    }
+    if span.0 > bounds.min_x {
+        let _ = polygon_endpoint_probe(
+            span.0 - 1,
+            y,
+            polygon,
+            area_sign,
+            collect_stats,
+            &mut probe_px,
+        );
+    }
+    if span.1 < bounds.max_x {
+        let _ = polygon_endpoint_probe(span.1, y, polygon, area_sign, collect_stats, &mut probe_px);
+    }
+    probe_px
+}
+
+fn polygon_endpoint_probe(
+    x: usize,
+    y: usize,
+    polygon: &[&egui::epaint::Vertex],
+    area_sign: f32,
+    collect_stats: bool,
+    probe_px: &mut usize,
+) -> bool {
+    if collect_stats {
+        *probe_px += 1;
+    }
+    polygon_covers_pixel(x, y, polygon, area_sign)
 }
 
 fn polygon_covers_pixel(
@@ -2846,22 +3018,25 @@ mod tests {
             solid_fan_triangles: 26,
             solid_fan_rows: 27,
             solid_fan_px: 28,
-            textured_triangle_calls: 29,
-            textured_triangle_bbox_px: 30,
-            textured_triangle_covered_px: 31,
-            textured_triangle_candidate_px: 32,
-            textured_triangle_narrowed_rows: 33,
-            textured_triangle_full_scan_rows: 34,
-            degenerate_triangle_skips: 35,
-            fully_clipped_triangle_skips: 36,
-            opaque_px: 37,
-            translucent_px: 38,
-            transparent_px: 39,
+            solid_fan_edge_intersections: 29,
+            solid_fan_endpoint_probe_px: 30,
+            solid_fan_fallback_rows: 31,
+            textured_triangle_calls: 32,
+            textured_triangle_bbox_px: 33,
+            textured_triangle_covered_px: 34,
+            textured_triangle_candidate_px: 35,
+            textured_triangle_narrowed_rows: 36,
+            textured_triangle_full_scan_rows: 37,
+            degenerate_triangle_skips: 38,
+            fully_clipped_triangle_skips: 39,
+            opaque_px: 40,
+            translucent_px: 41,
+            transparent_px: 42,
         };
 
         assert_eq!(
             stats.log_line(),
-            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_hint_build_us=12 solid_triangle_endpoint_search_us=13 solid_triangle_blend_span_us=14 solid_triangle_blend_span_calls=15 solid_triangle_span_px=16 solid_triangle_endpoint_probe_px=17 solid_triangle_hint_probe_px=18 solid_triangle_canary_probe_px=19 solid_triangle_fallback_probe_px=20 solid_triangle_direct_probe_px=21 solid_triangle_hint_candidate_px=22 solid_triangle_narrowed_rows=23 solid_triangle_full_scan_rows=24 solid_fan_calls=25 solid_fan_triangles=26 solid_fan_rows=27 solid_fan_px=28 textured_triangle_calls=29 textured_triangle_bbox_px=30 textured_triangle_covered_px=31 textured_triangle_candidate_px=32 textured_triangle_narrowed_rows=33 textured_triangle_full_scan_rows=34 degenerate_triangle_skips=35 fully_clipped_triangle_skips=36 opaque_px=37 translucent_px=38 transparent_px=39"
+            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_hint_build_us=12 solid_triangle_endpoint_search_us=13 solid_triangle_blend_span_us=14 solid_triangle_blend_span_calls=15 solid_triangle_span_px=16 solid_triangle_endpoint_probe_px=17 solid_triangle_hint_probe_px=18 solid_triangle_canary_probe_px=19 solid_triangle_fallback_probe_px=20 solid_triangle_direct_probe_px=21 solid_triangle_hint_candidate_px=22 solid_triangle_narrowed_rows=23 solid_triangle_full_scan_rows=24 solid_fan_calls=25 solid_fan_triangles=26 solid_fan_rows=27 solid_fan_px=28 solid_fan_edge_intersections=29 solid_fan_endpoint_probe_px=30 solid_fan_fallback_rows=31 textured_triangle_calls=32 textured_triangle_bbox_px=33 textured_triangle_covered_px=34 textured_triangle_candidate_px=35 textured_triangle_narrowed_rows=36 textured_triangle_full_scan_rows=37 degenerate_triangle_skips=38 fully_clipped_triangle_skips=39 opaque_px=40 translucent_px=41 transparent_px=42"
         );
     }
 
@@ -2893,6 +3068,55 @@ mod tests {
             render_test_solid_fan(11, 8, &vertices, &texture),
             render_test_solid_fan_reference(11, 8, &vertices, &texture)
         );
+    }
+
+    #[test]
+    fn solid_fan_scanline_solver_keeps_endpoint_probes_bounded() {
+        let texture = test_white_texture();
+        let vertices = vec![
+            solid_vertex(32.0, 6.0, [64, 16, 0, 128]),
+            solid_vertex(48.0, 10.0, [64, 16, 0, 128]),
+            solid_vertex(58.0, 26.0, [64, 16, 0, 128]),
+            solid_vertex(56.0, 42.0, [64, 16, 0, 128]),
+            solid_vertex(40.0, 56.0, [64, 16, 0, 128]),
+            solid_vertex(22.0, 54.0, [64, 16, 0, 128]),
+            solid_vertex(8.0, 38.0, [64, 16, 0, 128]),
+            solid_vertex(10.0, 20.0, [64, 16, 0, 128]),
+        ];
+        let mut surface = test_surface(64, 64);
+        let mut stats = RasterStats::default();
+        let clip = full_clip(64, 64);
+        let triangles = solid_fan_test_triangles(&vertices);
+        let SolidTriangleColorDecision::Solid(color) = solid_triangle_color_decision(
+            triangles[0][0],
+            triangles[0][1],
+            triangles[0][2],
+            &texture,
+        ) else {
+            panic!("solid fan test triangle must be solid");
+        };
+        let mut polygon: Vec<_> = vertices[1..].iter().collect();
+        polygon.push(&vertices[0]);
+
+        rasterize_solid_fan(
+            &mut surface,
+            &polygon,
+            triangles.len(),
+            color,
+            clip,
+            Some(&mut stats),
+        );
+
+        assert_eq!(
+            surface.pixels,
+            render_test_solid_fan_reference(64, 64, &vertices, &texture)
+        );
+        assert_eq!(stats.solid_fan_fallback_rows, 0);
+        assert!(stats.solid_fan_rows > 0);
+        assert!(stats.solid_fan_edge_intersections <= polygon.len() * stats.solid_fan_rows);
+        assert!(stats.solid_fan_endpoint_probe_px <= stats.solid_fan_rows * 6);
+        assert!(stats.solid_fan_endpoint_probe_px < stats.solid_fan_px);
+        assert_eq!(stats.translucent_px, stats.solid_fan_px);
     }
 
     #[test]
