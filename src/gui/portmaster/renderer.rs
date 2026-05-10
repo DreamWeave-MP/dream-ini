@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use super::log::write_log;
 use super::raster::{
     ClipBounds, TriangleClassification, classify_triangle, is_axis_aligned_quad,
-    rasterize_axis_aligned_solid_quad, rasterize_triangle, usize_to_f32,
+    rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad, rasterize_triangle,
+    usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -189,6 +190,18 @@ impl SoftwareRenderer {
                             index_offset += 6;
                             continue;
                         }
+                        if rasterize_axis_aligned_textured_quad(
+                            surface,
+                            [v0, v1, v2, v3, v4, v5],
+                            texture,
+                            clip,
+                        ) {
+                            if let Some(stats) = stats.as_deref_mut() {
+                                stats.textured_quad_fast_path_hits += 1;
+                            }
+                            index_offset += 6;
+                            continue;
+                        }
                     }
                 }
             }
@@ -232,6 +245,7 @@ struct PrimitiveStats {
     solid_axis_aligned_quad_windows: usize,
     textured_axis_aligned_quad_windows: usize,
     solid_quad_fast_path_hits: usize,
+    textured_quad_fast_path_hits: usize,
     generic_triangles_rasterized: usize,
     generic_solid_triangles: usize,
     generic_textured_triangles: usize,
@@ -274,7 +288,7 @@ impl PrimitiveStats {
 
     fn log_line(&self) -> String {
         format!(
-            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} degenerate_triangles={}",
+            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} degenerate_triangles={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -286,6 +300,7 @@ impl PrimitiveStats {
             self.solid_axis_aligned_quad_windows,
             self.textured_axis_aligned_quad_windows,
             self.solid_quad_fast_path_hits,
+            self.textured_quad_fast_path_hits,
             self.generic_triangles_rasterized,
             self.generic_solid_triangles,
             self.generic_textured_triangles,
@@ -392,8 +407,36 @@ mod tests {
         assert_eq!(stats.generic_solid_triangles, 1);
         assert_eq!(stats.generic_textured_triangles, 1);
         assert_eq!(stats.degenerate_triangles, 1);
+        stats.textured_quad_fast_path_hits = 2;
         assert!(stats.log_line().contains("generic_solid_triangles=1"));
+        assert!(stats.log_line().contains("textured_quad_fast_path_hits=2"));
         assert!(stats.log_line().contains("degenerate_triangles=1"));
+    }
+
+    #[test]
+    fn renderer_stats_count_textured_quad_fast_path_without_generic_triangles() {
+        let texture_id = egui::TextureId::Managed(1);
+        let mut renderer = SoftwareRenderer::default();
+        renderer.surface.resize(8, 8).expect("surface");
+        renderer.surface.clear([0, 0, 0, 255]);
+        renderer
+            .textures
+            .apply(&texture_delta(texture_id))
+            .expect("texture");
+        let mesh = textured_quad_mesh(texture_id);
+        let mut stats = PrimitiveStats::default();
+
+        renderer
+            .rasterize_mesh(
+                &mesh,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
+                Some(&mut stats),
+            )
+            .expect("rasterize mesh");
+
+        assert_eq!(stats.textured_quad_fast_path_hits, 1);
+        assert_eq!(stats.generic_triangles_rasterized, 0);
+        assert_eq!(stats.generic_textured_triangles, 0);
     }
 
     fn quad_vertices() -> [egui::epaint::Vertex; 4] {
@@ -403,6 +446,38 @@ mod tests {
             test_vertex(1.0, 3.0),
             test_vertex(4.0, 3.0),
         ]
+    }
+
+    fn textured_quad_mesh(texture_id: egui::TextureId) -> egui::Mesh {
+        let mut vertices = quad_vertices();
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(1.0, 0.0);
+        vertices[2].uv = egui::pos2(0.0, 1.0);
+        vertices[3].uv = egui::pos2(1.0, 1.0);
+        egui::Mesh {
+            indices: vec![0, 1, 2, 1, 3, 2],
+            vertices: vertices.to_vec(),
+            texture_id,
+        }
+    }
+
+    fn texture_delta(texture_id: egui::TextureId) -> egui::TexturesDelta {
+        let image = egui::ColorImage::new(
+            [2, 2],
+            vec![
+                egui::Color32::from_rgb(10, 0, 0),
+                egui::Color32::from_rgb(20, 0, 0),
+                egui::Color32::from_rgb(30, 0, 0),
+                egui::Color32::from_rgb(40, 0, 0),
+            ],
+        );
+        egui::TexturesDelta {
+            set: vec![(
+                texture_id,
+                egui::epaint::ImageDelta::full(image, egui::TextureOptions::NEAREST),
+            )],
+            free: Vec::new(),
+        }
     }
 
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {

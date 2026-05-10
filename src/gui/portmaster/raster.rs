@@ -6,6 +6,8 @@ use std::io;
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
 
+const UV_AFFINE_EPSILON: f32 = 1.0 / 1_048_576.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TriangleClassification {
     Degenerate,
@@ -133,6 +135,15 @@ fn same_pos2(left: egui::Pos2, right: egui::Pos2) -> bool {
     same_f32(left.x, right.x) && same_f32(left.y, right.y)
 }
 
+fn near_finite_pos2(left: egui::Pos2, right: egui::Pos2, epsilon: f32) -> bool {
+    left.x.is_finite()
+        && left.y.is_finite()
+        && right.x.is_finite()
+        && right.y.is_finite()
+        && (left.x - right.x).abs() <= epsilon
+        && (left.y - right.y).abs() <= epsilon
+}
+
 pub(super) fn rasterize_triangle(
     surface: &mut SoftwareSurface,
     v0: &egui::epaint::Vertex,
@@ -201,6 +212,45 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
         return false;
     };
     rasterize_solid_rect(surface, min_x, min_y, max_x, max_y, clip, color);
+    true
+}
+
+pub(super) fn rasterize_axis_aligned_textured_quad(
+    surface: &mut SoftwareSurface,
+    vertices: [&egui::epaint::Vertex; 6],
+    texture: &TextureImage,
+    clip: ClipBounds,
+) -> bool {
+    if !triangles_share_rectangle_diagonal(vertices) {
+        return false;
+    }
+    let Some((min_x, min_y, max_x, max_y)) = axis_aligned_quad_bounds(vertices) else {
+        return false;
+    };
+    let Some(corners) = textured_quad_corners(vertices, min_x, min_y, max_x, max_y) else {
+        return false;
+    };
+    if corners.tl.color != corners.tr.color
+        || corners.tl.color != corners.bl.color
+        || corners.tl.color != corners.br.color
+    {
+        return false;
+    }
+    let affine_br_uv = egui::pos2(
+        corners.tr.uv.x + corners.bl.uv.x - corners.tl.uv.x,
+        corners.tr.uv.y + corners.bl.uv.y - corners.tl.uv.y,
+    );
+    if !near_finite_pos2(corners.br.uv, affine_br_uv, UV_AFFINE_EPSILON) {
+        return false;
+    }
+
+    rasterize_textured_rect(
+        surface,
+        corners,
+        (min_x, min_y, max_x, max_y),
+        texture,
+        clip,
+    );
     true
 }
 
@@ -306,6 +356,52 @@ fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<(f32
     Some((min_x, min_y, max_x, max_y))
 }
 
+#[derive(Clone, Copy)]
+struct TexturedQuadCorners {
+    tl: egui::epaint::Vertex,
+    tr: egui::epaint::Vertex,
+    bl: egui::epaint::Vertex,
+    br: egui::epaint::Vertex,
+}
+
+fn textured_quad_corners(
+    vertices: [&egui::epaint::Vertex; 6],
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+) -> Option<TexturedQuadCorners> {
+    let tl = matching_corner(vertices, egui::pos2(min_x, min_y))?;
+    let tr = matching_corner(vertices, egui::pos2(max_x, min_y))?;
+    let bl = matching_corner(vertices, egui::pos2(min_x, max_y))?;
+    let br = matching_corner(vertices, egui::pos2(max_x, max_y))?;
+    Some(TexturedQuadCorners { tl, tr, bl, br })
+}
+
+fn matching_corner(
+    vertices: [&egui::epaint::Vertex; 6],
+    position: egui::Pos2,
+) -> Option<egui::epaint::Vertex> {
+    let mut corner = None;
+    for vertex in vertices {
+        if !same_pos2(vertex.pos, position) {
+            continue;
+        }
+        if let Some(existing) = corner {
+            if !same_vertex_attributes(existing, *vertex) {
+                return None;
+            }
+        } else {
+            corner = Some(*vertex);
+        }
+    }
+    corner
+}
+
+fn same_vertex_attributes(left: egui::epaint::Vertex, right: egui::epaint::Vertex) -> bool {
+    left.color == right.color && same_pos2(left.uv, right.uv)
+}
+
 fn push_unique_f32(values: &mut [f32; 2], count: &mut usize, value: f32) -> bool {
     if values[..*count]
         .iter()
@@ -339,6 +435,48 @@ fn rasterize_solid_rect(
     }
     for y in start_y..end_y {
         surface.blend_span(y, start_x, end_x, color);
+    }
+}
+
+fn rasterize_textured_rect(
+    surface: &mut SoftwareSurface,
+    corners: TexturedQuadCorners,
+    bounds: (f32, f32, f32, f32),
+    texture: &TextureImage,
+    clip: ClipBounds,
+) {
+    let (min_x, min_y, max_x, max_y) = bounds;
+    let start_x = solid_rect_boundary_index(min_x, clip.max_x).max(clip.min_x);
+    let end_x = solid_rect_boundary_index(max_x, clip.max_x).min(clip.max_x);
+    let start_y = solid_rect_boundary_index(min_y, clip.max_y).max(clip.min_y);
+    let end_y = solid_rect_boundary_index(max_y, clip.max_y).min(clip.max_y);
+    if start_x >= end_x || start_y >= end_y {
+        return;
+    }
+
+    let inv_width = 1.0 / (max_x - min_x);
+    let inv_height = 1.0 / (max_y - min_y);
+    let vertex_color = color_to_array(corners.tl.color);
+    for y in start_y..end_y {
+        let sy = (usize_to_f32(y) + 0.5 - min_y) * inv_height;
+        for x in start_x..end_x {
+            let sx = (usize_to_f32(x) + 0.5 - min_x) * inv_width;
+            let tl_weight = 1.0 - sx - sy;
+            let uv = egui::pos2(
+                corners
+                    .tl
+                    .uv
+                    .x
+                    .mul_add(tl_weight, corners.tr.uv.x.mul_add(sx, corners.bl.uv.x * sy)),
+                corners
+                    .tl
+                    .uv
+                    .y
+                    .mul_add(tl_weight, corners.tr.uv.y.mul_add(sx, corners.bl.uv.y * sy)),
+            );
+            let color = modulate_color(vertex_color, sample_nearest(texture, uv));
+            surface.blend_pixel(x, y, color);
+        }
     }
 }
 
@@ -990,6 +1128,83 @@ mod tests {
         assert_eq!(pixel_at(&pixels, 6, 4, 2), [32, 80, 120, 255]);
     }
 
+    #[test]
+    fn textured_quad_fast_path_matches_generic_atlas_rectangle() {
+        let vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [192, 96, 48, 128]);
+        let texture = test_texture_4x4();
+
+        let (accepted, pixels) =
+            render_test_textured_quad(7, 6, vertices, &texture, full_clip(7, 6));
+        let generic = render_test_textured_quad_generic(7, 6, vertices, &texture, full_clip(7, 6));
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+    }
+
+    #[test]
+    fn textured_quad_fast_path_matches_generic_clipped_atlas_rectangle() {
+        let vertices = textured_quad_vertices(1.25, 1.5, 5.25, 4.5, [128, 128, 64, 160]);
+        let texture = test_texture_4x4();
+        let clip = ClipBounds {
+            min_x: 2,
+            min_y: 2,
+            max_x: 5,
+            max_y: 4,
+        };
+
+        let (accepted, pixels) = render_test_textured_quad(7, 6, vertices, &texture, clip);
+        let generic = render_test_textured_quad_generic(7, 6, vertices, &texture, clip);
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+    }
+
+    #[test]
+    fn textured_quad_fast_path_accepts_rounded_affine_uv() {
+        let mut vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [192, 96, 48, 128]);
+        vertices[0].uv = egui::pos2(0.02, 0.02);
+        vertices[1].uv = egui::pos2(0.10, 0.02);
+        vertices[2].uv = egui::pos2(0.02, 0.10);
+        vertices[3].uv = egui::pos2(
+            0.10 + UV_AFFINE_EPSILON * 0.5,
+            0.10 - UV_AFFINE_EPSILON * 0.5,
+        );
+        let texture = test_texture_4x4();
+
+        let (accepted, pixels) =
+            render_test_textured_quad(7, 6, vertices, &texture, full_clip(7, 6));
+        let generic = render_test_textured_quad_generic(7, 6, vertices, &texture, full_clip(7, 6));
+
+        assert!(accepted);
+        assert_eq!(pixels, generic);
+    }
+
+    #[test]
+    fn textured_quad_fast_path_rejects_non_affine_uv() {
+        let mut vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [255, 255, 255, 255]);
+        vertices[3].uv = egui::pos2(0.75, 0.5);
+        let texture = test_texture_4x4();
+
+        let (accepted, pixels) =
+            render_test_textured_quad(7, 6, vertices, &texture, full_clip(7, 6));
+
+        assert!(!accepted);
+        assert_eq!(white_pixel_count(&pixels), 0);
+    }
+
+    #[test]
+    fn textured_quad_fast_path_rejects_non_uniform_vertex_color() {
+        let mut vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [255, 255, 255, 255]);
+        vertices[2].color = egui::Color32::from_rgba_premultiplied(128, 128, 128, 255);
+        let texture = test_texture_4x4();
+
+        let (accepted, pixels) =
+            render_test_textured_quad(7, 6, vertices, &texture, full_clip(7, 6));
+
+        assert!(!accepted);
+        assert_eq!(white_pixel_count(&pixels), 0);
+    }
+
     fn render_test_triangle(
         width: usize,
         height: usize,
@@ -1087,6 +1302,63 @@ mod tests {
             &vertices[3],
             &vertices[2],
             &texture,
+            clip,
+            edge(vertices[1].pos, vertices[3].pos, vertices[2].pos),
+        );
+
+        surface.pixels
+    }
+
+    fn render_test_textured_quad(
+        width: usize,
+        height: usize,
+        vertices: [egui::epaint::Vertex; 4],
+        texture: &TextureImage,
+        clip: ClipBounds,
+    ) -> (bool, Vec<u8>) {
+        let mut surface = test_surface(width, height);
+
+        let accepted = rasterize_axis_aligned_textured_quad(
+            &mut surface,
+            [
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &vertices[1],
+                &vertices[3],
+                &vertices[2],
+            ],
+            texture,
+            clip,
+        );
+
+        (accepted, surface.pixels)
+    }
+
+    fn render_test_textured_quad_generic(
+        width: usize,
+        height: usize,
+        vertices: [egui::epaint::Vertex; 4],
+        texture: &TextureImage,
+        clip: ClipBounds,
+    ) -> Vec<u8> {
+        let mut surface = test_surface(width, height);
+
+        rasterize_textured_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            texture,
+            clip,
+            edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
+        );
+        rasterize_textured_triangle(
+            &mut surface,
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+            texture,
             clip,
             edge(vertices[1].pos, vertices[3].pos, vertices[2].pos),
         );
@@ -1200,6 +1472,21 @@ mod tests {
         vertices
     }
 
+    fn textured_quad_vertices(
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+        color: [u8; 4],
+    ) -> [egui::epaint::Vertex; 4] {
+        let mut vertices = translucent_quad_vertices(min_x, min_y, max_x, max_y, color);
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(1.0, 0.0);
+        vertices[2].uv = egui::pos2(0.0, 1.0);
+        vertices[3].uv = egui::pos2(1.0, 1.0);
+        vertices
+    }
+
     fn test_texture_2x2() -> TextureImage {
         TextureImage {
             width: 2,
@@ -1209,6 +1496,19 @@ mod tests {
                 255, 0, 0, 255, // top-right
                 0, 255, 0, 255, // bottom-left
                 0, 0, 255, 255, // bottom-right
+            ],
+        }
+    }
+
+    fn test_texture_4x4() -> TextureImage {
+        TextureImage {
+            width: 4,
+            height: 4,
+            pixels: vec![
+                20, 10, 0, 255, 60, 10, 0, 255, 100, 10, 0, 255, 140, 10, 0, 255, 20, 50, 0, 255,
+                60, 50, 0, 255, 100, 50, 0, 255, 140, 50, 0, 255, 20, 90, 0, 255, 60, 90, 0, 255,
+                100, 90, 0, 255, 140, 90, 0, 255, 20, 130, 0, 255, 60, 130, 0, 255, 100, 130, 0,
+                255, 140, 130, 0, 255,
             ],
         }
     }

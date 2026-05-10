@@ -361,10 +361,8 @@ fn should_log_frame(frame_count: u64) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn should_log_idle_poll(continuous_idle_polls: u64, next_repaint_at: Option<Instant>) -> bool {
-    continuous_idle_polls != 0
-        && ((continuous_idle_polls == 1 && next_repaint_at.is_none())
-            || continuous_idle_polls.is_multiple_of(IDLE_POLL_LOG_INTERVAL))
+fn should_log_idle_poll(continuous_idle_polls: u64, _next_repaint_at: Option<Instant>) -> bool {
+    continuous_idle_polls != 0 && continuous_idle_polls.is_multiple_of(IDLE_POLL_LOG_INTERVAL)
 }
 
 #[cfg(target_os = "linux")]
@@ -457,12 +455,13 @@ mod tests {
     }
 
     #[test]
-    fn idle_poll_logging_distinguishes_true_idle_from_scheduled_frame_sleep() {
+    fn idle_poll_logging_only_reports_interval_multiples() {
         let now = Instant::now();
 
-        assert!(should_log_idle_poll(1, None));
+        assert!(!should_log_idle_poll(1, None));
         assert!(!should_log_idle_poll(1, Some(now)));
         assert!(!should_log_idle_poll(0, None));
+        assert!(should_log_idle_poll(IDLE_POLL_LOG_INTERVAL, None));
         assert!(should_log_idle_poll(IDLE_POLL_LOG_INTERVAL, Some(now)));
     }
 
