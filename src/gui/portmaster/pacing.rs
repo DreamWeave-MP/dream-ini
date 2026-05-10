@@ -3,7 +3,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::FbVarScreeninfo;
+use super::fbdev::FbVarScreeninfo;
 
 pub(super) const REFRESH_ENV_VAR: &str = "DREAM_INI_PORTMASTER_REFRESH_HZ";
 pub(super) const DEFAULT_REFRESH_HZ: u32 = 60;
