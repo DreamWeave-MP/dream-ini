@@ -931,6 +931,163 @@ mod tests {
     }
 
     #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_opaque_triangle() {
+        assert_solid_triangle_matches_reference(
+            7,
+            6,
+            full_clip(7, 6),
+            [24, 48, 96, 255],
+            [
+                solid_vertex(1.0, 1.0, [180, 40, 20, 255]),
+                solid_vertex(5.0, 1.0, [180, 40, 20, 255]),
+                solid_vertex(2.0, 5.0, [180, 40, 20, 255]),
+            ],
+        );
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_translucent_triangle() {
+        assert_solid_triangle_matches_reference(
+            7,
+            6,
+            full_clip(7, 6),
+            [20, 80, 140, 255],
+            [
+                solid_vertex(1.0, 1.0, [96, 48, 24, 128]),
+                solid_vertex(5.0, 1.0, [96, 48, 24, 128]),
+                solid_vertex(2.0, 5.0, [96, 48, 24, 128]),
+            ],
+        );
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_both_windings() {
+        let vertices = [
+            solid_vertex(1.0, 1.0, [40, 120, 80, 192]),
+            solid_vertex(5.0, 2.0, [40, 120, 80, 192]),
+            solid_vertex(2.0, 5.0, [40, 120, 80, 192]),
+        ];
+
+        assert_solid_triangle_matches_reference(
+            7,
+            6,
+            full_clip(7, 6),
+            [90, 30, 120, 255],
+            vertices,
+        );
+        assert_solid_triangle_matches_reference(
+            7,
+            6,
+            full_clip(7, 6),
+            [90, 30, 120, 255],
+            [vertices[0], vertices[2], vertices[1]],
+        );
+    }
+
+    #[test]
+    fn solid_triangle_reference_covers_shared_translucent_diagonal_once() {
+        let color = [128, 0, 0, 128];
+        let vertices = [
+            solid_vertex(0.0, 0.0, color),
+            solid_vertex(3.0, 0.0, color),
+            solid_vertex(0.0, 3.0, color),
+            solid_vertex(3.0, 3.0, color),
+        ];
+        let clip = full_clip(3, 3);
+        let texture = test_white_texture();
+        let mut production = test_surface_with_background(3, 3, [0, 0, 255, 255]);
+        let mut reference = test_surface_with_background(3, 3, [0, 0, 255, 255]);
+
+        rasterize_triangle(
+            &mut production,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            clip,
+        );
+        rasterize_triangle(
+            &mut production,
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+            &texture,
+            clip,
+        );
+        reference_rasterize_solid_triangle(
+            &mut reference,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            clip,
+            color,
+        );
+        reference_rasterize_solid_triangle(
+            &mut reference,
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+            clip,
+            color,
+        );
+
+        assert_eq!(production.pixels, reference.pixels);
+        assert_eq!(pixel_at(&production.pixels, 3, 2, 0), [128, 0, 127, 255]);
+        assert_eq!(pixel_at(&production.pixels, 3, 1, 1), [128, 0, 127, 255]);
+        assert_eq!(pixel_at(&production.pixels, 3, 0, 2), [128, 0, 127, 255]);
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_clipped_triangle() {
+        assert_solid_triangle_matches_reference(
+            7,
+            6,
+            ClipBounds {
+                min_x: 2,
+                min_y: 1,
+                max_x: 6,
+                max_y: 5,
+            },
+            [80, 20, 100, 255],
+            [
+                solid_vertex(-1.0, 0.0, [32, 160, 80, 160]),
+                solid_vertex(6.0, 1.0, [32, 160, 80, 160]),
+                solid_vertex(1.0, 7.0, [32, 160, 80, 160]),
+            ],
+        );
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_fractional_coordinates() {
+        assert_solid_triangle_matches_reference(
+            8,
+            7,
+            full_clip(8, 7),
+            [12, 64, 120, 255],
+            [
+                solid_vertex(1.25, 0.5, [100, 20, 140, 128]),
+                solid_vertex(6.5, 2.25, [100, 20, 140, 128]),
+                solid_vertex(2.5, 5.75, [100, 20, 140, 128]),
+            ],
+        );
+    }
+
+    #[test]
+    fn solid_triangle_rasterizer_matches_reference_for_thin_sliver() {
+        assert_solid_triangle_matches_reference(
+            8,
+            8,
+            full_clip(8, 8),
+            [30, 90, 150, 255],
+            [
+                solid_vertex(1.0, 1.0, [160, 32, 64, 192]),
+                solid_vertex(6.0, 1.25, [160, 32, 64, 192]),
+                solid_vertex(1.5, 1.75, [160, 32, 64, 192]),
+            ],
+        );
+    }
+
+    #[test]
     fn triangle_classification_matches_rasterizer_solid_and_textured_paths() {
         let texture = test_texture_2x2();
         let v0 = test_vertex(0.0, 0.0);
@@ -1354,6 +1511,89 @@ mod tests {
         surface.pixels
     }
 
+    fn assert_solid_triangle_matches_reference(
+        width: usize,
+        height: usize,
+        clip: ClipBounds,
+        background: [u8; 4],
+        vertices: [egui::epaint::Vertex; 3],
+    ) {
+        let texture = test_white_texture();
+        let color = solid_triangle_color(&vertices[0], &vertices[1], &vertices[2], &texture)
+            .expect("solid triangle");
+        let mut routed = test_surface_with_background(width, height, background);
+        let mut direct = test_surface_with_background(width, height, background);
+        let mut reference = test_surface_with_background(width, height, background);
+
+        rasterize_triangle(
+            &mut routed,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            clip,
+        );
+        if let Some(bounds) = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+        {
+            rasterize_solid_triangle(
+                &mut direct,
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                bounds,
+                edge(vertices[0].pos, vertices[1].pos, vertices[2].pos),
+                color,
+            );
+        }
+        reference_rasterize_solid_triangle(
+            &mut reference,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            clip,
+            color,
+        );
+
+        assert_eq!(routed.pixels, reference.pixels);
+        assert_eq!(direct.pixels, reference.pixels);
+    }
+
+    fn reference_rasterize_solid_triangle(
+        surface: &mut SoftwareSurface,
+        v0: &egui::epaint::Vertex,
+        v1: &egui::epaint::Vertex,
+        v2: &egui::epaint::Vertex,
+        clip: ClipBounds,
+        color: [u8; 4],
+    ) {
+        let area = edge(v0.pos, v1.pos, v2.pos);
+        if area.abs() <= f32::EPSILON {
+            return;
+        }
+        let Some(bounds) = triangle_raster_bounds(v0, v1, v2, clip) else {
+            return;
+        };
+        let inv_area = 1.0 / area;
+        let edge0_includes_boundary = edge_includes_boundary(v1.pos, v2.pos, area);
+        let edge1_includes_boundary = edge_includes_boundary(v2.pos, v0.pos, area);
+        let edge2_includes_boundary = edge_includes_boundary(v0.pos, v1.pos, area);
+
+        for y in bounds.min_y..bounds.max_y {
+            for x in bounds.min_x..bounds.max_x {
+                let pixel_center = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
+                let w0 = edge(v1.pos, v2.pos, pixel_center) * inv_area;
+                let w1 = edge(v2.pos, v0.pos, pixel_center) * inv_area;
+                let w2 = edge(v0.pos, v1.pos, pixel_center) * inv_area;
+                if edge_covers_pixel(w0, edge0_includes_boundary)
+                    && edge_covers_pixel(w1, edge1_includes_boundary)
+                    && edge_covers_pixel(w2, edge2_includes_boundary)
+                {
+                    surface.blend_pixel(x, y, color);
+                }
+            }
+        }
+    }
+
     fn render_test_quad(
         width: usize,
         height: usize,
@@ -1518,9 +1758,17 @@ mod tests {
     }
 
     fn test_surface(width: usize, height: usize) -> SoftwareSurface {
+        test_surface_with_background(width, height, [0, 0, 0, 255])
+    }
+
+    fn test_surface_with_background(
+        width: usize,
+        height: usize,
+        background: [u8; 4],
+    ) -> SoftwareSurface {
         let mut surface = SoftwareSurface::default();
         surface.resize(width, height).expect("surface");
-        surface.clear([0, 0, 0, 255]);
+        surface.clear(background);
         surface
     }
 
@@ -1554,6 +1802,13 @@ mod tests {
             color: egui::Color32::WHITE,
             uv: egui::Pos2::ZERO,
         }
+    }
+
+    fn solid_vertex(x: f32, y: f32, color: [u8; 4]) -> egui::epaint::Vertex {
+        let mut vertex = test_vertex(x, y);
+        vertex.color =
+            egui::Color32::from_rgba_premultiplied(color[0], color[1], color[2], color[3]);
+        vertex
     }
 
     fn test_quad_vertices() -> [egui::epaint::Vertex; 4] {
