@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::fmt;
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -286,6 +287,55 @@ struct PrimitiveStats {
     generic_solid_triangles: usize,
     generic_textured_triangles: usize,
     degenerate_triangles: usize,
+    generic_triangle_bbox_px_buckets: TriangleBboxBuckets,
+    generic_solid_triangle_bbox_px_buckets: TriangleBboxBuckets,
+    generic_textured_triangle_bbox_px_buckets: TriangleBboxBuckets,
+    generic_degenerate_triangle_bbox_px_buckets: TriangleBboxBuckets,
+    generic_triangle_bbox_non_finite: usize,
+}
+
+#[derive(Debug, Default)]
+struct TriangleBboxBuckets {
+    counts: [usize; TRIANGLE_BBOX_BUCKETS],
+}
+
+const TRIANGLE_BBOX_BUCKETS: usize = 6;
+#[cfg(test)]
+const TRIANGLE_BBOX_BUCKET_LE4: usize = 0;
+const TRIANGLE_BBOX_BUCKET_GT1024: usize = 5;
+
+impl TriangleBboxBuckets {
+    fn record(&mut self, area: f32) {
+        let bucket = if area <= 4.0 {
+            0
+        } else if area <= 16.0 {
+            1
+        } else if area <= 64.0 {
+            2
+        } else if area <= 256.0 {
+            3
+        } else if area <= 1024.0 {
+            4
+        } else {
+            TRIANGLE_BBOX_BUCKET_GT1024
+        };
+        self.counts[bucket] += 1;
+    }
+}
+
+impl fmt::Display for TriangleBboxBuckets {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{},{},{},{},{},{}",
+            self.counts[0],
+            self.counts[1],
+            self.counts[2],
+            self.counts[3],
+            self.counts[4],
+            self.counts[5]
+        )
+    }
 }
 
 impl PrimitiveStats {
@@ -311,13 +361,56 @@ impl PrimitiveStats {
         texture: &TextureImage,
     ) {
         self.generic_triangles_rasterized += 1;
-        match classify_triangle(v0, v1, v2, texture) {
+        let classification = classify_triangle(v0, v1, v2, texture);
+        match classification {
             TriangleClassification::Degenerate => self.degenerate_triangles += 1,
             TriangleClassification::Solid => {
                 self.generic_solid_triangles += 1;
             }
             TriangleClassification::Textured => {
                 self.generic_textured_triangles += 1;
+            }
+        }
+        self.record_generic_triangle_bbox(v0, v1, v2, classification);
+    }
+
+    fn record_generic_triangle_bbox(
+        &mut self,
+        v0: &egui::epaint::Vertex,
+        v1: &egui::epaint::Vertex,
+        v2: &egui::epaint::Vertex,
+        classification: TriangleClassification,
+    ) {
+        let min_x = v0.pos.x.min(v1.pos.x).min(v2.pos.x);
+        let max_x = v0.pos.x.max(v1.pos.x).max(v2.pos.x);
+        let min_y = v0.pos.y.min(v1.pos.y).min(v2.pos.y);
+        let max_y = v0.pos.y.max(v1.pos.y).max(v2.pos.y);
+        let width = (max_x.ceil() - min_x.floor()).max(0.0);
+        let height = (max_y.ceil() - min_y.floor()).max(0.0);
+        let area = width * height;
+        if !v0.pos.x.is_finite()
+            || !v0.pos.y.is_finite()
+            || !v1.pos.x.is_finite()
+            || !v1.pos.y.is_finite()
+            || !v2.pos.x.is_finite()
+            || !v2.pos.y.is_finite()
+            || !area.is_finite()
+        {
+            self.generic_triangle_bbox_non_finite += 1;
+            return;
+        }
+
+        self.generic_triangle_bbox_px_buckets.record(area);
+        match classification {
+            TriangleClassification::Degenerate => {
+                self.generic_degenerate_triangle_bbox_px_buckets
+                    .record(area);
+            }
+            TriangleClassification::Solid => {
+                self.generic_solid_triangle_bbox_px_buckets.record(area);
+            }
+            TriangleClassification::Textured => {
+                self.generic_textured_triangle_bbox_px_buckets.record(area);
             }
         }
     }
@@ -344,7 +437,7 @@ impl PrimitiveStats {
 
     fn log_line(&self) -> String {
         format!(
-            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} degenerate_triangles={}",
+            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -368,6 +461,11 @@ impl PrimitiveStats {
             self.generic_solid_triangles,
             self.generic_textured_triangles,
             self.degenerate_triangles,
+            self.generic_triangle_bbox_px_buckets,
+            self.generic_solid_triangle_bbox_px_buckets,
+            self.generic_textured_triangle_bbox_px_buckets,
+            self.generic_degenerate_triangle_bbox_px_buckets,
+            self.generic_triangle_bbox_non_finite,
         )
     }
 }
@@ -470,16 +568,68 @@ mod tests {
         assert_eq!(stats.generic_solid_triangles, 1);
         assert_eq!(stats.generic_textured_triangles, 1);
         assert_eq!(stats.degenerate_triangles, 1);
+        assert_eq!(
+            stats.generic_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
+            3
+        );
+        assert_eq!(
+            stats.generic_solid_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
+            1
+        );
+        assert_eq!(
+            stats.generic_textured_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
+            1
+        );
+        assert_eq!(
+            stats.generic_degenerate_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_LE4],
+            1
+        );
         stats.textured_quad_fast_path_hits = 2;
         stats.textured_quad_reject_non_affine_uv = 1;
-        assert!(stats.log_line().contains("generic_solid_triangles=1"));
-        assert!(stats.log_line().contains("textured_quad_fast_path_hits=2"));
-        assert!(
-            stats
-                .log_line()
-                .contains("textured_quad_reject_non_affine_uv=1")
+        let log_line = stats.log_line();
+        assert!(log_line.contains("generic_solid_triangles=1"));
+        assert!(log_line.contains("textured_quad_fast_path_hits=2"));
+        assert!(log_line.contains("textured_quad_reject_non_affine_uv=1"));
+        assert!(log_line.contains("degenerate_triangles=1"));
+        assert!(log_line.contains(
+            "generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=3,0,0,0,0,0"
+        ));
+        assert!(log_line.contains(
+            "generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=1,0,0,0,0,0"
+        ));
+        assert!(log_line.contains(
+            "generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=1,0,0,0,0,0"
+        ));
+        assert!(log_line.contains(
+            "generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=1,0,0,0,0,0"
+        ));
+        assert!(log_line.contains("generic_triangle_bbox_non_finite=0"));
+    }
+
+    #[test]
+    fn primitive_stats_buckets_large_textured_triangle() {
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let v0 = test_vertex(0.0, 0.0);
+        let v1 = test_vertex(33.0, 0.0);
+        let mut v2 = test_vertex(0.0, 33.0);
+        v2.color = egui::Color32::BLACK;
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture);
+
+        assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(
+            stats.generic_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_GT1024],
+            1
         );
-        assert!(stats.log_line().contains("degenerate_triangles=1"));
+        assert_eq!(
+            stats.generic_textured_triangle_bbox_px_buckets.counts[TRIANGLE_BBOX_BUCKET_GT1024],
+            1
+        );
     }
 
     #[test]
