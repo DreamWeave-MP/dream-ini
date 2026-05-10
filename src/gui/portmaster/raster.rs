@@ -2094,7 +2094,7 @@ fn rasterize_white_constant_texel_textured_triangle_no_stats(
             (pixel_edge0, pixel_edge1, pixel_edge2),
         );
         let row_offset = surface.row_offset(y);
-        let mut pixel_offset = row_offset + start_x * 4;
+        let mut run_start = None;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
@@ -2103,23 +2103,30 @@ fn rasterize_white_constant_texel_textured_triangle_no_stats(
                 && edge_covers_pixel(w1, raster.edge1_includes_boundary)
                 && edge_covers_pixel(w2, raster.edge2_includes_boundary)
             {
-                let dx = x - start_x;
-                let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
-                if alpha != 0 {
-                    let color = white_constant_texel_pixel_color_with_alpha(
-                        row_color, color_step, dx, alpha,
-                    );
-                    if alpha == u8::MAX {
-                        surface.write_opaque_pixel_at_offset(pixel_offset, color);
-                    } else {
-                        surface.blend_translucent_pixel_at_offset(pixel_offset, color);
-                    }
-                }
+                run_start.get_or_insert(x);
+            } else if let Some(start) = run_start.take() {
+                emit_white_constant_texel_run_no_stats(
+                    surface,
+                    row_color,
+                    color_step,
+                    start - start_x,
+                    x - start,
+                    row_offset + start * 4,
+                );
             }
             pixel_edge0 += raster.w0_step_x;
             pixel_edge1 += raster.w1_step_x;
             pixel_edge2 += raster.w2_step_x;
-            pixel_offset += 4;
+        }
+        if let Some(start) = run_start {
+            emit_white_constant_texel_run_no_stats(
+                surface,
+                row_color,
+                color_step,
+                start - start_x,
+                end_x - start,
+                row_offset + start * 4,
+            );
         }
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
@@ -2265,7 +2272,7 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
             (pixel_edge0, pixel_edge1, pixel_edge2),
         );
         let row_offset = surface.row_offset(y);
-        let mut pixel_offset = row_offset + start_x * 4;
+        let mut run_start = None;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
@@ -2274,42 +2281,103 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
                 && edge_covers_pixel(w1, raster.edge1_includes_boundary)
                 && edge_covers_pixel(w2, raster.edge2_includes_boundary)
             {
-                let dx = x - start_x;
-                let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
-                stats.textured_triangle_covered_px += 1;
-                stats.constant_texel_textured_triangle_covered_px += 1;
-                stats.constant_texel_textured_triangle_white_texel_covered_px += 1;
-                match alpha {
-                    0 => {
-                        stats.transparent_px += 1;
-                        stats.constant_texel_textured_triangle_transparent_px += 1;
-                    }
-                    u8::MAX => {
-                        stats.opaque_px += 1;
-                        stats.constant_texel_textured_triangle_opaque_px += 1;
-                        let color = white_constant_texel_pixel_color_with_alpha(
-                            row_color, color_step, dx, alpha,
-                        );
-                        surface.write_opaque_pixel_at_offset(pixel_offset, color);
-                    }
-                    _ => {
-                        stats.translucent_px += 1;
-                        stats.constant_texel_textured_triangle_translucent_px += 1;
-                        let color = white_constant_texel_pixel_color_with_alpha(
-                            row_color, color_step, dx, alpha,
-                        );
-                        surface.blend_translucent_pixel_at_offset(pixel_offset, color);
-                    }
-                }
+                run_start.get_or_insert(x);
+            } else if let Some(start) = run_start.take() {
+                emit_white_constant_texel_run_with_stats(
+                    surface,
+                    row_color,
+                    color_step,
+                    start - start_x,
+                    x - start,
+                    row_offset + start * 4,
+                    stats,
+                );
             }
             pixel_edge0 += raster.w0_step_x;
             pixel_edge1 += raster.w1_step_x;
             pixel_edge2 += raster.w2_step_x;
-            pixel_offset += 4;
+        }
+        if let Some(start) = run_start {
+            emit_white_constant_texel_run_with_stats(
+                surface,
+                row_color,
+                color_step,
+                start - start_x,
+                end_x - start,
+                row_offset + start * 4,
+                stats,
+            );
         }
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
         row_edge2 += raster.w2_step_y;
+    }
+}
+
+fn emit_white_constant_texel_run_no_stats(
+    surface: &mut SoftwareSurface,
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    start_dx: usize,
+    len: usize,
+    mut pixel_offset: usize,
+) {
+    for run_dx in 0..len {
+        let dx = start_dx + run_dx;
+        let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
+        match alpha {
+            0 => {}
+            u8::MAX => {
+                let color =
+                    white_constant_texel_pixel_color_with_alpha(row_color, color_step, dx, alpha);
+                surface.write_opaque_pixel_at_offset(pixel_offset, color);
+            }
+            _ => {
+                let color =
+                    white_constant_texel_pixel_color_with_alpha(row_color, color_step, dx, alpha);
+                surface.blend_translucent_pixel_at_offset(pixel_offset, color);
+            }
+        }
+        pixel_offset += 4;
+    }
+}
+
+fn emit_white_constant_texel_run_with_stats(
+    surface: &mut SoftwareSurface,
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    start_dx: usize,
+    len: usize,
+    mut pixel_offset: usize,
+    stats: &mut RasterStats,
+) {
+    stats.textured_triangle_covered_px += len;
+    stats.constant_texel_textured_triangle_covered_px += len;
+    stats.constant_texel_textured_triangle_white_texel_covered_px += len;
+    for run_dx in 0..len {
+        let dx = start_dx + run_dx;
+        let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
+        match alpha {
+            0 => {
+                stats.transparent_px += 1;
+                stats.constant_texel_textured_triangle_transparent_px += 1;
+            }
+            u8::MAX => {
+                stats.opaque_px += 1;
+                stats.constant_texel_textured_triangle_opaque_px += 1;
+                let color =
+                    white_constant_texel_pixel_color_with_alpha(row_color, color_step, dx, alpha);
+                surface.write_opaque_pixel_at_offset(pixel_offset, color);
+            }
+            _ => {
+                stats.translucent_px += 1;
+                stats.constant_texel_textured_triangle_translucent_px += 1;
+                let color =
+                    white_constant_texel_pixel_color_with_alpha(row_color, color_step, dx, alpha);
+                surface.blend_translucent_pixel_at_offset(pixel_offset, color);
+            }
+        }
+        pixel_offset += 4;
     }
 }
 
