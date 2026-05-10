@@ -44,6 +44,10 @@ pub(super) struct RasterStats {
     pub(super) solid_triangle_covered_px: usize,
     pub(super) solid_triangle_span_rows: usize,
     pub(super) solid_triangle_candidate_px: usize,
+    pub(super) solid_triangle_hint_rows: usize,
+    pub(super) solid_triangle_hint_fallback_rows: usize,
+    pub(super) solid_triangle_endpoint_probe_px: usize,
+    pub(super) solid_triangle_hint_candidate_px: usize,
     pub(super) solid_triangle_narrowed_rows: usize,
     pub(super) solid_triangle_full_scan_rows: usize,
     pub(super) textured_triangle_calls: usize,
@@ -89,7 +93,7 @@ impl RasterStats {
 
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -99,6 +103,10 @@ impl RasterStats {
             self.solid_triangle_covered_px,
             self.solid_triangle_span_rows,
             self.solid_triangle_candidate_px,
+            self.solid_triangle_hint_rows,
+            self.solid_triangle_hint_fallback_rows,
+            self.solid_triangle_endpoint_probe_px,
+            self.solid_triangle_hint_candidate_px,
             self.solid_triangle_narrowed_rows,
             self.solid_triangle_full_scan_rows,
             self.textured_triangle_calls,
@@ -899,18 +907,25 @@ fn rasterize_solid_triangle(
             }
         }
 
-        if let Some(span_start) =
-            solid_triangle_first_covered_x(start_x, end_x, y, vertices, coverage)
-        {
-            let span_end = solid_triangle_last_covered_x(start_x, end_x, y, vertices, coverage)
-                .map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
+        let collect_stats = stats.is_some();
+        let (span_start, first_probe_px) =
+            solid_triangle_first_covered_x(start_x, end_x, y, vertices, coverage, collect_stats);
+        let mut endpoint_probe_px = first_probe_px;
+        if let Some(span_start) = span_start {
+            let (last_x, last_probe_px) =
+                solid_triangle_last_covered_x(start_x, end_x, y, vertices, coverage, collect_stats);
+            endpoint_probe_px += last_probe_px;
+            let span_end = last_x.map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
             surface.blend_span(y, span_start, span_end, color);
             if let Some(stats) = &mut stats {
                 let px = span_end - span_start;
+                stats.solid_triangle_endpoint_probe_px += endpoint_probe_px;
                 stats.solid_triangle_covered_px += px;
                 stats.solid_triangle_span_rows += 1;
                 stats.record_alpha_px(color[3], px);
             }
+        } else if let Some(stats) = &mut stats {
+            stats.solid_triangle_endpoint_probe_px += endpoint_probe_px;
         }
     }
 }
@@ -921,8 +936,18 @@ fn solid_triangle_first_covered_x(
     y: usize,
     vertices: TriangleVertices<'_>,
     coverage: SolidTriangleCoverage,
-) -> Option<usize> {
-    (start_x..end_x).find(|&x| solid_triangle_covers_pixel(x, y, vertices, coverage))
+    collect_stats: bool,
+) -> (Option<usize>, usize) {
+    let mut probe_px = 0;
+    for x in start_x..end_x {
+        if collect_stats {
+            probe_px += 1;
+        }
+        if solid_triangle_covers_pixel(x, y, vertices, coverage) {
+            return (Some(x), probe_px);
+        }
+    }
+    (None, probe_px)
 }
 
 fn solid_triangle_last_covered_x(
@@ -931,10 +956,18 @@ fn solid_triangle_last_covered_x(
     y: usize,
     vertices: TriangleVertices<'_>,
     coverage: SolidTriangleCoverage,
-) -> Option<usize> {
-    (start_x..end_x)
-        .rev()
-        .find(|&x| solid_triangle_covers_pixel(x, y, vertices, coverage))
+    collect_stats: bool,
+) -> (Option<usize>, usize) {
+    let mut probe_px = 0;
+    for x in (start_x..end_x).rev() {
+        if collect_stats {
+            probe_px += 1;
+        }
+        if solid_triangle_covers_pixel(x, y, vertices, coverage) {
+            return (Some(x), probe_px);
+        }
+    }
+    (None, probe_px)
 }
 
 fn solid_triangle_covers_pixel(
@@ -2004,6 +2037,34 @@ mod tests {
     }
 
     #[test]
+    fn solid_triangle_stats_count_endpoint_probes_without_hints() {
+        let vertices = [
+            solid_vertex(1.0, 1.0, [160, 32, 64, 255]),
+            solid_vertex(6.0, 1.5, [160, 32, 64, 255]),
+            solid_vertex(2.0, 6.0, [160, 32, 64, 255]),
+        ];
+        let clip = full_clip(8, 8);
+        let mut surface = test_surface(8, 8);
+        let mut stats = RasterStats::default();
+
+        rasterize_triangle(
+            &mut surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &test_white_texture(),
+            clip,
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.solid_triangle_calls, 1);
+        assert!(stats.solid_triangle_endpoint_probe_px > 0);
+        assert_eq!(stats.solid_triangle_hint_rows, 0);
+        assert_eq!(stats.solid_triangle_hint_fallback_rows, 0);
+        assert_eq!(stats.solid_triangle_hint_candidate_px, 0);
+    }
+
+    #[test]
     fn solid_triangle_rasterizer_matches_reference_for_thin_sliver() {
         assert_solid_triangle_matches_reference(
             8,
@@ -2204,24 +2265,28 @@ mod tests {
             solid_triangle_covered_px: 7,
             solid_triangle_span_rows: 8,
             solid_triangle_candidate_px: 9,
-            solid_triangle_narrowed_rows: 10,
-            solid_triangle_full_scan_rows: 11,
-            textured_triangle_calls: 12,
-            textured_triangle_bbox_px: 13,
-            textured_triangle_covered_px: 14,
-            textured_triangle_candidate_px: 15,
-            textured_triangle_narrowed_rows: 16,
-            textured_triangle_full_scan_rows: 17,
-            degenerate_triangle_skips: 18,
-            fully_clipped_triangle_skips: 19,
-            opaque_px: 20,
-            translucent_px: 21,
-            transparent_px: 22,
+            solid_triangle_hint_rows: 10,
+            solid_triangle_hint_fallback_rows: 11,
+            solid_triangle_endpoint_probe_px: 12,
+            solid_triangle_hint_candidate_px: 13,
+            solid_triangle_narrowed_rows: 14,
+            solid_triangle_full_scan_rows: 15,
+            textured_triangle_calls: 16,
+            textured_triangle_bbox_px: 17,
+            textured_triangle_covered_px: 18,
+            textured_triangle_candidate_px: 19,
+            textured_triangle_narrowed_rows: 20,
+            textured_triangle_full_scan_rows: 21,
+            degenerate_triangle_skips: 22,
+            fully_clipped_triangle_skips: 23,
+            opaque_px: 24,
+            translucent_px: 25,
+            transparent_px: 26,
         };
 
         assert_eq!(
             stats.log_line(),
-            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_narrowed_rows=10 solid_triangle_full_scan_rows=11 textured_triangle_calls=12 textured_triangle_bbox_px=13 textured_triangle_covered_px=14 textured_triangle_candidate_px=15 textured_triangle_narrowed_rows=16 textured_triangle_full_scan_rows=17 degenerate_triangle_skips=18 fully_clipped_triangle_skips=19 opaque_px=20 translucent_px=21 transparent_px=22"
+            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_endpoint_probe_px=12 solid_triangle_hint_candidate_px=13 solid_triangle_narrowed_rows=14 solid_triangle_full_scan_rows=15 textured_triangle_calls=16 textured_triangle_bbox_px=17 textured_triangle_covered_px=18 textured_triangle_candidate_px=19 textured_triangle_narrowed_rows=20 textured_triangle_full_scan_rows=21 degenerate_triangle_skips=22 fully_clipped_triangle_skips=23 opaque_px=24 translucent_px=25 transparent_px=26"
         );
     }
 
