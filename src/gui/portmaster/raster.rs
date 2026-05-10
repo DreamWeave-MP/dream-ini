@@ -39,12 +39,23 @@ pub(super) struct RasterStats {
     pub(super) textured_triangle_covered_px: usize,
     pub(super) degenerate_triangle_skips: usize,
     pub(super) fully_clipped_triangle_skips: usize,
+    pub(super) opaque_px: usize,
+    pub(super) translucent_px: usize,
+    pub(super) transparent_px: usize,
 }
 
 impl RasterStats {
+    fn record_alpha_px(&mut self, alpha: u8, count: usize) {
+        match alpha {
+            0 => self.transparent_px += count,
+            u8::MAX => self.opaque_px += count,
+            _ => self.translucent_px += count,
+        }
+    }
+
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} degenerate_triangle_skips={} fully_clipped_triangle_skips={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -58,6 +69,9 @@ impl RasterStats {
             self.textured_triangle_covered_px,
             self.degenerate_triangle_skips,
             self.fully_clipped_triangle_skips,
+            self.opaque_px,
+            self.translucent_px,
+            self.transparent_px,
         )
     }
 }
@@ -572,7 +586,7 @@ fn rasterize_solid_rect(
     max_y: f32,
     clip: ClipBounds,
     color: [u8; 4],
-    stats: Option<&mut RasterStats>,
+    mut stats: Option<&mut RasterStats>,
 ) {
     let start_x = solid_rect_boundary_index(min_x, clip.max_x).max(clip.min_x);
     let end_x = solid_rect_boundary_index(max_x, clip.max_x).min(clip.max_x);
@@ -581,9 +595,11 @@ fn rasterize_solid_rect(
     if start_x >= end_x || start_y >= end_y {
         return;
     }
-    if let Some(stats) = stats {
+    if let Some(stats) = stats.as_deref_mut() {
+        let px = (end_x - start_x) * (end_y - start_y);
         stats.solid_rect_calls += 1;
-        stats.solid_rect_px += (end_x - start_x) * (end_y - start_y);
+        stats.solid_rect_px += px;
+        stats.record_alpha_px(color[3], px);
     }
     for y in start_y..end_y {
         surface.blend_span(y, start_x, end_x, color);
@@ -596,7 +612,7 @@ fn rasterize_textured_rect(
     bounds: QuadBounds,
     texture: &TextureImage,
     clip: ClipBounds,
-    stats: Option<&mut RasterStats>,
+    mut stats: Option<&mut RasterStats>,
 ) {
     let QuadBounds {
         min_x,
@@ -611,7 +627,7 @@ fn rasterize_textured_rect(
     if start_x >= end_x || start_y >= end_y {
         return;
     }
-    if let Some(stats) = stats {
+    if let Some(stats) = stats.as_deref_mut() {
         stats.textured_rect_calls += 1;
         stats.textured_rect_px += (end_x - start_x) * (end_y - start_y);
     }
@@ -637,6 +653,9 @@ fn rasterize_textured_rect(
                     .mul_add(tl_weight, corners.tr.uv.y.mul_add(sx, corners.bl.uv.y * sy)),
             );
             let color = modulate_color(vertex_color, sample_nearest(texture, uv));
+            if let Some(stats) = stats.as_deref_mut() {
+                stats.record_alpha_px(color[3], 1);
+            }
             surface.blend_pixel(x, y, color);
         }
     }
@@ -707,8 +726,10 @@ fn rasterize_solid_triangle(
         if let Some(start_x) = span_start {
             surface.blend_span(y, start_x, span_end, color);
             if let Some(stats) = stats.as_deref_mut() {
-                stats.solid_triangle_covered_px += span_end - start_x;
+                let px = span_end - start_x;
+                stats.solid_triangle_covered_px += px;
                 stats.solid_triangle_span_rows += 1;
+                stats.record_alpha_px(color[3], px);
             }
         }
         row_edge0 += w0_step_y;
@@ -767,6 +788,7 @@ fn rasterize_textured_triangle(
                 surface.blend_pixel(x, y, color);
                 if let Some(stats) = stats.as_deref_mut() {
                     stats.textured_triangle_covered_px += 1;
+                    stats.record_alpha_px(color[3], 1);
                 }
             }
             pixel_edge0 += w0_step_x;
@@ -1222,11 +1244,14 @@ mod tests {
             textured_triangle_covered_px: 11,
             degenerate_triangle_skips: 12,
             fully_clipped_triangle_skips: 13,
+            opaque_px: 14,
+            translucent_px: 15,
+            transparent_px: 16,
         };
 
         assert_eq!(
             stats.log_line(),
-            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 textured_triangle_calls=9 textured_triangle_bbox_px=10 textured_triangle_covered_px=11 degenerate_triangle_skips=12 fully_clipped_triangle_skips=13"
+            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 textured_triangle_calls=9 textured_triangle_bbox_px=10 textured_triangle_covered_px=11 degenerate_triangle_skips=12 fully_clipped_triangle_skips=13 opaque_px=14 translucent_px=15 transparent_px=16"
         );
     }
 
@@ -1294,6 +1319,54 @@ mod tests {
         assert!(accepted);
         assert_eq!(stats.textured_rect_calls, 1);
         assert_eq!(stats.textured_rect_px, 2);
+    }
+
+    #[test]
+    fn raster_stats_alpha_classes_count_emitted_source_pixels() {
+        let mut surface = test_surface(4, 4);
+        let mut stats = RasterStats::default();
+        let opaque_rect = translucent_quad_vertices(0.0, 0.0, 2.0, 1.0, [255, 255, 255, 255]);
+
+        assert!(rasterize_axis_aligned_solid_quad(
+            &mut surface,
+            quad_triangles(&opaque_rect),
+            &test_white_texture(),
+            full_clip(4, 4),
+            Some(&mut stats),
+        ));
+
+        let translucent_triangle = [
+            solid_vertex(0.0, 0.0, [128, 0, 0, 128]),
+            solid_vertex(2.0, 0.0, [128, 0, 0, 128]),
+            solid_vertex(0.0, 2.0, [128, 0, 0, 128]),
+        ];
+        rasterize_triangle(
+            &mut surface,
+            &translucent_triangle[0],
+            &translucent_triangle[1],
+            &translucent_triangle[2],
+            &test_white_texture(),
+            full_clip(4, 4),
+            Some(&mut stats),
+        );
+
+        let textured_rect = textured_quad_vertices(0.0, 2.0, 3.0, 3.0, [255, 255, 255, 255]);
+        let alpha_texture = TextureImage {
+            width: 3,
+            height: 1,
+            pixels: vec![255, 0, 0, 0, 0, 255, 0, 128, 0, 0, 255, 255],
+        };
+        assert!(rasterize_axis_aligned_textured_quad(
+            &mut surface,
+            quad_triangles(&textured_rect),
+            &alpha_texture,
+            full_clip(4, 4),
+            Some(&mut stats),
+        ));
+
+        assert_eq!(stats.opaque_px, 3);
+        assert_eq!(stats.translucent_px, 4);
+        assert_eq!(stats.transparent_px, 1);
     }
 
     #[test]
@@ -1901,6 +1974,17 @@ mod tests {
         );
 
         (accepted, surface.pixels)
+    }
+
+    fn quad_triangles(vertices: &[egui::epaint::Vertex; 4]) -> [&egui::epaint::Vertex; 6] {
+        [
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+        ]
     }
 
     fn render_test_quad_generic(
