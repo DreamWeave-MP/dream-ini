@@ -8,9 +8,9 @@ use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
     ClipBounds, RasterStats, TexturedQuadFastPathRejection, TriangleClassification,
-    classify_triangle, is_axis_aligned_quad, rasterize_axis_aligned_solid_quad,
-    rasterize_axis_aligned_textured_quad, rasterize_triangle, textured_quad_fast_path_rejection,
-    triangle_raster_bounds, usize_to_f32,
+    TriangleRasterBounds, classify_triangle, is_axis_aligned_quad,
+    rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad, rasterize_triangle,
+    textured_quad_fast_path_rejection, triangle_raster_bounds, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
@@ -87,6 +87,9 @@ impl SoftwareRenderer {
         let rasterize_elapsed = elapsed_micros(stage_start);
         if let Some(stats) = primitive_stats {
             write_log(frame.log, stats.log_line());
+            if let Some(log_line) = stats.solid_triangle_offenders_log_line() {
+                write_log(frame.log, log_line);
+            }
         }
         if let Some(stats) = raster_stats {
             write_log(frame.log, stats.log_line());
@@ -125,7 +128,7 @@ impl SoftwareRenderer {
         mut raster_stats: Option<&mut RasterStats>,
         mut raster_timings: Option<&mut RasterTimings>,
     ) -> io::Result<()> {
-        for primitive in primitives {
+        for (primitive_index, primitive) in primitives.iter().enumerate() {
             match &primitive.primitive {
                 egui::epaint::Primitive::Mesh(mesh) => {
                     if let Some(stats) = borrow_optional_mut(&mut stats) {
@@ -134,6 +137,7 @@ impl SoftwareRenderer {
                     self.rasterize_mesh(
                         mesh,
                         primitive.clip_rect,
+                        primitive_index,
                         borrow_optional_mut(&mut stats),
                         borrow_optional_mut(&mut raster_stats),
                         borrow_optional_mut(&mut raster_timings),
@@ -156,6 +160,7 @@ impl SoftwareRenderer {
         &mut self,
         mesh: &egui::Mesh,
         clip_rect: egui::Rect,
+        primitive_index: usize,
         mut stats: Option<&mut PrimitiveStats>,
         mut raster_stats: Option<&mut RasterStats>,
         mut raster_timings: Option<&mut RasterTimings>,
@@ -216,7 +221,17 @@ impl SoftwareRenderer {
                 continue;
             };
             if let Some(stats) = borrow_optional_mut(&mut stats) {
-                stats.record_generic_triangle(v0, v1, v2, texture, clip);
+                stats.record_generic_triangle(
+                    v0,
+                    v1,
+                    v2,
+                    texture,
+                    clip,
+                    TriangleSource {
+                        primitive_index,
+                        mesh_index_offset: index_offset,
+                    },
+                );
             }
             let triangle_classification = raster_timings
                 .as_ref()
@@ -481,6 +496,81 @@ struct PrimitiveStats {
     generic_textured_triangle_bbox_px_buckets: TriangleBboxBuckets,
     generic_degenerate_triangle_bbox_px_buckets: TriangleBboxBuckets,
     generic_triangle_bbox_non_finite: usize,
+    solid_triangle_offenders: SolidTriangleOffenders,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TriangleSource {
+    primitive_index: usize,
+    mesh_index_offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SolidTriangleOffender {
+    clipped_bbox_px: usize,
+    bounds: TriangleRasterBounds,
+    source: TriangleSource,
+    positions: [egui::Pos2; 3],
+}
+
+#[derive(Debug, Default)]
+struct SolidTriangleOffenders {
+    entries: [Option<SolidTriangleOffender>; SOLID_TRIANGLE_OFFENDER_LIMIT],
+    len: usize,
+}
+
+const SOLID_TRIANGLE_OFFENDER_LIMIT: usize = 8;
+
+impl SolidTriangleOffenders {
+    fn record(&mut self, offender: SolidTriangleOffender) {
+        if self.len < SOLID_TRIANGLE_OFFENDER_LIMIT {
+            self.entries[self.len] = Some(offender);
+            self.len += 1;
+            self.sort_used_entries();
+            return;
+        }
+
+        let Some(last) = self.entries[self.len - 1] else {
+            return;
+        };
+        if compare_solid_triangle_offenders(&offender, &last).is_gt() {
+            self.entries[self.len - 1] = Some(offender);
+            self.sort_used_entries();
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn sort_used_entries(&mut self) {
+        self.entries[..self.len].sort_by(|left, right| match (left, right) {
+            (Some(left), Some(right)) => compare_solid_triangle_offenders(right, left),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+    }
+}
+
+fn compare_solid_triangle_offenders(
+    left: &SolidTriangleOffender,
+    right: &SolidTriangleOffender,
+) -> std::cmp::Ordering {
+    left.clipped_bbox_px
+        .cmp(&right.clipped_bbox_px)
+        .then_with(|| {
+            right
+                .source
+                .primitive_index
+                .cmp(&left.source.primitive_index)
+        })
+        .then_with(|| {
+            right
+                .source
+                .mesh_index_offset
+                .cmp(&left.source.mesh_index_offset)
+        })
 }
 
 #[derive(Debug, Default)]
@@ -494,16 +584,16 @@ const TRIANGLE_BBOX_BUCKET_LE4: usize = 0;
 const TRIANGLE_BBOX_BUCKET_GT1024: usize = 5;
 
 impl TriangleBboxBuckets {
-    fn record(&mut self, area: usize) {
-        let bucket = if area <= 4 {
+    fn record(&mut self, clipped_bbox_px: usize) {
+        let bucket = if clipped_bbox_px <= 4 {
             0
-        } else if area <= 16 {
+        } else if clipped_bbox_px <= 16 {
             1
-        } else if area <= 64 {
+        } else if clipped_bbox_px <= 64 {
             2
-        } else if area <= 256 {
+        } else if clipped_bbox_px <= 256 {
             3
-        } else if area <= 1024 {
+        } else if clipped_bbox_px <= 1024 {
             4
         } else {
             TRIANGLE_BBOX_BUCKET_GT1024
@@ -549,6 +639,7 @@ impl PrimitiveStats {
         v2: &egui::epaint::Vertex,
         texture: &TextureImage,
         clip: ClipBounds,
+        source: TriangleSource,
     ) {
         self.generic_triangles_rasterized += 1;
         let classification = classify_triangle(v0, v1, v2, texture);
@@ -564,7 +655,7 @@ impl PrimitiveStats {
         if classification == TriangleClassification::Degenerate {
             return;
         }
-        self.record_generic_triangle_bbox(v0, v1, v2, classification, clip);
+        self.record_generic_triangle_bbox(v0, v1, v2, classification, clip, source);
     }
 
     fn record_generic_triangle_bbox(
@@ -574,6 +665,7 @@ impl PrimitiveStats {
         v2: &egui::epaint::Vertex,
         classification: TriangleClassification,
         clip: ClipBounds,
+        source: TriangleSource,
     ) {
         if classification == TriangleClassification::Degenerate {
             return;
@@ -592,19 +684,28 @@ impl PrimitiveStats {
         let Some(bounds) = triangle_raster_bounds(v0, v1, v2, clip) else {
             return;
         };
-        let area = bounds.pixel_area();
+        let clipped_bbox_px = bounds.pixel_area();
 
-        self.generic_triangle_bbox_px_buckets.record(area);
+        self.generic_triangle_bbox_px_buckets
+            .record(clipped_bbox_px);
         match classification {
             TriangleClassification::Degenerate => {
                 self.generic_degenerate_triangle_bbox_px_buckets
-                    .record(area);
+                    .record(clipped_bbox_px);
             }
             TriangleClassification::Solid => {
-                self.generic_solid_triangle_bbox_px_buckets.record(area);
+                self.generic_solid_triangle_bbox_px_buckets
+                    .record(clipped_bbox_px);
+                self.solid_triangle_offenders.record(SolidTriangleOffender {
+                    clipped_bbox_px,
+                    bounds,
+                    source,
+                    positions: [v0.pos, v1.pos, v2.pos],
+                });
             }
             TriangleClassification::Textured => {
-                self.generic_textured_triangle_bbox_px_buckets.record(area);
+                self.generic_textured_triangle_bbox_px_buckets
+                    .record(clipped_bbox_px);
             }
         }
     }
@@ -662,6 +763,46 @@ impl PrimitiveStats {
             self.generic_triangle_bbox_non_finite,
         )
     }
+
+    fn solid_triangle_offenders_log_line(&self) -> Option<String> {
+        if self.solid_triangle_offenders.is_empty() {
+            return None;
+        }
+
+        let mut log_line = format!(
+            "software renderer solid_triangle_offenders shown={} cap={}",
+            self.solid_triangle_offenders.len, SOLID_TRIANGLE_OFFENDER_LIMIT
+        );
+        for (index, offender) in self.solid_triangle_offenders.entries
+            [..self.solid_triangle_offenders.len]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            log_line.push(' ');
+            log_line.push_str(&format_solid_triangle_offender(index, *offender));
+        }
+        Some(log_line)
+    }
+}
+
+fn format_solid_triangle_offender(index: usize, offender: SolidTriangleOffender) -> String {
+    format!(
+        "offender{index}_clipped_bbox_px={} offender{index}_bounds={},{},{},{} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_v0={:.1},{:.1} offender{index}_v1={:.1},{:.1} offender{index}_v2={:.1},{:.1}",
+        offender.clipped_bbox_px,
+        offender.bounds.min_x,
+        offender.bounds.min_y,
+        offender.bounds.max_x,
+        offender.bounds.max_y,
+        offender.source.primitive_index,
+        offender.source.mesh_index_offset,
+        offender.positions[0].x,
+        offender.positions[0].y,
+        offender.positions[1].x,
+        offender.positions[1].y,
+        offender.positions[2].x,
+        offender.positions[2].y,
+    )
 }
 
 fn mesh_index_to_usize(index: u32) -> io::Result<usize> {
@@ -758,10 +899,10 @@ mod tests {
         let clip = clip_bounds(64, 64);
         let mut stats = PrimitiveStats::default();
 
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip);
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip, triangle_source(1, 0));
         v2.color = egui::Color32::BLACK;
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip);
-        stats.record_generic_triangle(&v0, &v1, &v0, &texture, clip);
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip, triangle_source(1, 3));
+        stats.record_generic_triangle(&v0, &v1, &v0, &texture, clip, triangle_source(1, 6));
 
         assert_eq!(stats.generic_triangles_rasterized, 3);
         assert_eq!(stats.generic_solid_triangles, 1);
@@ -819,7 +960,7 @@ mod tests {
         let clip = clip_bounds(64, 64);
         let mut stats = PrimitiveStats::default();
 
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip);
+        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip, triangle_source(2, 0));
 
         assert_eq!(stats.generic_textured_triangles, 1);
         assert_eq!(
@@ -845,7 +986,14 @@ mod tests {
         v2.color = egui::Color32::BLACK;
         let mut stats = PrimitiveStats::default();
 
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip_bounds(16, 16));
+        stats.record_generic_triangle(
+            &v0,
+            &v1,
+            &v2,
+            &texture,
+            clip_bounds(16, 16),
+            triangle_source(2, 0),
+        );
 
         assert_eq!(stats.generic_textured_triangles, 1);
         assert_eq!(stats.generic_triangle_bbox_non_finite, 0);
@@ -875,7 +1023,14 @@ mod tests {
         let v2 = test_vertex(20.0, 24.0);
         let mut stats = PrimitiveStats::default();
 
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip_bounds(16, 16));
+        stats.record_generic_triangle(
+            &v0,
+            &v1,
+            &v2,
+            &texture,
+            clip_bounds(16, 16),
+            triangle_source(3, 0),
+        );
 
         assert_eq!(stats.generic_triangles_rasterized, 1);
         assert_eq!(stats.generic_solid_triangles, 1);
@@ -903,7 +1058,14 @@ mod tests {
         let v2 = test_vertex(8.0, 8.0);
         let mut stats = PrimitiveStats::default();
 
-        stats.record_generic_triangle(&v0, &v1, &v2, &texture, clip_bounds(16, 16));
+        stats.record_generic_triangle(
+            &v0,
+            &v1,
+            &v2,
+            &texture,
+            clip_bounds(16, 16),
+            triangle_source(3, 0),
+        );
 
         assert_eq!(stats.generic_triangles_rasterized, 1);
         assert_eq!(stats.generic_solid_triangles, 0);
@@ -916,6 +1078,112 @@ mod tests {
         assert_eq!(
             triangle_bucket_total(&stats.generic_degenerate_triangle_bbox_px_buckets),
             0
+        );
+    }
+
+    #[test]
+    fn primitive_stats_keeps_top_solid_triangle_offenders_ordered_and_capped() {
+        let mut offenders = SolidTriangleOffenders::default();
+
+        for clipped_bbox_px in 1..=10 {
+            offenders.record(test_offender(
+                clipped_bbox_px,
+                clipped_bbox_px,
+                clipped_bbox_px * 3,
+            ));
+        }
+
+        assert_eq!(offenders.len, SOLID_TRIANGLE_OFFENDER_LIMIT);
+        let clipped_bbox_px: Vec<_> = offenders.entries[..offenders.len]
+            .iter()
+            .flatten()
+            .map(|offender| offender.clipped_bbox_px)
+            .collect();
+        assert_eq!(clipped_bbox_px, vec![10, 9, 8, 7, 6, 5, 4, 3]);
+    }
+
+    #[test]
+    fn primitive_stats_orders_solid_triangle_offender_ties_by_source() {
+        let mut offenders = SolidTriangleOffenders::default();
+
+        offenders.record(test_offender(12, 2, 6));
+        offenders.record(test_offender(12, 1, 9));
+        offenders.record(test_offender(12, 1, 3));
+
+        let sources: Vec<_> = offenders.entries[..offenders.len]
+            .iter()
+            .flatten()
+            .map(|offender| offender.source)
+            .collect();
+        assert_eq!(
+            sources,
+            vec![
+                triangle_source(1, 3),
+                triangle_source(1, 9),
+                triangle_source(2, 6)
+            ]
+        );
+    }
+
+    #[test]
+    fn primitive_stats_formats_solid_triangle_offenders_log_line() {
+        let mut stats = PrimitiveStats::default();
+        stats
+            .solid_triangle_offenders
+            .record(SolidTriangleOffender {
+                clipped_bbox_px: 9,
+                bounds: TriangleRasterBounds {
+                    min_x: 1,
+                    min_y: 2,
+                    max_x: 4,
+                    max_y: 5,
+                },
+                source: triangle_source(7, 12),
+                positions: [
+                    egui::pos2(1.25, 2.5),
+                    egui::pos2(3.0, 4.0),
+                    egui::pos2(5.0, 6.75),
+                ],
+            });
+
+        assert_eq!(
+            stats.solid_triangle_offenders_log_line().as_deref(),
+            Some(
+                "software renderer solid_triangle_offenders shown=1 cap=8 offender0_clipped_bbox_px=9 offender0_bounds=1,2,4,5 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_v0=1.2,2.5 offender0_v1=3.0,4.0 offender0_v2=5.0,6.8"
+            )
+        );
+    }
+
+    #[test]
+    fn primitive_stats_formats_multiple_solid_triangle_offenders_with_indexed_keys() {
+        let mut stats = PrimitiveStats::default();
+        stats
+            .solid_triangle_offenders
+            .record(test_offender(12, 2, 6));
+        stats
+            .solid_triangle_offenders
+            .record(test_offender(9, 1, 3));
+
+        let log_line = stats
+            .solid_triangle_offenders_log_line()
+            .expect("offender log line");
+
+        assert_eq!(
+            log_line,
+            "software renderer solid_triangle_offenders shown=2 cap=8 offender0_clipped_bbox_px=12 offender0_bounds=0,0,12,1 offender0_primitive=2 offender0_mesh_index_offset=6 offender0_v0=0.0,0.0 offender0_v1=0.0,0.0 offender0_v2=0.0,0.0 offender1_clipped_bbox_px=9 offender1_bounds=0,0,9,1 offender1_primitive=1 offender1_mesh_index_offset=3 offender1_v0=0.0,0.0 offender1_v1=0.0,0.0 offender1_v2=0.0,0.0"
+        );
+        assert!(!log_line.contains(" area="));
+        assert!(!log_line.contains(" count="));
+        assert!(!log_line.contains(" bounds="));
+        assert!(log_line.contains("offender0_clipped_bbox_px="));
+        assert!(log_line.contains("offender1_clipped_bbox_px="));
+    }
+
+    #[test]
+    fn primitive_stats_skips_solid_triangle_offenders_log_line_when_empty() {
+        assert_eq!(
+            PrimitiveStats::default().solid_triangle_offenders_log_line(),
+            None
         );
     }
 
@@ -975,6 +1243,7 @@ mod tests {
             .rasterize_mesh(
                 &mesh,
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
+                0,
                 Some(&mut stats),
                 None,
                 None,
@@ -1004,6 +1273,7 @@ mod tests {
             .rasterize_mesh(
                 &mesh,
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(8.0, 8.0)),
+                0,
                 Some(&mut stats),
                 None,
                 None,
@@ -1070,6 +1340,31 @@ mod tests {
 
     fn triangle_bucket_total(buckets: &TriangleBboxBuckets) -> usize {
         buckets.counts.iter().sum()
+    }
+
+    const fn triangle_source(primitive_index: usize, mesh_index_offset: usize) -> TriangleSource {
+        TriangleSource {
+            primitive_index,
+            mesh_index_offset,
+        }
+    }
+
+    fn test_offender(
+        clipped_bbox_px: usize,
+        primitive_index: usize,
+        mesh_index_offset: usize,
+    ) -> SolidTriangleOffender {
+        SolidTriangleOffender {
+            clipped_bbox_px,
+            bounds: TriangleRasterBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: clipped_bbox_px,
+                max_y: 1,
+            },
+            source: triangle_source(primitive_index, mesh_index_offset),
+            positions: [egui::Pos2::ZERO; 3],
+        }
     }
 
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
