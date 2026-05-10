@@ -1361,6 +1361,12 @@ struct RectUvBasis {
     inv_height: f32,
 }
 
+#[derive(Clone, Copy)]
+struct RectUvRow {
+    uv: egui::Pos2,
+    step_x: egui::Vec2,
+}
+
 fn rasterize_textured_rect_no_stats(
     surface: &mut SoftwareSurface,
     corners: TexturedQuadCorners,
@@ -1370,11 +1376,11 @@ fn rasterize_textured_rect_no_stats(
     vertex_color: [u8; 4],
 ) {
     for y in range.start_y..range.end_y {
-        let sy = (usize_to_f32(y) + 0.5 - uv_basis.min_y) * uv_basis.inv_height;
+        let mut row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         for x in range.start_x..range.end_x {
-            let sx = (usize_to_f32(x) + 0.5 - uv_basis.min_x) * uv_basis.inv_width;
-            let color = textured_rect_pixel_color(corners, texture, vertex_color, sx, sy);
+            let color = modulate_color(vertex_color, sample_nearest(texture, row.uv));
             surface.blend_pixel(x, y, color);
+            row.uv += row.step_x;
         }
     }
 }
@@ -1389,25 +1395,36 @@ fn rasterize_textured_rect_with_stats(
     stats: &mut RasterStats,
 ) {
     for y in range.start_y..range.end_y {
-        let sy = (usize_to_f32(y) + 0.5 - uv_basis.min_y) * uv_basis.inv_height;
+        let mut row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         for x in range.start_x..range.end_x {
-            let sx = (usize_to_f32(x) + 0.5 - uv_basis.min_x) * uv_basis.inv_width;
-            let color = textured_rect_pixel_color(corners, texture, vertex_color, sx, sy);
+            let color = modulate_color(vertex_color, sample_nearest(texture, row.uv));
             stats.record_alpha_px(color[3], 1);
             surface.blend_pixel(x, y, color);
+            row.uv += row.step_x;
         }
     }
 }
 
-fn textured_rect_pixel_color(
+fn textured_rect_uv_row(
     corners: TexturedQuadCorners,
-    texture: &TextureImage,
-    vertex_color: [u8; 4],
-    sx: f32,
-    sy: f32,
-) -> [u8; 4] {
+    start_x: usize,
+    y: usize,
+    uv_basis: RectUvBasis,
+) -> RectUvRow {
+    let sx = (usize_to_f32(start_x) + 0.5 - uv_basis.min_x) * uv_basis.inv_width;
+    let sy = (usize_to_f32(y) + 0.5 - uv_basis.min_y) * uv_basis.inv_height;
+    RectUvRow {
+        uv: textured_rect_uv(corners, sx, sy),
+        step_x: egui::vec2(
+            (corners.tr.uv.x - corners.tl.uv.x) * uv_basis.inv_width,
+            (corners.tr.uv.y - corners.tl.uv.y) * uv_basis.inv_width,
+        ),
+    }
+}
+
+fn textured_rect_uv(corners: TexturedQuadCorners, sx: f32, sy: f32) -> egui::Pos2 {
     let tl_weight = 1.0 - sx - sy;
-    let uv = egui::pos2(
+    egui::pos2(
         corners
             .tl
             .uv
@@ -1418,8 +1435,7 @@ fn textured_rect_pixel_color(
             .uv
             .y
             .mul_add(tl_weight, corners.tr.uv.y.mul_add(sx, corners.bl.uv.y * sy)),
-    );
-    modulate_color(vertex_color, sample_nearest(texture, uv))
+    )
 }
 
 fn solid_rect_boundary_index(boundary: f32, clip_max: usize) -> usize {
