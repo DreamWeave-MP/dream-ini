@@ -93,6 +93,14 @@ fn edge(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
     (c.x - a.x).mul_add(b.y - a.y, -((c.y - a.y) * (b.x - a.x)))
 }
 
+fn edge_step_x(a: egui::Pos2, b: egui::Pos2) -> f32 {
+    b.y - a.y
+}
+
+fn edge_step_y(a: egui::Pos2, b: egui::Pos2) -> f32 {
+    -(b.x - a.x)
+}
+
 pub(super) fn rasterize_triangle(
     surface: &mut SoftwareSurface,
     v0: &egui::epaint::Vertex,
@@ -117,24 +125,43 @@ pub(super) fn rasterize_triangle(
         return;
     }
 
+    let inv_area = 1.0 / area;
+    let start = egui::pos2(usize_to_f32(min_x) + 0.5, usize_to_f32(min_y) + 0.5);
+    let w0_step_x = edge_step_x(v1.pos, v2.pos);
+    let w1_step_x = edge_step_x(v2.pos, v0.pos);
+    let w2_step_x = edge_step_x(v0.pos, v1.pos);
+    let w0_step_y = edge_step_y(v1.pos, v2.pos);
+    let w1_step_y = edge_step_y(v2.pos, v0.pos);
+    let w2_step_y = edge_step_y(v0.pos, v1.pos);
+    let mut row_w0 = edge(v1.pos, v2.pos, start);
+    let mut row_w1 = edge(v2.pos, v0.pos, start);
+    let mut row_w2 = edge(v0.pos, v1.pos, start);
+
     for y in min_y..max_y {
+        let mut raw_w0 = row_w0;
+        let mut raw_w1 = row_w1;
+        let mut raw_w2 = row_w2;
         for x in min_x..max_x {
-            let point = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
-            let w0 = edge(v1.pos, v2.pos, point) / area;
-            let w1 = edge(v2.pos, v0.pos, point) / area;
-            let w2 = edge(v0.pos, v1.pos, point) / area;
-            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
-                continue;
+            let w0 = raw_w0 * inv_area;
+            let w1 = raw_w1 * inv_area;
+            let w2 = raw_w2 * inv_area;
+            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                let uv = egui::pos2(
+                    v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
+                    v0.uv.y.mul_add(w0, v1.uv.y.mul_add(w1, v2.uv.y * w2)),
+                );
+                let vertex_color = interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2);
+                let texture_color = sample_nearest(texture, uv);
+                let color = modulate_color(vertex_color, texture_color);
+                surface.blend_pixel(x, y, color);
             }
-            let uv = egui::pos2(
-                v0.uv.x.mul_add(w0, v1.uv.x.mul_add(w1, v2.uv.x * w2)),
-                v0.uv.y.mul_add(w0, v1.uv.y.mul_add(w1, v2.uv.y * w2)),
-            );
-            let vertex_color = interpolate_color(v0.color, v1.color, v2.color, w0, w1, w2);
-            let texture_color = sample_nearest(texture, uv);
-            let color = modulate_color(vertex_color, texture_color);
-            surface.blend_pixel(x, y, color);
+            raw_w0 += w0_step_x;
+            raw_w1 += w1_step_x;
+            raw_w2 += w2_step_x;
         }
+        row_w0 += w0_step_y;
+        row_w1 += w1_step_y;
+        row_w2 += w2_step_y;
     }
 }
 
@@ -242,33 +269,66 @@ mod tests {
 
     #[test]
     fn triangle_rasterizer_draws_into_tiny_surface() {
+        let v0 = test_vertex(0.0, 0.0);
+        let v1 = test_vertex(2.0, 0.0);
+        let v2 = test_vertex(0.0, 2.0);
+
+        let pixels = render_test_triangle(2, 2, &v0, &v1, &v2);
+
+        assert_eq!(white_pixel_count(&pixels), 3);
+    }
+
+    #[test]
+    fn triangle_rasterizer_draws_clockwise_and_counter_clockwise_consistently() {
+        let v0 = test_vertex(0.0, 0.0);
+        let v1 = test_vertex(3.0, 0.0);
+        let v2 = test_vertex(0.0, 3.0);
+
+        let counter_clockwise = render_test_triangle(3, 3, &v0, &v1, &v2);
+        let clockwise = render_test_triangle(3, 3, &v0, &v2, &v1);
+
+        assert_eq!(counter_clockwise, clockwise);
+        assert_eq!(white_pixel_count(&counter_clockwise), 6);
+    }
+
+    fn render_test_triangle(
+        width: usize,
+        height: usize,
+        v0: &egui::epaint::Vertex,
+        v1: &egui::epaint::Vertex,
+        v2: &egui::epaint::Vertex,
+    ) -> Vec<u8> {
         let mut surface = SoftwareSurface::default();
-        surface.resize(2, 2).expect("surface");
+        surface.resize(width, height).expect("surface");
         surface.clear([0, 0, 0, 255]);
         let texture = TextureImage {
             width: 1,
             height: 1,
             pixels: vec![255, 255, 255, 255],
         };
-        let v0 = test_vertex(0.0, 0.0);
-        let v1 = test_vertex(2.0, 0.0);
-        let v2 = test_vertex(0.0, 2.0);
 
         rasterize_triangle(
             &mut surface,
-            &v0,
-            &v1,
-            &v2,
+            v0,
+            v1,
+            v2,
             &texture,
             ClipBounds {
                 min_x: 0,
                 min_y: 0,
-                max_x: 2,
-                max_y: 2,
+                max_x: width,
+                max_y: height,
             },
         );
 
-        assert!(surface.pixels.chunks_exact(4).any(|pixel| pixel[0] == 255));
+        surface.pixels
+    }
+
+    fn white_pixel_count(pixels: &[u8]) -> usize {
+        pixels
+            .chunks_exact(4)
+            .filter(|pixel| pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255)
+            .count()
     }
 
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
