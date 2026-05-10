@@ -6,6 +6,13 @@ use std::io;
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TriangleClassification {
+    Degenerate,
+    Solid,
+    Textured,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ClipBounds {
     min_x: usize,
@@ -158,6 +165,22 @@ pub(super) fn rasterize_triangle(
     rasterize_textured_triangle(surface, v0, v1, v2, texture, clip, area);
 }
 
+pub(super) fn classify_triangle(
+    v0: &egui::epaint::Vertex,
+    v1: &egui::epaint::Vertex,
+    v2: &egui::epaint::Vertex,
+    texture: &TextureImage,
+) -> TriangleClassification {
+    if edge(v0.pos, v1.pos, v2.pos).abs() <= f32::EPSILON {
+        return TriangleClassification::Degenerate;
+    }
+    if solid_triangle_color(v0, v1, v2, texture).is_some() {
+        TriangleClassification::Solid
+    } else {
+        TriangleClassification::Textured
+    }
+}
+
 pub(super) fn rasterize_axis_aligned_solid_quad(
     surface: &mut SoftwareSurface,
     vertices: [&egui::epaint::Vertex; 6],
@@ -179,6 +202,10 @@ pub(super) fn rasterize_axis_aligned_solid_quad(
     };
     rasterize_solid_rect(surface, min_x, min_y, max_x, max_y, clip, color);
     true
+}
+
+pub(super) fn is_axis_aligned_quad(vertices: [&egui::epaint::Vertex; 6]) -> bool {
+    triangles_share_rectangle_diagonal(vertices) && axis_aligned_quad_bounds(vertices).is_some()
 }
 
 fn triangles_share_rectangle_diagonal(vertices: [&egui::epaint::Vertex; 6]) -> bool {
@@ -689,6 +716,31 @@ mod tests {
     }
 
     #[test]
+    fn triangle_classification_matches_rasterizer_solid_and_textured_paths() {
+        let texture = test_texture_2x2();
+        let v0 = test_vertex(0.0, 0.0);
+        let mut v1 = test_vertex(3.0, 0.0);
+        let mut v2 = test_vertex(0.0, 3.0);
+
+        assert_eq!(
+            classify_triangle(&v0, &v1, &v2, &texture),
+            TriangleClassification::Solid
+        );
+
+        v1.uv = egui::pos2(1.0, 0.0);
+        assert_eq!(
+            classify_triangle(&v0, &v1, &v2, &texture),
+            TriangleClassification::Textured
+        );
+
+        v2.pos = v0.pos;
+        assert_eq!(
+            classify_triangle(&v0, &v1, &v2, &texture),
+            TriangleClassification::Degenerate
+        );
+    }
+
+    #[test]
     fn solid_triangle_edges_cover_shared_diagonal_once() {
         let color = egui::Color32::from_rgba_premultiplied(128, 0, 0, 128);
         let mut top_left = test_vertex(0.0, 0.0);
@@ -842,6 +894,29 @@ mod tests {
 
         assert!(!accepted);
         assert_eq!(white_pixel_count(&surface.pixels), 0);
+    }
+
+    #[test]
+    fn axis_aligned_quad_classification_matches_fast_path_shape_requirements() {
+        let mut vertices = test_quad_vertices();
+        assert!(is_axis_aligned_quad([
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+        ]));
+
+        vertices[3].pos.x = 4.5;
+        assert!(!is_axis_aligned_quad([
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+        ]));
     }
 
     #[test]
