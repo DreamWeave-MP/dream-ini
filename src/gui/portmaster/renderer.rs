@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::io;
+use std::time::Instant;
 
 use super::log::write_log;
 use super::raster::{ClipBounds, rasterize_triangle, usize_to_f32};
@@ -21,9 +22,14 @@ impl SoftwareRenderer {
         height: usize,
         frame: &mut GuiFrame<'_, S>,
     ) -> io::Result<()> {
+        let log_frame = frame.log_frame;
+        let total_start = log_frame.then(Instant::now);
+        let stage_start = log_frame.then(Instant::now);
         self.surface.resize(width, height)?;
         self.surface.clear([17, 20, 28, 255]);
+        let resize_clear_elapsed = elapsed_micros(stage_start);
 
+        let stage_start = log_frame.then(Instant::now);
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -35,9 +41,16 @@ impl SoftwareRenderer {
         let output = frame
             .context
             .run_ui(raw_input, |ui| frame.app.ui(ui, frame.shell));
+        let egui_run_elapsed = elapsed_micros(stage_start);
+
+        let stage_start = log_frame.then(Instant::now);
         self.textures.apply(&output.textures_delta)?;
+        let texture_apply_elapsed = elapsed_micros(stage_start);
+
+        let stage_start = log_frame.then(Instant::now);
         let primitives = frame.context.tessellate(output.shapes, 1.0);
-        if frame.log_frame {
+        let tessellate_elapsed = elapsed_micros(stage_start);
+        if log_frame {
             write_log(
                 frame.log,
                 format!(
@@ -51,9 +64,24 @@ impl SoftwareRenderer {
                 ),
             );
         }
+
+        let stage_start = log_frame.then(Instant::now);
         self.rasterize(&primitives)?;
+        let rasterize_elapsed = elapsed_micros(stage_start);
+
+        let stage_start = log_frame.then(Instant::now);
         for id in output.textures_delta.free {
             self.textures.free(id);
+        }
+        let texture_free_elapsed = elapsed_micros(stage_start);
+        let total_elapsed = elapsed_micros(total_start);
+        if log_frame {
+            write_log(
+                frame.log,
+                format!(
+                    "software renderer timings resize_clear_us={resize_clear_elapsed} egui_run_us={egui_run_elapsed} texture_apply_us={texture_apply_elapsed} tessellate_us={tessellate_elapsed} rasterize_us={rasterize_elapsed} texture_free_us={texture_free_elapsed} total_us={total_elapsed}"
+                ),
+            );
         }
         Ok(())
     }
@@ -107,4 +135,8 @@ impl SoftwareRenderer {
         }
         Ok(())
     }
+}
+
+fn elapsed_micros(start: Option<Instant>) -> u128 {
+    start.map_or(0, |start| start.elapsed().as_micros())
 }

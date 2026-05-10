@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
+use std::time::Instant;
 
 use super::log::{SharedLog, write_log};
 use super::pacing::DisplayTiming;
@@ -171,6 +172,9 @@ impl Framebuffer {
         renderer: &mut SoftwareRenderer,
         frame: &mut GuiFrame<'_, S>,
     ) -> io::Result<()> {
+        let log_frame = frame.log_frame;
+        let total_start = log_frame.then(Instant::now);
+        let stage_start = log_frame.then(Instant::now);
         self.var = get_var_info(&self.file).map_err(|error| {
             write_log(
                 frame.log,
@@ -178,27 +182,54 @@ impl Framebuffer {
             );
             error
         })?;
+        let var_refresh_elapsed = elapsed_micros(stage_start);
+
+        let stage_start = log_frame.then(Instant::now);
         self.validate_format()?;
         let viewport = visible_viewport(&self.fix, &self.var)?;
-        if frame.log_frame {
+        let validate_viewport_elapsed = elapsed_micros(stage_start);
+        if log_frame {
             log_visible_viewport(frame.log, &viewport);
             log_derived_page_info(frame.log, &self.var);
         }
+
+        let stage_start = log_frame.then(Instant::now);
         renderer.render(viewport.width, viewport.height, frame)?;
+        let render_elapsed = elapsed_micros(stage_start);
+
+        let stage_start = log_frame.then(Instant::now);
         self.capture_snapshot_if_needed(frame.snapshots, &viewport, frame.log)?;
-        self.blit_rgba_surface(renderer.surface(), &viewport)
+        let snapshot_elapsed = elapsed_micros(stage_start);
+
+        let stage_start = log_frame.then(Instant::now);
+        let blit_format = self.blit_rgba_surface(renderer.surface(), &viewport)?;
+        let blit_elapsed = elapsed_micros(stage_start);
+        let total_elapsed = elapsed_micros(total_start);
+        if log_frame {
+            let blit_format_name = blit_format.name();
+            write_log(
+                frame.log,
+                format!(
+                    "framebuffer draw timings blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} total_us={total_elapsed}"
+                ),
+            );
+        }
+        Ok(())
     }
 
     fn blit_rgba_surface(
         &mut self,
         surface: &SoftwareSurface,
         viewport: &VisibleViewport,
-    ) -> io::Result<()> {
+    ) -> io::Result<BlitFormat> {
         if surface.width != viewport.width || surface.height != viewport.height {
             return Err(io::Error::other(
                 "software surface size does not match viewport",
             ));
         }
+
+        let blit_format = detect_fast_blit_format(&self.var)
+            .map_or(BlitFormat::GenericPackColor, BlitFormat::Fast32ByteAligned);
 
         // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
         let pixels =
@@ -237,16 +268,18 @@ impl Framebuffer {
                     surface.pixels[source_offset + 1],
                     surface.pixels[source_offset + 2],
                 );
-                let packed = pack_color(&self.var, color);
-                write_pixel(
-                    &mut pixels[pixel_offset..pixel_end],
-                    viewport.bytes_per_pixel,
-                    packed,
-                );
+                let pixel = &mut pixels[pixel_offset..pixel_end];
+                match blit_format {
+                    BlitFormat::Fast32ByteAligned(format) => write_fast_pixel(pixel, format, color),
+                    BlitFormat::GenericPackColor => {
+                        let packed = pack_color(&self.var, color);
+                        write_pixel(pixel, viewport.bytes_per_pixel, packed);
+                    }
+                }
             }
         }
 
-        Ok(())
+        Ok(blit_format)
     }
 
     fn capture_snapshot_if_needed(
@@ -641,6 +674,29 @@ fn viewport_row_offset(viewport: &VisibleViewport, y: usize) -> io::Result<usize
         .ok_or_else(|| io::Error::other("framebuffer viewport row offset overflow"))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlitFormat {
+    Fast32ByteAligned(Fast32ByteAlignedBlit),
+    GenericPackColor,
+}
+
+impl BlitFormat {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Fast32ByteAligned(_) => "fast32-byte-aligned",
+            Self::GenericPackColor => "generic-pack-color",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Fast32ByteAlignedBlit {
+    red: usize,
+    green: usize,
+    blue: usize,
+    alpha: Option<usize>,
+}
+
 pub(super) fn framebuffer_draw_enabled() -> bool {
     env::var(DRAW_ENV_VAR).map_or(true, |value| {
         !matches!(
@@ -657,6 +713,82 @@ fn pack_color(var: &FbVarScreeninfo, (red, green, blue): (u8, u8, u8)) -> u32 {
         | pack_channel(u8::MAX, &var.transp)
 }
 
+fn detect_fast_blit_format(var: &FbVarScreeninfo) -> Option<Fast32ByteAlignedBlit> {
+    if var.bits_per_pixel != 32 {
+        return None;
+    }
+    let red = byte_aligned_channel(&var.red)?;
+    let green = byte_aligned_channel(&var.green)?;
+    let blue = byte_aligned_channel(&var.blue)?;
+    if !distinct_bytes([Some(red), Some(green), Some(blue), None]) {
+        return None;
+    }
+    let alpha = if var.transp.length == 0 {
+        None
+    } else {
+        Some(byte_aligned_channel(&var.transp)?)
+    };
+    if !distinct_bytes([Some(red), Some(green), Some(blue), alpha]) {
+        return None;
+    }
+
+    Some(Fast32ByteAlignedBlit {
+        red,
+        green,
+        blue,
+        alpha,
+    })
+}
+
+fn byte_aligned_channel(field: &FbBitfield) -> Option<usize> {
+    if field.length != 8 || !field.offset.is_multiple_of(8) || field.msb_right != 0 {
+        return None;
+    }
+    let byte = usize::try_from(field.offset / 8).ok()?;
+    if byte >= 4 {
+        return None;
+    }
+    Some(native_endian_byte_index(byte))
+}
+
+const fn native_endian_byte_index(byte: usize) -> usize {
+    if cfg!(target_endian = "little") {
+        byte
+    } else {
+        3 - byte
+    }
+}
+
+fn distinct_bytes(bytes: [Option<usize>; 4]) -> bool {
+    for (index, byte) in bytes.iter().enumerate() {
+        let Some(byte) = byte else {
+            continue;
+        };
+        if bytes[index + 1..]
+            .iter()
+            .flatten()
+            .any(|other| other == byte)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn write_fast_pixel(
+    pixel: &mut [u8],
+    format: Fast32ByteAlignedBlit,
+    (red, green, blue): (u8, u8, u8),
+) {
+    pixel[..4].fill(0);
+    pixel[format.red] = red;
+    pixel[format.green] = green;
+    pixel[format.blue] = blue;
+    if let Some(alpha) = format.alpha {
+        pixel[alpha] = u8::MAX;
+    }
+}
+
 fn pack_channel(value: u8, field: &FbBitfield) -> u32 {
     if field.length == 0 || field.offset >= 32 {
         return 0;
@@ -670,6 +802,10 @@ fn pack_channel(value: u8, field: &FbBitfield) -> u32 {
 fn write_pixel(pixel: &mut [u8], bytes_per_pixel: usize, packed: u32) {
     let bytes = packed.to_ne_bytes();
     pixel[..bytes_per_pixel].copy_from_slice(&bytes[..bytes_per_pixel]);
+}
+
+fn elapsed_micros(start: Option<Instant>) -> u128 {
+    start.map_or(0, |start| start.elapsed().as_micros())
 }
 
 #[cfg(test)]
@@ -791,6 +927,59 @@ mod tests {
         };
 
         assert_eq!(pack_color(&var, (0x12, 0x34, 0x56)), 0xff12_3456);
+    }
+
+    #[test]
+    fn portmaster_fast_blit_matches_pack_color_for_common_rgb32_layout() {
+        let var = rgb32_var_without_alpha();
+        let format = detect_fast_blit_format(&var).expect("fast blit format");
+        let color = (0x12, 0x34, 0x56);
+        let mut fast_pixel = [0xff; 4];
+        let mut generic_pixel = [0xff; 4];
+
+        write_fast_pixel(&mut fast_pixel, format, color);
+        write_pixel(&mut generic_pixel, 4, pack_color(&var, color));
+
+        assert_eq!(fast_pixel, generic_pixel);
+    }
+
+    #[test]
+    fn portmaster_fast_blit_rejects_non_byte_aligned_layout() {
+        let mut var = rgb32_var_without_alpha();
+        var.red.offset = 17;
+
+        assert_eq!(detect_fast_blit_format(&var), None);
+    }
+
+    #[test]
+    fn portmaster_fast_blit_rejects_non_32bpp_layout() {
+        let mut var = rgb32_var_without_alpha();
+        var.bits_per_pixel = 16;
+
+        assert_eq!(detect_fast_blit_format(&var), None);
+    }
+
+    fn rgb32_var_without_alpha() -> FbVarScreeninfo {
+        FbVarScreeninfo {
+            bits_per_pixel: 32,
+            red: FbBitfield {
+                offset: 16,
+                length: 8,
+                ..Default::default()
+            },
+            green: FbBitfield {
+                offset: 8,
+                length: 8,
+                ..Default::default()
+            },
+            blue: FbBitfield {
+                offset: 0,
+                length: 8,
+                ..Default::default()
+            },
+            transp: FbBitfield::default(),
+            ..Default::default()
+        }
     }
 
     fn test_viewport(base_offset: usize) -> VisibleViewport {
