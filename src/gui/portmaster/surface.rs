@@ -46,6 +46,15 @@ impl SoftwareSurface {
 }
 
 fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {
+    match source[3] {
+        0 => return,
+        u8::MAX => {
+            destination.copy_from_slice(&source);
+            return;
+        }
+        _ => {}
+    }
+
     let inverse_alpha = u16::from(u8::MAX - source[3]);
     // egui::Color32 stores premultiplied-alpha sRGBA. Do not multiply the
     // source channels by alpha again here unless darker fringes around every
@@ -64,6 +73,24 @@ fn blend_premultiplied_channel(source: u8, destination: u8, inverse_alpha: u16) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_blend_skips_transparent_source() {
+        let mut destination = [11, 22, 33, 255];
+
+        alpha_blend(&mut destination, [255, 0, 0, 0]);
+
+        assert_eq!(destination, [11, 22, 33, 255]);
+    }
+
+    #[test]
+    fn alpha_blend_overwrites_with_opaque_source() {
+        let mut destination = [11, 22, 33, 255];
+
+        alpha_blend(&mut destination, [44, 55, 66, 255]);
+
+        assert_eq!(destination, [44, 55, 66, 255]);
+    }
 
     #[test]
     fn alpha_blend_places_premultiplied_half_alpha_over_opaque_destination() {
