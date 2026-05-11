@@ -711,14 +711,16 @@ impl PrimitiveStats {
         });
     }
 
-    pub(super) fn log_line(&self) -> String {
+    pub(super) fn log_line(&self, frame_index: u64) -> String {
+        let mesh_triangles = self.mesh_indices / 3;
         format!(
-            "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
+            "software renderer primitive_stats frame={frame_index} mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} mesh_triangles={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
             self.empty_clip_meshes,
             self.mesh_indices,
+            mesh_triangles,
             self.quad_windows,
             self.four_unique_quad_windows,
             self.quad_windows_not_four_unique_indices,
@@ -1158,7 +1160,9 @@ mod tests {
         );
         stats.textured_quad_fast_path_hits = 2;
         stats.textured_quad_reject_non_affine_uv = 1;
-        let log_line = stats.log_line();
+        let log_line = stats.log_line(7);
+        assert!(log_line.contains("frame=7"));
+        assert!(log_line.contains("mesh_triangles=0"));
         assert!(log_line.contains("generic_solid_triangles=1"));
         assert!(log_line.contains("generic_textured_triangles=1"));
         assert!(log_line.contains("generic_textured_solid_reject_non_uniform_vertex_color=1"));

@@ -210,13 +210,24 @@ impl Framebuffer {
         let blit_format = self.blit_rgba_surface(renderer.surface(), &viewport)?;
         let blit_elapsed = elapsed_micros(stage_start);
         let total_elapsed = elapsed_micros(total_start);
+        if frame.log_render_stats {
+            log_present_stats(
+                frame.log,
+                frame.frame_index,
+                renderer.surface(),
+                &viewport,
+                &self.var,
+                blit_format,
+            )?;
+        }
         if log_frame {
             let blit_format_name = blit_format.name();
             let repaint_delay = format_repaint_delay(repaint_delay);
             write_log(
                 frame.log,
                 format!(
-                    "framebuffer draw timings blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}"
+                    "framebuffer draw timings frame={} blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}",
+                    frame.frame_index,
                 ),
             );
         }
@@ -633,6 +644,39 @@ fn log_visible_viewport(log: Option<&SharedLog>, viewport: &VisibleViewport) {
             viewport.bytes_per_pixel
         ),
     );
+}
+
+fn log_present_stats(
+    log: Option<&SharedLog>,
+    frame_index: u64,
+    surface: &SoftwareSurface,
+    viewport: &VisibleViewport,
+    var: &FbVarScreeninfo,
+    blit_format: BlitFormat,
+) -> io::Result<()> {
+    let source_bytes_read = surface.pixels.len();
+    let framebuffer_bytes_written = viewport_snapshot_bytes(viewport)?;
+    write_log(
+        log,
+        format!(
+            "framebuffer present frame={frame_index} mode=full-blit blit_format={} source_format=rgba8888 source_bytes_read={source_bytes_read} framebuffer_bytes_written={framebuffer_bytes_written} surface={}x{} visible_width={} visible_height={} stride={} xoffset={} yoffset={} bits_per_pixel={} bytes_per_pixel={} red={} green={} blue={} transp={}",
+            blit_format.name(),
+            surface.width,
+            surface.height,
+            viewport.width,
+            viewport.height,
+            viewport.line_length,
+            viewport.xoffset,
+            viewport.yoffset,
+            var.bits_per_pixel,
+            viewport.bytes_per_pixel,
+            bitfield_info(&var.red),
+            bitfield_info(&var.green),
+            bitfield_info(&var.blue),
+            bitfield_info(&var.transp),
+        ),
+    );
+    Ok(())
 }
 
 fn log_derived_page_info(log: Option<&SharedLog>, var: &FbVarScreeninfo) {

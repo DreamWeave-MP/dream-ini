@@ -14,8 +14,7 @@ use super::raster::{
     usize_to_f32,
 };
 use super::surface::SoftwareSurface;
-use super::texture::TextureImage;
-use super::texture::TextureStore;
+use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
 use super::{GuiFrame, GuiShell};
 use fan::{SolidFanRun, solid_fan_run};
 use quad::try_rasterize_quad_window;
@@ -57,31 +56,25 @@ impl SoftwareRenderer {
         let egui_run_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_frame.then(Instant::now);
-        self.textures.apply(&output.textures_delta)?;
+        let texture_delta_stats = self.textures.apply(&output.textures_delta)?;
         let texture_apply_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_frame.then(Instant::now);
         let primitives = frame.context.tessellate(output.shapes, 1.0);
         let tessellate_elapsed = elapsed_micros(stage_start);
-        if log_frame {
-            write_log(
-                frame.log,
-                format!(
-                    "software renderer surface={}x{} bytes={} textures={} texture_bytes={} primitives={}",
-                    self.surface.width,
-                    self.surface.height,
-                    self.surface.pixels.len(),
-                    self.textures.len(),
-                    self.textures.bytes_used(),
-                    primitives.len()
-                ),
-            );
-        }
+        log_surface_stats(
+            frame,
+            &self.surface,
+            &self.textures,
+            &texture_delta_stats,
+            primitives.len(),
+        );
 
         let stage_start = log_frame.then(Instant::now);
-        let mut primitive_stats = log_frame.then(PrimitiveStats::default);
-        let mut raster_stats = log_frame.then(RasterStats::default);
-        let mut raster_timings = log_frame.then(RasterTimings::default);
+        let collect_stats = log_frame || frame.log_render_stats;
+        let mut primitive_stats = collect_stats.then(PrimitiveStats::default);
+        let mut raster_stats = collect_stats.then(RasterStats::default);
+        let mut raster_timings = collect_stats.then(RasterTimings::default);
         let rasterize_result = self.rasterize(
             &primitives,
             primitive_stats.as_mut(),
@@ -89,27 +82,13 @@ impl SoftwareRenderer {
             raster_timings.as_mut(),
         );
         let rasterize_elapsed = elapsed_micros(stage_start);
-        if let Some(stats) = primitive_stats {
-            write_log(frame.log, stats.log_line());
-            if let Some(log_line) = stats.solid_triangle_offenders_log_line() {
-                write_log(frame.log, log_line);
-            }
-            if let Some(log_line) = stats.textured_triangle_offenders_log_line() {
-                write_log(frame.log, log_line);
-            }
-            if let Some(log_line) = stats.textured_quad_reject_offenders_log_line() {
-                write_log(frame.log, log_line);
-            }
-            if let Some(log_line) = stats.solid_fan_offenders_log_line() {
-                write_log(frame.log, log_line);
-            }
-        }
-        if let Some(stats) = raster_stats {
-            write_log(frame.log, stats.log_line());
-        }
-        if let Some(timings) = raster_timings {
-            write_log(frame.log, timings.log_line());
-        }
+        log_raster_stats(
+            frame,
+            &self.surface,
+            primitive_stats.as_ref(),
+            raster_stats.as_ref(),
+            raster_timings.as_ref(),
+        );
         rasterize_result?;
 
         let stage_start = log_frame.then(Instant::now);
@@ -118,15 +97,19 @@ impl SoftwareRenderer {
         }
         let texture_free_elapsed = elapsed_micros(stage_start);
         let total_elapsed = elapsed_micros(total_start);
-        if log_frame {
-            let repaint_delay = format_repaint_delay(repaint_delay);
-            write_log(
-                frame.log,
-                format!(
-                    "software renderer timings resize_clear_us={resize_clear_elapsed} egui_run_us={egui_run_elapsed} texture_apply_us={texture_apply_elapsed} tessellate_us={tessellate_elapsed} rasterize_us={rasterize_elapsed} texture_free_us={texture_free_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}"
-                ),
-            );
-        }
+        log_render_timings(
+            frame,
+            RenderTimings {
+                resize_clear: resize_clear_elapsed,
+                egui_run: egui_run_elapsed,
+                texture_apply: texture_apply_elapsed,
+                tessellate: tessellate_elapsed,
+                rasterize: rasterize_elapsed,
+                texture_free: texture_free_elapsed,
+                total: total_elapsed,
+            },
+            repaint_delay,
+        );
         Ok(repaint_delay)
     }
 
@@ -271,6 +254,139 @@ impl SoftwareRenderer {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RenderTimings {
+    resize_clear: u128,
+    egui_run: u128,
+    texture_apply: u128,
+    tessellate: u128,
+    rasterize: u128,
+    texture_free: u128,
+    total: u128,
+}
+
+fn log_surface_stats<S: GuiShell>(
+    frame: &GuiFrame<'_, S>,
+    surface: &SoftwareSurface,
+    textures: &TextureStore,
+    texture_delta_stats: &TextureDeltaStats,
+    primitive_count: usize,
+) {
+    if frame.log_frame {
+        write_log(
+            frame.log,
+            format!(
+                "software renderer frame={} surface={}x{} bytes={} textures={} texture_bytes={} primitives={}",
+                frame.frame_index,
+                surface.width,
+                surface.height,
+                surface.pixels.len(),
+                textures.len(),
+                textures.bytes_used(),
+                primitive_count,
+            ),
+        );
+    }
+    if frame.log_render_stats {
+        write_log(
+            frame.log,
+            format!(
+                "software renderer render_stats frame={} surface={}x{} surface_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} clipped_primitives={} repaint_request_due_before_frame={} requested_repaint_after_egui={}",
+                frame.frame_index,
+                surface.width,
+                surface.height,
+                surface.pixels.len(),
+                texture_delta_stats.set_count,
+                texture_delta_stats.set_bytes,
+                texture_delta_stats.full_upload_count,
+                texture_delta_stats.partial_update_count,
+                primitive_count,
+                frame.repaint_request_due_before_frame,
+                frame.context.has_requested_repaint(),
+            ),
+        );
+    }
+}
+
+fn log_raster_stats<S: GuiShell>(
+    frame: &GuiFrame<'_, S>,
+    surface: &SoftwareSurface,
+    primitive_stats: Option<&PrimitiveStats>,
+    raster_stats: Option<&RasterStats>,
+    raster_timings: Option<&RasterTimings>,
+) {
+    if let Some(stats) = primitive_stats {
+        write_log(frame.log, stats.log_line(frame.frame_index));
+        if let Some(log_line) = stats.solid_triangle_offenders_log_line() {
+            write_log(frame.log, log_line);
+        }
+        if let Some(log_line) = stats.textured_triangle_offenders_log_line() {
+            write_log(frame.log, log_line);
+        }
+        if let Some(log_line) = stats.textured_quad_reject_offenders_log_line() {
+            write_log(frame.log, log_line);
+        }
+        if let Some(log_line) = stats.solid_fan_offenders_log_line() {
+            write_log(frame.log, log_line);
+        }
+    }
+    if let Some(stats) = raster_stats {
+        if frame.log_render_stats {
+            write_log(
+                frame.log,
+                clear_evidence_log_line(frame.frame_index, surface.width, surface.height, stats),
+            );
+        }
+        write_log(frame.log, stats.log_line());
+    }
+    if let Some(timings) = raster_timings {
+        write_log(frame.log, timings.log_line());
+    }
+}
+
+fn log_render_timings<S: GuiShell>(
+    frame: &GuiFrame<'_, S>,
+    timings: RenderTimings,
+    repaint_delay: Duration,
+) {
+    if !frame.log_frame {
+        return;
+    }
+    let repaint_delay = format_repaint_delay(repaint_delay);
+    write_log(
+        frame.log,
+        format!(
+            "software renderer timings frame={} resize_clear_us={} egui_run_us={} texture_apply_us={} tessellate_us={} rasterize_us={} texture_free_us={} repaint_delay={repaint_delay} total_us={}",
+            frame.frame_index,
+            timings.resize_clear,
+            timings.egui_run,
+            timings.texture_apply,
+            timings.tessellate,
+            timings.rasterize,
+            timings.texture_free,
+            timings.total,
+        ),
+    );
+}
+
+fn clear_evidence_log_line(
+    frame_index: u64,
+    width: usize,
+    height: usize,
+    stats: &RasterStats,
+) -> String {
+    let clear_pixels = width.saturating_mul(height);
+    let clear_bytes = clear_pixels.saturating_mul(4);
+    let opaque_drawn_pixels = stats.opaque_px;
+    let opaque_drawn_percent = opaque_drawn_pixels
+        .saturating_mul(100)
+        .checked_div(clear_pixels)
+        .unwrap_or(0);
+    format!(
+        "software renderer clear_evidence frame={frame_index} clear_pixels={clear_pixels} clear_bytes={clear_bytes} opaque_drawn_pixels={opaque_drawn_pixels} opaque_drawn_percent_of_surface={opaque_drawn_percent}"
+    )
 }
 
 fn mesh_triangle_vertices(

@@ -11,14 +11,19 @@ pub(super) struct TextureStore {
 }
 
 impl TextureStore {
-    pub(super) fn apply(&mut self, delta: &egui::TexturesDelta) -> io::Result<()> {
+    pub(super) fn apply(&mut self, delta: &egui::TexturesDelta) -> io::Result<TextureDeltaStats> {
+        let mut stats = TextureDeltaStats::default();
         for (id, image_delta) in &delta.set {
-            self.set(*id, image_delta)?;
+            stats.record_set(self.set(*id, image_delta)?);
         }
-        Ok(())
+        Ok(stats)
     }
 
-    fn set(&mut self, id: egui::TextureId, delta: &egui::epaint::ImageDelta) -> io::Result<()> {
+    fn set(
+        &mut self,
+        id: egui::TextureId,
+        delta: &egui::epaint::ImageDelta,
+    ) -> io::Result<TextureSetStats> {
         let metadata = TextureImageMetadata::from_image_data(&delta.image)?;
         if let Some(pos) = delta.pos {
             self.textures
@@ -30,7 +35,11 @@ impl TextureStore {
                 .textures
                 .get_mut(&id)
                 .ok_or_else(|| io::Error::other("partial texture update for missing texture"))?;
-            texture.update(pos, &image)
+            texture.update(pos, &image)?;
+            Ok(TextureSetStats {
+                byte_len: metadata.byte_len,
+                partial: true,
+            })
         } else {
             let bytes_used = self.bytes_used();
             let old_len = self
@@ -40,7 +49,10 @@ impl TextureStore {
             check_texture_budget(bytes_used, old_len, metadata.byte_len)?;
             let image = TextureImage::from_image_data(&delta.image, metadata);
             self.textures.insert(id, image);
-            Ok(())
+            Ok(TextureSetStats {
+                byte_len: metadata.byte_len,
+                partial: false,
+            })
         }
     }
 
@@ -62,6 +74,32 @@ impl TextureStore {
             .map(|texture| texture.pixels.len())
             .sum()
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TextureDeltaStats {
+    pub(super) set_count: usize,
+    pub(super) full_upload_count: usize,
+    pub(super) partial_update_count: usize,
+    pub(super) set_bytes: usize,
+}
+
+impl TextureDeltaStats {
+    fn record_set(&mut self, set: TextureSetStats) {
+        self.set_count = self.set_count.saturating_add(1);
+        self.set_bytes = self.set_bytes.saturating_add(set.byte_len);
+        if set.partial {
+            self.partial_update_count = self.partial_update_count.saturating_add(1);
+        } else {
+            self.full_upload_count = self.full_upload_count.saturating_add(1);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TextureSetStats {
+    byte_len: usize,
+    partial: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,5 +280,37 @@ mod tests {
             )
         );
         assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn texture_store_apply_reports_full_and_partial_update_stats() {
+        let mut store = TextureStore::default();
+        let id = egui::TextureId::Managed(0);
+        let full_image = egui::ColorImage::new([2, 2], vec![egui::Color32::WHITE; 4]);
+        let partial_image = egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]);
+        let delta = egui::TexturesDelta {
+            set: vec![
+                (
+                    id,
+                    egui::epaint::ImageDelta::full(full_image, egui::TextureOptions::NEAREST),
+                ),
+                (
+                    id,
+                    egui::epaint::ImageDelta::partial(
+                        [1, 1],
+                        partial_image,
+                        egui::TextureOptions::NEAREST,
+                    ),
+                ),
+            ],
+            free: Vec::new(),
+        };
+
+        let stats = store.apply(&delta).expect("texture delta applies");
+
+        assert_eq!(stats.set_count, 2);
+        assert_eq!(stats.full_upload_count, 1);
+        assert_eq!(stats.partial_update_count, 1);
+        assert_eq!(stats.set_bytes, 20);
     }
 }

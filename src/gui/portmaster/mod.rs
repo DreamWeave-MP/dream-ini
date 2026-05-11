@@ -44,6 +44,14 @@ use shell::PortMasterGuiShell;
 
 #[cfg(target_os = "linux")]
 const IDLE_POLL_LOG_INTERVAL: u64 = 600;
+#[cfg(target_os = "linux")]
+const RENDER_STATS_ENV_VAR: &str = "DREAM_INI_PM_RENDER_STATS";
+#[cfg(target_os = "linux")]
+const RENDER_STATS_EVERY_ENV_VAR: &str = "DREAM_INI_PM_RENDER_STATS_EVERY";
+#[cfg(target_os = "linux")]
+const RENDER_TRACE_ENV_VAR: &str = "DREAM_INI_PM_RENDER_TRACE";
+#[cfg(target_os = "linux")]
+const DEFAULT_RENDER_STATS_EVERY: u64 = 30;
 
 pub(crate) fn run() -> ExitCode {
     let log = open_log().map(Mutex::new).map(Arc::new);
@@ -146,6 +154,7 @@ struct FramebufferGuiRuntime<'a> {
     renderer: SoftwareRenderer,
     log: Option<&'a SharedLog>,
     frame_interval: Duration,
+    render_log_config: RenderLogConfig,
 }
 
 #[cfg(target_os = "linux")]
@@ -156,6 +165,8 @@ impl<'a> FramebufferGuiRuntime<'a> {
         install_repaint_callback(&egui_context, &pending_repaint_delay);
         let app = GuiApp::new(egui_context.clone());
         let shell = PortMasterGuiShell::new(log);
+        let render_log_config = RenderLogConfig::from_env();
+        render_log_config.log(log);
         Self {
             egui_context,
             pending_repaint_delay,
@@ -165,6 +176,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
             renderer: SoftwareRenderer::default(),
             log,
             frame_interval,
+            render_log_config,
         }
     }
 
@@ -211,7 +223,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
             }
             idle_poll_log.record_draw();
             let frame_started_at = Instant::now();
-            match self.draw_frame(framebuffer, frame_count) {
+            match self.draw_frame(framebuffer, frame_count, requested_repaint_now) {
                 Ok(draw_outcome) => {
                     frame_count = frame_count.saturating_add(1);
                     next_repaint_at = self.next_repaint_after_frame(
@@ -280,6 +292,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
         &mut self,
         framebuffer: &mut Framebuffer,
         frame_count: u64,
+        requested_repaint_now: bool,
     ) -> io::Result<FramebufferDrawOutcome> {
         let log_frame = should_log_frame(frame_count);
         let mut frame = GuiFrame {
@@ -289,6 +302,9 @@ impl<'a> FramebufferGuiRuntime<'a> {
             snapshots: &mut self.snapshots,
             log: self.log,
             log_frame,
+            log_render_stats: should_log_render_stats(frame_count, self.render_log_config),
+            frame_index: frame_count,
+            repaint_request_due_before_frame: requested_repaint_now,
         };
         framebuffer.draw_egui_gui(&mut self.renderer, &mut frame)
     }
@@ -356,8 +372,72 @@ impl IdlePollLogState {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RenderLogConfig {
+    stats_enabled: bool,
+    trace_enabled: bool,
+    stats_every: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl RenderLogConfig {
+    fn from_env() -> Self {
+        Self::from_values(
+            env::var(RENDER_STATS_ENV_VAR).ok().as_deref(),
+            env::var(RENDER_STATS_EVERY_ENV_VAR).ok().as_deref(),
+            env::var(RENDER_TRACE_ENV_VAR).ok().as_deref(),
+        )
+    }
+
+    fn from_values(stats: Option<&str>, stats_every: Option<&str>, trace: Option<&str>) -> Self {
+        let stats_enabled = env_flag_enabled(stats);
+        let trace_enabled = env_flag_enabled(trace);
+        let stats_every = stats_every
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value != 0)
+            .unwrap_or(DEFAULT_RENDER_STATS_EVERY);
+        Self {
+            stats_enabled,
+            trace_enabled,
+            stats_every,
+        }
+    }
+
+    fn log(self, log: Option<&SharedLog>) {
+        write_log(
+            log,
+            format!(
+                "portmaster render logging stats_enabled={} trace_enabled={} stats_every={} env_{}={:?} env_{}={:?} env_{}={:?}",
+                self.stats_enabled,
+                self.trace_enabled,
+                self.stats_every,
+                RENDER_STATS_ENV_VAR,
+                env::var_os(RENDER_STATS_ENV_VAR),
+                RENDER_STATS_EVERY_ENV_VAR,
+                env::var_os(RENDER_STATS_EVERY_ENV_VAR),
+                RENDER_TRACE_ENV_VAR,
+                env::var_os(RENDER_TRACE_ENV_VAR),
+            ),
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn env_flag_enabled(value: Option<&str>) -> bool {
+    matches!(
+        value,
+        Some("1" | "true" | "True" | "TRUE" | "yes" | "Yes" | "YES" | "on" | "On" | "ON")
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn should_log_frame(frame_count: u64) -> bool {
     frame_count == 0 || frame_count.is_multiple_of(30)
+}
+
+#[cfg(target_os = "linux")]
+fn should_log_render_stats(frame_count: u64, config: RenderLogConfig) -> bool {
+    config.trace_enabled || (config.stats_enabled && frame_count.is_multiple_of(config.stats_every))
 }
 
 #[cfg(target_os = "linux")]
@@ -424,6 +504,9 @@ struct GuiFrame<'a, S: GuiShell> {
     snapshots: &'a mut Vec<FramebufferSnapshot>,
     log: Option<&'a SharedLog>,
     log_frame: bool,
+    log_render_stats: bool,
+    frame_index: u64,
+    repaint_request_due_before_frame: bool,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -466,7 +549,37 @@ mod tests {
     }
 
     #[test]
-    fn frame_logging_samples_first_frame_and_every_thirtieth_frame() {
+    fn render_log_config_defaults_to_disabled_with_default_interval() {
+        let config = RenderLogConfig::from_values(None, None, None);
+
+        assert!(!config.stats_enabled);
+        assert!(!config.trace_enabled);
+        assert_eq!(config.stats_every, DEFAULT_RENDER_STATS_EVERY);
+        assert!(!should_log_render_stats(0, config));
+    }
+
+    #[test]
+    fn render_stats_logging_samples_configured_interval() {
+        let config = RenderLogConfig::from_values(Some("1"), Some("5"), None);
+
+        assert!(should_log_render_stats(0, config));
+        assert!(!should_log_render_stats(1, config));
+        assert!(!should_log_render_stats(4, config));
+        assert!(should_log_render_stats(5, config));
+    }
+
+    #[test]
+    fn render_trace_logging_reports_every_frame() {
+        let config = RenderLogConfig::from_values(None, Some("0"), Some("1"));
+
+        assert_eq!(config.stats_every, DEFAULT_RENDER_STATS_EVERY);
+        assert!(should_log_render_stats(0, config));
+        assert!(should_log_render_stats(1, config));
+        assert!(should_log_render_stats(999, config));
+    }
+
+    #[test]
+    fn default_frame_logging_samples_first_frame_and_every_thirtieth_frame() {
         assert!(should_log_frame(0));
         assert!(!should_log_frame(1));
         assert!(!should_log_frame(29));
