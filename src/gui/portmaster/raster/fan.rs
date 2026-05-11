@@ -10,16 +10,17 @@ use crate::gui::portmaster::surface::SoftwareSurface;
 
 pub(in crate::gui::portmaster) fn rasterize_solid_fan(
     surface: &mut SoftwareSurface,
-    polygon: &[&egui::epaint::Vertex],
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
     triangle_count: usize,
     color: [u8; 4],
     clip: ClipBounds,
     mut stats: Option<&mut RasterStats>,
 ) {
-    let Some(bounds) = polygon_raster_bounds(polygon, clip) else {
+    let Some(bounds) = polygon_raster_bounds(vertices, polygon, clip) else {
         return;
     };
-    let Some(area_sign) = polygon_area_sign(polygon) else {
+    let Some(area_sign) = polygon_area_sign(vertices, polygon) else {
         return;
     };
     if let Some(stats) = &mut stats {
@@ -28,12 +29,13 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan(
     }
 
     for y in bounds.min_y..bounds.max_y {
-        let scanline = polygon_scanline_span(polygon, bounds, y, area_sign, stats.is_some());
+        let scanline =
+            polygon_scanline_span(vertices, polygon, bounds, y, area_sign, stats.is_some());
         let span = if scanline.fell_back {
             if let Some(stats) = &mut stats {
                 stats.solid_fan_fallback_rows += 1;
             }
-            polygon_fallback_scanline_span(polygon, bounds, y, area_sign)
+            polygon_fallback_scanline_span(vertices, polygon, bounds, y, area_sign)
         } else {
             scanline.span
         };
@@ -71,7 +73,8 @@ pub(super) struct PolygonScanlineSpan {
 }
 
 fn polygon_raster_bounds(
-    polygon: &[&egui::epaint::Vertex],
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
     clip: ClipBounds,
 ) -> Option<TriangleRasterBounds> {
     if polygon.len() < 3 {
@@ -81,7 +84,8 @@ fn polygon_raster_bounds(
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
-    for vertex in polygon {
+    for vertex_index in polygon {
+        let vertex = &vertices[*vertex_index];
         min_x = min_x.min(vertex.pos.x);
         min_y = min_y.min(vertex.pos.y);
         max_x = max_x.max(vertex.pos.x);
@@ -104,11 +108,11 @@ fn polygon_raster_bounds(
     })
 }
 
-fn polygon_area_sign(polygon: &[&egui::epaint::Vertex]) -> Option<f32> {
+fn polygon_area_sign(vertices: &[egui::epaint::Vertex], polygon: &[usize]) -> Option<f32> {
     let mut twice_area = 0.0;
     for edge_index in 0..polygon.len() {
-        let a = polygon[edge_index].pos;
-        let b = polygon[(edge_index + 1) % polygon.len()].pos;
+        let a = vertices[polygon[edge_index]].pos;
+        let b = vertices[polygon[(edge_index + 1) % polygon.len()]].pos;
         twice_area += a.x.mul_add(b.y, -(a.y * b.x));
     }
     if twice_area.abs() <= f32::EPSILON {
@@ -118,7 +122,8 @@ fn polygon_area_sign(polygon: &[&egui::epaint::Vertex]) -> Option<f32> {
 }
 
 pub(super) fn polygon_scanline_span(
-    polygon: &[&egui::epaint::Vertex],
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
     bounds: TriangleRasterBounds,
     y: usize,
     area_sign: f32,
@@ -129,8 +134,8 @@ pub(super) fn polygon_scanline_span(
     let mut upper = None;
     let mut edge_intersections = 0;
     for edge_index in 0..polygon.len() {
-        let a = polygon[edge_index].pos;
-        let b = polygon[(edge_index + 1) % polygon.len()].pos;
+        let a = vertices[polygon[edge_index]].pos;
+        let b = vertices[polygon[(edge_index + 1) % polygon.len()]].pos;
         let slope_x = edge_step_x(a, b) * area_sign;
         let at_origin = edge(a, b, egui::pos2(0.0, pixel_center_y)) * area_sign;
         if !slope_x.is_finite() || !at_origin.is_finite() {
@@ -170,8 +175,15 @@ pub(super) fn polygon_scanline_span(
     }
 
     let mut span = (start_x, end_x);
-    let endpoint_probe_px =
-        polygon_correct_span_endpoints(&mut span, y, polygon, area_sign, bounds, collect_stats);
+    let endpoint_probe_px = polygon_correct_span_endpoints(
+        &mut span,
+        y,
+        vertices,
+        polygon,
+        area_sign,
+        bounds,
+        collect_stats,
+    );
     PolygonScanlineSpan {
         span: (span.0 < span.1).then_some(span),
         edge_intersections,
@@ -181,7 +193,8 @@ pub(super) fn polygon_scanline_span(
 }
 
 pub(super) fn polygon_fallback_scanline_span(
-    polygon: &[&egui::epaint::Vertex],
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
     bounds: TriangleRasterBounds,
     y: usize,
     area_sign: f32,
@@ -189,7 +202,7 @@ pub(super) fn polygon_fallback_scanline_span(
     let mut span_start = None;
     let mut span_end = None;
     for x in bounds.min_x..bounds.max_x {
-        if polygon_covers_pixel(x, y, polygon, area_sign) {
+        if polygon_covers_pixel(x, y, vertices, polygon, area_sign) {
             span_start.get_or_insert(x);
             span_end = Some(x + 1);
         } else if span_start.is_some() {
@@ -258,7 +271,8 @@ fn polygon_upper_bound_x(upper: Option<(f32, bool)>, bounds: TriangleRasterBound
 fn polygon_correct_span_endpoints(
     span: &mut (usize, usize),
     y: usize,
-    polygon: &[&egui::epaint::Vertex],
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
     area_sign: f32,
     bounds: TriangleRasterBounds,
     collect_stats: bool,
@@ -267,14 +281,30 @@ fn polygon_correct_span_endpoints(
     let mut probe_px = 0;
     let mut correction_px = 0;
     while span.0 < span.1
-        && !polygon_endpoint_probe(span.0, y, polygon, area_sign, collect_stats, &mut probe_px)
+        && !polygon_endpoint_probe(
+            span.0,
+            y,
+            vertices,
+            polygon,
+            area_sign,
+            collect_stats,
+            &mut probe_px,
+        )
         && correction_px < MAX_ENDPOINT_CORRECTION_PX
     {
         span.0 += 1;
         correction_px += 1;
     }
     if span.0 < span.1
-        && !polygon_endpoint_probe(span.0, y, polygon, area_sign, collect_stats, &mut probe_px)
+        && !polygon_endpoint_probe(
+            span.0,
+            y,
+            vertices,
+            polygon,
+            area_sign,
+            collect_stats,
+            &mut probe_px,
+        )
     {
         span.1 = span.0;
         return probe_px;
@@ -284,6 +314,7 @@ fn polygon_correct_span_endpoints(
         && !polygon_endpoint_probe(
             span.1 - 1,
             y,
+            vertices,
             polygon,
             area_sign,
             collect_stats,
@@ -298,6 +329,7 @@ fn polygon_correct_span_endpoints(
         && !polygon_endpoint_probe(
             span.1 - 1,
             y,
+            vertices,
             polygon,
             area_sign,
             collect_stats,
@@ -311,6 +343,7 @@ fn polygon_correct_span_endpoints(
         let _ = polygon_endpoint_probe(
             span.0 - 1,
             y,
+            vertices,
             polygon,
             area_sign,
             collect_stats,
@@ -318,7 +351,15 @@ fn polygon_correct_span_endpoints(
         );
     }
     if span.1 < bounds.max_x {
-        let _ = polygon_endpoint_probe(span.1, y, polygon, area_sign, collect_stats, &mut probe_px);
+        let _ = polygon_endpoint_probe(
+            span.1,
+            y,
+            vertices,
+            polygon,
+            area_sign,
+            collect_stats,
+            &mut probe_px,
+        );
     }
     probe_px
 }
@@ -326,7 +367,8 @@ fn polygon_correct_span_endpoints(
 fn polygon_endpoint_probe(
     x: usize,
     y: usize,
-    polygon: &[&egui::epaint::Vertex],
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
     area_sign: f32,
     collect_stats: bool,
     probe_px: &mut usize,
@@ -334,19 +376,20 @@ fn polygon_endpoint_probe(
     if collect_stats {
         *probe_px += 1;
     }
-    polygon_covers_pixel(x, y, polygon, area_sign)
+    polygon_covers_pixel(x, y, vertices, polygon, area_sign)
 }
 
 fn polygon_covers_pixel(
     x: usize,
     y: usize,
-    polygon: &[&egui::epaint::Vertex],
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
     area_sign: f32,
 ) -> bool {
     let pixel_center = egui::pos2(usize_to_f32(x) + 0.5, usize_to_f32(y) + 0.5);
     for edge_index in 0..polygon.len() {
-        let a = polygon[edge_index].pos;
-        let b = polygon[(edge_index + 1) % polygon.len()].pos;
+        let a = vertices[polygon[edge_index]].pos;
+        let b = vertices[polygon[(edge_index + 1) % polygon.len()]].pos;
         let weight = edge(a, b, pixel_center) * area_sign;
         if !edge_covers_pixel(weight, edge_includes_boundary(a, b, area_sign)) {
             return false;

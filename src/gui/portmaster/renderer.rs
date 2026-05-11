@@ -20,10 +20,23 @@ use fan::{SolidFanRun, solid_fan_run};
 use quad::try_rasterize_quad_window;
 use stats::{PrimitiveStats, RasterTimings, SolidFanRasterWork, TriangleSource};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct SoftwareRenderer {
     surface: SoftwareSurface,
     textures: TextureStore,
+    solid_fan_polygon_scratch: Vec<usize>,
+}
+
+const SOLID_FAN_POLYGON_SCRATCH_CAPACITY: usize = 4096;
+
+impl Default for SoftwareRenderer {
+    fn default() -> Self {
+        Self {
+            surface: SoftwareSurface::default(),
+            textures: TextureStore::default(),
+            solid_fan_polygon_scratch: Vec::with_capacity(SOLID_FAN_POLYGON_SCRATCH_CAPACITY),
+        }
+    }
 }
 
 impl SoftwareRenderer {
@@ -177,89 +190,58 @@ impl SoftwareRenderer {
             }
             return Ok(());
         }
-        let surface = &mut self.surface;
-        let mut index_offset = 0;
-        while index_offset + 2 < mesh.indices.len() {
-            if index_offset + 5 < mesh.indices.len() {
-                let quad = &mesh.indices[index_offset..index_offset + 6];
-                let mut instrumentation = RasterInstrumentation {
-                    primitive_stats: borrow_optional_mut(&mut stats),
-                    raster_stats: borrow_optional_mut(&mut raster_stats),
-                    timings: borrow_optional_mut(&mut raster_timings),
-                };
-                if try_rasterize_quad_window(
-                    surface,
-                    mesh,
-                    texture,
-                    clip,
-                    quad,
-                    TriangleSource {
-                        primitive_index,
-                        mesh_index_offset: index_offset,
-                    },
-                    &mut instrumentation,
-                )? {
-                    index_offset += 6;
-                    continue;
-                }
-            }
-
-            let fan_probe_start = raster_timings.as_ref().map(|_| Instant::now());
-            let fan = solid_fan_run(
-                mesh,
-                texture,
-                clip,
-                index_offset,
-                stats.as_deref_mut().map(|stats| &mut stats.solid_fan_probe),
-            )?;
-            if let (Some(start), Some(timings)) =
-                (fan_probe_start, borrow_optional_mut(&mut raster_timings))
-            {
-                timings.solid_fan_probe += start.elapsed().as_micros();
-            }
-            if let Some(fan) = fan {
-                let mut instrumentation = RasterInstrumentation {
-                    primitive_stats: borrow_optional_mut(&mut stats),
-                    raster_stats: borrow_optional_mut(&mut raster_stats),
-                    timings: borrow_optional_mut(&mut raster_timings),
-                };
-                rasterize_solid_fan_run(
-                    surface,
-                    &fan,
-                    clip,
-                    TriangleSource {
-                        primitive_index,
-                        mesh_index_offset: index_offset,
-                    },
-                    &mut instrumentation,
-                );
-                index_offset += fan.triangle_count * 3;
-                continue;
-            }
-
-            let Some([v0, v1, v2]) = mesh_triangle_vertices(mesh, index_offset)? else {
-                index_offset += 3;
-                continue;
-            };
-            let source = TriangleSource {
-                primitive_index,
-                mesh_index_offset: index_offset,
-            };
-            if let Some(stats) = borrow_optional_mut(&mut stats) {
-                stats.record_generic_triangle(v0, v1, v2, texture, clip, source);
-            }
-            rasterize_generic_triangle(
-                surface,
-                [v0, v1, v2],
-                texture,
-                clip,
-                &mut raster_stats,
-                &mut raster_timings,
-            );
-            index_offset += 3;
-        }
+        self.solid_fan_polygon_scratch.clear();
+        let mut context = MeshRasterContext {
+            surface: &mut self.surface,
+            fan_polygon_scratch: &mut self.solid_fan_polygon_scratch,
+            mesh,
+            texture,
+            clip,
+            primitive_index,
+        };
+        rasterize_mesh_contents(
+            &mut context,
+            &mut stats,
+            &mut raster_stats,
+            &mut raster_timings,
+        )?;
         Ok(())
     }
+}
+
+fn rasterize_mesh_contents(
+    context: &mut MeshRasterContext<'_>,
+    stats: &mut Option<&mut PrimitiveStats>,
+    raster_stats: &mut Option<&mut RasterStats>,
+    raster_timings: &mut Option<&mut RasterTimings>,
+) -> io::Result<()> {
+    let mut index_offset = 0;
+    while index_offset + 2 < context.mesh.indices.len() {
+        if context.try_rasterize_quad_at(index_offset, stats, raster_stats, raster_timings)? {
+            index_offset += 6;
+            continue;
+        }
+
+        if let Some(fan_triangle_count) =
+            context.try_rasterize_solid_fan_at(index_offset, stats, raster_stats, raster_timings)?
+        {
+            index_offset += fan_triangle_count * 3;
+            continue;
+        }
+
+        context.rasterize_generic_triangle_at(index_offset, stats, raster_stats, raster_timings)?;
+        index_offset += 3;
+    }
+    Ok(())
+}
+
+struct MeshRasterContext<'a> {
+    surface: &'a mut SoftwareSurface,
+    fan_polygon_scratch: &'a mut Vec<usize>,
+    mesh: &'a egui::Mesh,
+    texture: &'a TextureImage,
+    clip: ClipBounds,
+    primitive_index: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -395,6 +377,110 @@ fn clear_evidence_log_line(
     )
 }
 
+impl MeshRasterContext<'_> {
+    fn try_rasterize_quad_at(
+        &mut self,
+        index_offset: usize,
+        stats: &mut Option<&mut PrimitiveStats>,
+        raster_stats: &mut Option<&mut RasterStats>,
+        raster_timings: &mut Option<&mut RasterTimings>,
+    ) -> io::Result<bool> {
+        if index_offset + 5 >= self.mesh.indices.len() {
+            return Ok(false);
+        }
+        let quad = &self.mesh.indices[index_offset..index_offset + 6];
+        let mut instrumentation = RasterInstrumentation {
+            primitive_stats: borrow_optional_mut(stats),
+            raster_stats: borrow_optional_mut(raster_stats),
+            timings: borrow_optional_mut(raster_timings),
+        };
+        try_rasterize_quad_window(
+            self.surface,
+            self.mesh,
+            self.texture,
+            self.clip,
+            quad,
+            self.source(index_offset),
+            &mut instrumentation,
+        )
+    }
+
+    fn try_rasterize_solid_fan_at(
+        &mut self,
+        index_offset: usize,
+        stats: &mut Option<&mut PrimitiveStats>,
+        raster_stats: &mut Option<&mut RasterStats>,
+        raster_timings: &mut Option<&mut RasterTimings>,
+    ) -> io::Result<Option<usize>> {
+        let fan_probe_start = raster_timings.as_ref().map(|_| Instant::now());
+        let fan = solid_fan_run(
+            self.mesh,
+            self.texture,
+            self.clip,
+            index_offset,
+            self.fan_polygon_scratch,
+            stats.as_deref_mut().map(|stats| &mut stats.solid_fan_probe),
+        )?;
+        if let (Some(start), Some(timings)) = (fan_probe_start, borrow_optional_mut(raster_timings))
+        {
+            timings.solid_fan_probe += start.elapsed().as_micros();
+        }
+        let Some(fan) = fan else {
+            self.fan_polygon_scratch.clear();
+            return Ok(None);
+        };
+        let mut instrumentation = RasterInstrumentation {
+            primitive_stats: borrow_optional_mut(stats),
+            raster_stats: borrow_optional_mut(raster_stats),
+            timings: borrow_optional_mut(raster_timings),
+        };
+        rasterize_solid_fan_run(
+            self.surface,
+            self.mesh,
+            &fan,
+            self.fan_polygon_scratch,
+            self.clip,
+            self.source(index_offset),
+            &mut instrumentation,
+        );
+        let fan_triangle_count = fan.triangle_count;
+        self.fan_polygon_scratch.clear();
+        Ok(Some(fan_triangle_count))
+    }
+
+    fn rasterize_generic_triangle_at(
+        &mut self,
+        index_offset: usize,
+        stats: &mut Option<&mut PrimitiveStats>,
+        raster_stats: &mut Option<&mut RasterStats>,
+        raster_timings: &mut Option<&mut RasterTimings>,
+    ) -> io::Result<()> {
+        let Some([v0, v1, v2]) = mesh_triangle_vertices(self.mesh, index_offset)? else {
+            return Ok(());
+        };
+        let source = self.source(index_offset);
+        if let Some(stats) = borrow_optional_mut(stats) {
+            stats.record_generic_triangle(v0, v1, v2, self.texture, self.clip, source);
+        }
+        rasterize_generic_triangle(
+            self.surface,
+            [v0, v1, v2],
+            self.texture,
+            self.clip,
+            raster_stats,
+            raster_timings,
+        );
+        Ok(())
+    }
+
+    const fn source(&self, index_offset: usize) -> TriangleSource {
+        TriangleSource {
+            primitive_index: self.primitive_index,
+            mesh_index_offset: index_offset,
+        }
+    }
+}
+
 fn mesh_triangle_vertices(
     mesh: &egui::Mesh,
     index_offset: usize,
@@ -448,7 +534,9 @@ fn rasterize_generic_triangle(
 
 fn rasterize_solid_fan_run(
     surface: &mut SoftwareSurface,
-    fan: &SolidFanRun<'_>,
+    mesh: &egui::Mesh,
+    fan: &SolidFanRun,
+    fan_polygon: &[usize],
     clip: ClipBounds,
     source: TriangleSource,
     instrumentation: &mut RasterInstrumentation<'_>,
@@ -460,7 +548,8 @@ fn rasterize_solid_fan_run(
     let fan_start = instrumentation.timing_start();
     rasterize_solid_fan(
         surface,
-        &fan.polygon,
+        &mesh.vertices,
+        &fan_polygon[..fan.polygon_len],
         fan.triangle_count,
         fan.color,
         clip,
@@ -482,7 +571,7 @@ fn rasterize_solid_fan_run(
         stats.record_solid_fan(
             source,
             fan.triangle_count,
-            fan.polygon.len(),
+            fan.polygon_len,
             fan.color[3],
             fan_work,
             elapsed_us,

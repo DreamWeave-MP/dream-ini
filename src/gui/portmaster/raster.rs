@@ -1334,19 +1334,19 @@ mod tests {
             solid_vertex(f32::INFINITY, 0.0, [255, 255, 255, 255]),
             solid_vertex(0.0, 2.0, [255, 255, 255, 255]),
         ];
-        let polygon: Vec<_> = vertices.iter().collect();
+        let polygon: Vec<_> = (0..vertices.len()).collect();
         let bounds = TriangleRasterBounds {
             min_x: 0,
             min_y: 0,
             max_x: 3,
             max_y: 3,
         };
-        let scanline = polygon_scanline_span(&polygon, bounds, 0, 1.0, true);
+        let scanline = polygon_scanline_span(&vertices, &polygon, bounds, 0, 1.0, true);
 
         assert!(scanline.fell_back);
         assert_eq!(scanline.span, None);
         assert_eq!(
-            polygon_fallback_scanline_span(&polygon, bounds, 0, 1.0),
+            polygon_fallback_scanline_span(&vertices, &polygon, bounds, 0, 1.0),
             None
         );
 
@@ -1354,6 +1354,7 @@ mod tests {
         let mut stats = RasterStats::default();
         rasterize_solid_fan(
             &mut surface,
+            &vertices,
             &polygon,
             1,
             [255, 255, 255, 255],
@@ -1392,11 +1393,12 @@ mod tests {
         ) else {
             panic!("solid fan test triangle must be solid");
         };
-        let mut polygon: Vec<_> = vertices[1..].iter().collect();
-        polygon.push(&vertices[0]);
+        let mut polygon: Vec<_> = (1..vertices.len()).collect();
+        polygon.push(0);
 
         rasterize_solid_fan(
             &mut surface,
+            &vertices,
             &polygon,
             triangles.len(),
             color,
@@ -2657,9 +2659,17 @@ mod tests {
         ) else {
             panic!("solid fan test triangle must be solid");
         };
-        let mut polygon: Vec<_> = vertices[1..].iter().collect();
-        polygon.push(&vertices[0]);
-        rasterize_solid_fan(&mut surface, &polygon, triangles.len(), color, clip, None);
+        let mut polygon: Vec<_> = (1..vertices.len()).collect();
+        polygon.push(0);
+        rasterize_solid_fan(
+            &mut surface,
+            vertices,
+            &polygon,
+            triangles.len(),
+            color,
+            clip,
+            None,
+        );
         surface.pixels
     }
 

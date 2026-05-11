@@ -9,31 +9,32 @@ use crate::gui::portmaster::raster::{
 };
 use crate::gui::portmaster::texture::TextureImage;
 
-pub(super) struct SolidFanRun<'a> {
-    pub(super) polygon: Vec<&'a egui::epaint::Vertex>,
+pub(super) struct SolidFanRun {
+    pub(super) polygon_len: usize,
     pub(super) triangle_count: usize,
     pub(super) color: [u8; 4],
 }
 
 #[derive(Clone, Copy)]
-struct FanCandidate<'a> {
+struct FanCandidate {
     center_slot: usize,
     center_index: u32,
     center_pos: egui::Pos2,
-    center_vertex: &'a egui::epaint::Vertex,
+    center_vertex_index: usize,
     triangle_count: usize,
 }
 
 #[derive(Clone, Copy)]
 struct FanTriangle<'a> {
     indices: [u32; 3],
+    vertex_indices: [usize; 3],
     vertices: [&'a egui::epaint::Vertex; 3],
 }
 
 struct CheapFanSeed<'a> {
     center_index: u32,
     center_pos: egui::Pos2,
-    center_vertex: &'a egui::epaint::Vertex,
+    center_vertex_index: usize,
     previous_boundary: FanVertex<'a>,
     current_boundary: FanVertex<'a>,
     expected_area_sign: i8,
@@ -56,8 +57,9 @@ pub(super) fn solid_fan_run<'a>(
     texture: &TextureImage,
     clip: ClipBounds,
     index_offset: usize,
+    polygon_scratch: &'a mut Vec<usize>,
     mut stats: Option<&mut SolidFanProbeStats>,
-) -> io::Result<Option<SolidFanRun<'a>>> {
+) -> io::Result<Option<SolidFanRun>> {
     if let Some(stats) = stats.as_deref_mut() {
         stats.probe_calls += 1;
     }
@@ -71,6 +73,7 @@ pub(super) fn solid_fan_run<'a>(
             clip,
             index_offset,
             center_slot,
+            polygon_scratch,
             stats.as_deref_mut(),
         )? {
             if let Some(stats) = stats.as_deref_mut() {
@@ -88,8 +91,9 @@ fn solid_fan_run_for_center<'a>(
     clip: ClipBounds,
     index_offset: usize,
     center_slot: usize,
+    polygon_scratch: &'a mut Vec<usize>,
     mut stats: Option<&mut SolidFanProbeStats>,
-) -> io::Result<Option<SolidFanRun<'a>>> {
+) -> io::Result<Option<SolidFanRun>> {
     let Some(candidate) =
         cheap_solid_fan_candidate(mesh, index_offset, center_slot, stats.as_deref_mut())?
     else {
@@ -98,9 +102,15 @@ fn solid_fan_run_for_center<'a>(
     if let Some(stats) = stats.as_deref_mut() {
         stats.polygon_builds += 1;
     }
-    let mut polygon = solid_fan_polygon(mesh, index_offset, candidate)?;
-    polygon.push(candidate.center_vertex);
-    if !solid_fan_polygon_is_safe(&polygon) {
+    if candidate.triangle_count + 2 > polygon_scratch.capacity() {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.record_reject(SolidFanProbeRejectReason::ScratchOverflow);
+        }
+        return Ok(None);
+    }
+    solid_fan_polygon(mesh, index_offset, candidate, polygon_scratch)?;
+    polygon_scratch.push(candidate.center_vertex_index);
+    if !solid_fan_polygon_is_safe(&mesh.vertices, polygon_scratch) {
         if let Some(stats) = stats.as_deref_mut() {
             stats.record_reject(SolidFanProbeRejectReason::UnsafePolygon);
         }
@@ -115,18 +125,18 @@ fn solid_fan_run_for_center<'a>(
         return Ok(None);
     };
     Ok(Some(SolidFanRun {
-        polygon,
+        polygon_len: polygon_scratch.len(),
         triangle_count: candidate.triangle_count,
         color,
     }))
 }
 
-fn cheap_solid_fan_candidate<'a>(
-    mesh: &'a egui::Mesh,
+fn cheap_solid_fan_candidate(
+    mesh: &egui::Mesh,
     index_offset: usize,
     center_slot: usize,
     mut stats: Option<&mut SolidFanProbeStats>,
-) -> io::Result<Option<FanCandidate<'a>>> {
+) -> io::Result<Option<FanCandidate>> {
     if let Some(stats) = stats.as_deref_mut() {
         stats.cheap_candidate_attempts += 1;
     }
@@ -137,7 +147,7 @@ fn cheap_solid_fan_candidate<'a>(
     let CheapFanSeed {
         center_index,
         center_pos,
-        center_vertex,
+        center_vertex_index,
         mut previous_boundary,
         mut current_boundary,
         expected_area_sign,
@@ -216,7 +226,7 @@ fn cheap_solid_fan_candidate<'a>(
         center_slot,
         center_index,
         center_pos,
-        center_vertex,
+        center_vertex_index,
         triangle_count,
     }))
 }
@@ -252,7 +262,7 @@ fn cheap_solid_fan_seed<'a>(
     Ok(Some(CheapFanSeed {
         center_index: first.indices[center_slot],
         center_pos: first.vertices[center_slot].pos,
-        center_vertex: first.vertices[center_slot],
+        center_vertex_index: first.vertex_indices[center_slot],
         previous_boundary,
         current_boundary,
         expected_area_sign,
@@ -304,18 +314,19 @@ fn fan_boundary_seen(
     Ok(false)
 }
 
-fn solid_fan_polygon<'a>(
-    mesh: &'a egui::Mesh,
+fn solid_fan_polygon(
+    mesh: &egui::Mesh,
     index_offset: usize,
-    candidate: FanCandidate<'a>,
-) -> io::Result<Vec<&'a egui::epaint::Vertex>> {
-    let mut polygon = Vec::with_capacity(candidate.triangle_count + 2);
+    candidate: FanCandidate,
+    polygon: &mut Vec<usize>,
+) -> io::Result<()> {
+    polygon.clear();
     let Some(first) = fan_triangle_at(mesh, index_offset)? else {
-        return Ok(polygon);
+        return Ok(());
     };
     let [first_boundary, mut current_boundary] = fan_boundaries(first, candidate.center_slot);
-    polygon.push(first_boundary.vertex);
-    polygon.push(current_boundary.vertex);
+    polygon.push(first_boundary.vertex_index);
+    polygon.push(current_boundary.vertex_index);
 
     let mut offset = index_offset + 3;
     for _ in 1..candidate.triangle_count {
@@ -332,11 +343,11 @@ fn solid_fan_polygon<'a>(
         else {
             break;
         };
-        polygon.push(next_boundary.vertex);
+        polygon.push(next_boundary.vertex_index);
         current_boundary = next_boundary;
         offset += 3;
     }
-    Ok(polygon)
+    Ok(())
 }
 
 fn solid_fan_run_color(
@@ -385,6 +396,7 @@ fn fan_triangle_at(mesh: &egui::Mesh, index_offset: usize) -> io::Result<Option<
     };
     Ok(Some(FanTriangle {
         indices,
+        vertex_indices: [i0, i1, i2],
         vertices: [v0, v1, v2],
     }))
 }
@@ -425,10 +437,12 @@ fn fan_boundaries(triangle: FanTriangle<'_>, center_slot: usize) -> [FanVertex<'
     [
         FanVertex {
             index: triangle.indices[first_slot],
+            vertex_index: triangle.vertex_indices[first_slot],
             vertex: triangle.vertices[first_slot],
         },
         FanVertex {
             index: triangle.indices[second_slot],
+            vertex_index: triangle.vertex_indices[second_slot],
             vertex: triangle.vertices[second_slot],
         },
     ]
@@ -466,18 +480,18 @@ fn fan_triangle_area_sign(triangle: FanTriangle<'_>) -> Option<i8> {
     Some(if area.is_sign_positive() { 1 } else { -1 })
 }
 
-fn solid_fan_polygon_is_safe(polygon: &[&egui::epaint::Vertex]) -> bool {
-    polygon.len() >= SOLID_FAN_MIN_TRIANGLES + 2 && polygon_is_strictly_convex(polygon)
+fn solid_fan_polygon_is_safe(vertices: &[egui::epaint::Vertex], polygon: &[usize]) -> bool {
+    polygon.len() >= SOLID_FAN_MIN_TRIANGLES + 2 && polygon_is_strictly_convex(vertices, polygon)
 }
 
-fn polygon_is_strictly_convex(polygon: &[&egui::epaint::Vertex]) -> bool {
-    let Some(expected_direction) = polygon_area_direction(polygon) else {
+fn polygon_is_strictly_convex(vertices: &[egui::epaint::Vertex], polygon: &[usize]) -> bool {
+    let Some(expected_direction) = polygon_area_direction(vertices, polygon) else {
         return false;
     };
     for index in 0..polygon.len() {
-        let a = polygon[index].pos;
-        let b = polygon[(index + 1) % polygon.len()].pos;
-        let c = polygon[(index + 2) % polygon.len()].pos;
+        let a = vertices[polygon[index]].pos;
+        let b = vertices[polygon[(index + 1) % polygon.len()]].pos;
+        let c = vertices[polygon[(index + 2) % polygon.len()]].pos;
         let turn = fan_edge(a, b, c);
         if non_zero_float_direction(turn) != Some(expected_direction) {
             return false;
@@ -486,11 +500,14 @@ fn polygon_is_strictly_convex(polygon: &[&egui::epaint::Vertex]) -> bool {
     true
 }
 
-fn polygon_area_direction(polygon: &[&egui::epaint::Vertex]) -> Option<std::cmp::Ordering> {
+fn polygon_area_direction(
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
+) -> Option<std::cmp::Ordering> {
     let mut twice_area = 0.0;
     for index in 0..polygon.len() {
-        let a = polygon[index].pos;
-        let b = polygon[(index + 1) % polygon.len()].pos;
+        let a = vertices[polygon[index]].pos;
+        let b = vertices[polygon[(index + 1) % polygon.len()]].pos;
         twice_area += a.x.mul_add(b.y, -(a.y * b.x));
     }
     non_zero_float_direction(-twice_area)
@@ -513,6 +530,7 @@ fn fan_edge(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
 #[derive(Clone, Copy)]
 struct FanVertex<'a> {
     index: u32,
+    vertex_index: usize,
     vertex: &'a egui::epaint::Vertex,
 }
 
