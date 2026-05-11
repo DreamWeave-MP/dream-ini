@@ -30,28 +30,48 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan(
         stats.solid_fan_triangles += triangle_count;
     }
     let precomputed_edges = precompute_polygon_edges(vertices, polygon, area_sign);
+    if let Some(stats) = &mut stats {
+        stats.solid_fan_edge_precompute_calls += 1;
+        match &precomputed_edges {
+            Ok(edges) => stats.solid_fan_edge_precompute_edges += edges.len,
+            Err(PrecomputeFanEdgesError::Budget) => {
+                stats.solid_fan_edge_precompute_fallback_budget += 1;
+            }
+            Err(PrecomputeFanEdgesError::NonFinite) => {
+                stats.solid_fan_edge_precompute_fallback_non_finite += 1;
+            }
+        }
+    }
 
     for y in bounds.min_y..bounds.max_y {
-        let scanline = precomputed_edges.as_ref().map_or_else(
-            || polygon_scanline_span(vertices, polygon, bounds, y, area_sign, stats.is_some()),
-            |edges| {
-                polygon_scanline_span_precomputed(
-                    edges,
-                    vertices,
-                    polygon,
-                    bounds,
-                    y,
-                    area_sign,
-                    stats.is_some(),
-                )
-            },
-        );
+        let collect_stats = stats.is_some();
+        let scanline = if let Ok(edges) = &precomputed_edges {
+            polygon_scanline_span_precomputed(
+                edges,
+                vertices,
+                polygon,
+                bounds,
+                y,
+                area_sign,
+                collect_stats,
+            )
+        } else {
+            if let Some(stats) = &mut stats {
+                stats.solid_fan_edge_precompute_old_solver_rows += 1;
+            }
+            polygon_scanline_span(vertices, polygon, bounds, y, area_sign, collect_stats)
+        };
         let span = if scanline.fell_back {
             if let Some(stats) = &mut stats {
                 stats.solid_fan_fallback_rows += 1;
             }
             polygon_fallback_scanline_span(vertices, polygon, bounds, y, area_sign)
         } else {
+            if precomputed_edges.is_ok()
+                && let Some(stats) = &mut stats
+            {
+                stats.solid_fan_edge_precompute_used_rows += 1;
+            }
             scanline.span
         };
         let Some((span_start, span_end)) = span else {
@@ -110,9 +130,9 @@ fn precompute_polygon_edges(
     vertices: &[egui::epaint::Vertex],
     polygon: &[usize],
     area_sign: f32,
-) -> Option<PrecomputedFanEdges> {
+) -> Result<PrecomputedFanEdges, PrecomputeFanEdgesError> {
     if polygon.len() > SOLID_FAN_PRECOMPUTED_EDGE_BUDGET {
-        return None;
+        return Err(PrecomputeFanEdgesError::Budget);
     }
 
     let mut edges = [PrecomputedFanEdge::default(); SOLID_FAN_PRECOMPUTED_EDGE_BUDGET];
@@ -121,7 +141,7 @@ fn precompute_polygon_edges(
         let b = vertices[polygon[(edge_index + 1) % polygon.len()]].pos;
         let slope_x = edge_step_x(a, b) * area_sign;
         if !slope_x.is_finite() {
-            return None;
+            return Err(PrecomputeFanEdgesError::NonFinite);
         }
         edges[edge_index] = PrecomputedFanEdge {
             a,
@@ -130,13 +150,19 @@ fn precompute_polygon_edges(
             includes_boundary: edge_includes_boundary(a, b, area_sign),
         };
     }
-    Some(PrecomputedFanEdges {
+    Ok(PrecomputedFanEdges {
         edges,
         len: polygon.len(),
     })
 }
 
-fn polygon_raster_bounds(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrecomputeFanEdgesError {
+    Budget,
+    NonFinite,
+}
+
+pub(in crate::gui::portmaster) fn polygon_raster_bounds(
     vertices: &[egui::epaint::Vertex],
     polygon: &[usize],
     clip: ClipBounds,

@@ -300,6 +300,7 @@ const TEXTURED_QUAD_REJECT_OFFENDER_LIMIT: usize = 8;
 pub(super) struct SolidFanRasterWork {
     px: usize,
     rows: usize,
+    edge_intersections: usize,
     endpoint_probe_px: usize,
     fallback_rows: usize,
 }
@@ -309,6 +310,7 @@ impl SolidFanRasterWork {
         Self {
             px: stats.solid_fan_px,
             rows: stats.solid_fan_rows,
+            edge_intersections: stats.solid_fan_edge_intersections,
             endpoint_probe_px: stats.solid_fan_endpoint_probe_px,
             fallback_rows: stats.solid_fan_fallback_rows,
         }
@@ -322,10 +324,24 @@ impl std::ops::Sub for SolidFanRasterWork {
         Self {
             px: self.px.saturating_sub(rhs.px),
             rows: self.rows.saturating_sub(rhs.rows),
+            edge_intersections: self
+                .edge_intersections
+                .saturating_sub(rhs.edge_intersections),
             endpoint_probe_px: self.endpoint_probe_px.saturating_sub(rhs.endpoint_probe_px),
             fallback_rows: self.fallback_rows.saturating_sub(rhs.fallback_rows),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct SolidFanRasterRecord {
+    pub(super) source: TriangleSource,
+    pub(super) triangle_count: usize,
+    pub(super) polygon_vertices: usize,
+    pub(super) alpha: u8,
+    pub(super) bounds: Option<TriangleRasterBounds>,
+    pub(super) work: SolidFanRasterWork,
+    pub(super) elapsed_us: u128,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -335,6 +351,8 @@ struct SolidFanOffender {
     triangle_count: usize,
     polygon_vertices: usize,
     alpha: u8,
+    bounds: Option<TriangleRasterBounds>,
+    shape_key: u64,
     work: SolidFanRasterWork,
 }
 
@@ -759,22 +777,22 @@ impl PrimitiveStats {
             ));
     }
 
-    pub(super) fn record_solid_fan(
-        &mut self,
-        source: TriangleSource,
-        triangle_count: usize,
-        polygon_vertices: usize,
-        alpha: u8,
-        work: SolidFanRasterWork,
-        elapsed_us: u128,
-    ) {
+    pub(super) fn record_solid_fan(&mut self, record: SolidFanRasterRecord) {
+        let shape_key = solid_fan_shape_key(
+            record.bounds,
+            record.alpha,
+            record.polygon_vertices,
+            record.triangle_count,
+        );
         self.solid_fan_offenders.record(SolidFanOffender {
-            elapsed_us,
-            source,
-            triangle_count,
-            polygon_vertices,
-            alpha,
-            work,
+            elapsed_us: record.elapsed_us,
+            source: record.source,
+            triangle_count: record.triangle_count,
+            polygon_vertices: record.polygon_vertices,
+            alpha: record.alpha,
+            bounds: record.bounds,
+            shape_key,
+            work: record.work,
         });
     }
 
@@ -1120,19 +1138,48 @@ fn format_alphas(alphas: [u8; 6]) -> String {
 }
 
 fn format_solid_fan_offender(index: usize, offender: SolidFanOffender) -> String {
+    let bounds = offender
+        .bounds
+        .map_or_else(|| "none".to_owned(), format_bounds);
     format!(
-        "offender{index}_elapsed_us={} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_triangles={} offender{index}_polygon_vertices={} offender{index}_alpha={} offender{index}_px={} offender{index}_rows={} offender{index}_endpoint_probe_px={} offender{index}_fallback_rows={}",
+        "offender{index}_elapsed_us={} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_triangles={} offender{index}_polygon_vertices={} offender{index}_alpha={} offender{index}_bounds={} offender{index}_bbox_px={} offender{index}_shape_key={:016x} offender{index}_px={} offender{index}_rows={} offender{index}_edge_intersections={} offender{index}_endpoint_probe_px={} offender{index}_fallback_rows={}",
         offender.elapsed_us,
         offender.source.primitive_index,
         offender.source.mesh_index_offset,
         offender.triangle_count,
         offender.polygon_vertices,
         offender.alpha,
+        bounds,
+        offender.bounds.map_or(0, TriangleRasterBounds::pixel_area),
+        offender.shape_key,
         offender.work.px,
         offender.work.rows,
+        offender.work.edge_intersections,
         offender.work.endpoint_probe_px,
         offender.work.fallback_rows,
     )
+}
+
+fn solid_fan_shape_key(
+    bounds: Option<TriangleRasterBounds>,
+    alpha: u8,
+    polygon_vertices: usize,
+    triangle_count: usize,
+) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    if let Some(bounds) = bounds {
+        hash = mix_shape_key(hash, bounds.min_x as u64);
+        hash = mix_shape_key(hash, bounds.min_y as u64);
+        hash = mix_shape_key(hash, bounds.max_x as u64);
+        hash = mix_shape_key(hash, bounds.max_y as u64);
+    }
+    hash = mix_shape_key(hash, u64::from(alpha));
+    hash = mix_shape_key(hash, polygon_vertices as u64);
+    mix_shape_key(hash, triangle_count as u64)
+}
+
+const fn mix_shape_key(hash: u64, value: u64) -> u64 {
+    (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3)
 }
 
 fn format_triangle_texels(sample: TriangleTexelSample) -> String {
@@ -1857,25 +1904,43 @@ mod tests {
     fn primitive_stats_formats_solid_fan_offenders_log_line() {
         let mut stats = PrimitiveStats::default();
 
-        stats.record_solid_fan(
-            triangle_source(7, 12),
-            4,
-            6,
-            128,
-            SolidFanRasterWork {
+        stats.record_solid_fan(SolidFanRasterRecord {
+            source: triangle_source(7, 12),
+            triangle_count: 4,
+            polygon_vertices: 6,
+            alpha: 128,
+            bounds: Some(TriangleRasterBounds {
+                min_x: 1,
+                min_y: 2,
+                max_x: 7,
+                max_y: 9,
+            }),
+            work: SolidFanRasterWork {
                 px: 33,
                 rows: 5,
+                edge_intersections: 14,
                 endpoint_probe_px: 9,
                 fallback_rows: 1,
             },
-            42,
-        );
+            elapsed_us: 42,
+        });
 
         assert_eq!(
-            stats.solid_fan_offenders_log_line().as_deref(),
-            Some(
-                "software renderer solid_fan_offenders shown=1 cap=8 offender0_elapsed_us=42 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_triangles=4 offender0_polygon_vertices=6 offender0_alpha=128 offender0_px=33 offender0_rows=5 offender0_endpoint_probe_px=9 offender0_fallback_rows=1"
-            )
+            stats.solid_fan_offenders_log_line(),
+            Some(format!(
+                "software renderer solid_fan_offenders shown=1 cap=8 offender0_elapsed_us=42 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_triangles=4 offender0_polygon_vertices=6 offender0_alpha=128 offender0_bounds=1,2,7,9 offender0_bbox_px=42 offender0_shape_key={:016x} offender0_px=33 offender0_rows=5 offender0_edge_intersections=14 offender0_endpoint_probe_px=9 offender0_fallback_rows=1",
+                solid_fan_shape_key(
+                    Some(TriangleRasterBounds {
+                        min_x: 1,
+                        min_y: 2,
+                        max_x: 7,
+                        max_y: 9,
+                    }),
+                    128,
+                    6,
+                    4,
+                )
+            ))
         );
     }
 
@@ -2054,9 +2119,27 @@ mod tests {
             triangle_count: 4,
             polygon_vertices: 6,
             alpha: 255,
+            bounds: Some(TriangleRasterBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: 1,
+                max_y: 1,
+            }),
+            shape_key: solid_fan_shape_key(
+                Some(TriangleRasterBounds {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: 1,
+                    max_y: 1,
+                }),
+                255,
+                6,
+                4,
+            ),
             work: SolidFanRasterWork {
                 px: usize::try_from(elapsed_us).expect("elapsed"),
                 rows: 1,
+                edge_intersections: 2,
                 endpoint_probe_px: 2,
                 fallback_rows: 0,
             },

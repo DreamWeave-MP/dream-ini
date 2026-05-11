@@ -16,9 +16,9 @@ mod textured;
 mod triangle;
 mod types;
 
-pub(super) use fan::rasterize_solid_fan;
 #[cfg(test)]
 use fan::{polygon_fallback_scanline_span, polygon_scanline_span};
+pub(super) use fan::{polygon_raster_bounds, rasterize_solid_fan};
 use math::edge;
 pub(super) use math::usize_to_f32;
 #[cfg(test)]
@@ -1363,6 +1363,9 @@ mod tests {
         );
 
         assert!(stats.solid_fan_fallback_rows > 0);
+        assert_eq!(stats.solid_fan_edge_precompute_calls, 1);
+        assert_eq!(stats.solid_fan_edge_precompute_fallback_non_finite, 1);
+        assert!(stats.solid_fan_edge_precompute_old_solver_rows > 0);
         assert_eq!(stats.solid_fan_rows, 0);
         assert_eq!(stats.solid_fan_px, 0);
         assert_eq!(stats.solid_fan_endpoint_probe_px, 0);
@@ -1411,6 +1414,10 @@ mod tests {
             render_test_solid_fan_reference(64, 64, &vertices, &texture)
         );
         assert_eq!(stats.solid_fan_fallback_rows, 0);
+        assert_eq!(stats.solid_fan_edge_precompute_calls, 1);
+        assert_eq!(stats.solid_fan_edge_precompute_edges, polygon.len());
+        assert!(stats.solid_fan_edge_precompute_used_rows > 0);
+        assert_eq!(stats.solid_fan_edge_precompute_old_solver_rows, 0);
         assert!(stats.solid_fan_rows > 0);
         assert!(stats.solid_fan_edge_intersections <= polygon.len() * stats.solid_fan_rows);
         assert!(stats.solid_fan_endpoint_probe_px <= stats.solid_fan_rows * 6);

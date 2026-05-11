@@ -10,15 +10,17 @@ mod stats;
 use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
-    ClipBounds, RasterStats, classify_triangle, rasterize_solid_fan, rasterize_triangle,
-    usize_to_f32,
+    ClipBounds, RasterStats, classify_triangle, polygon_raster_bounds, rasterize_solid_fan,
+    rasterize_triangle, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
 use super::{GuiFrame, GuiShell};
 use fan::{SolidFanPolygonScratch, SolidFanRun, solid_fan_run};
 use quad::try_rasterize_quad_window;
-use stats::{PrimitiveStats, RasterTimings, SolidFanRasterWork, TriangleSource};
+use stats::{
+    PrimitiveStats, RasterTimings, SolidFanRasterRecord, SolidFanRasterWork, TriangleSource,
+};
 
 #[derive(Debug)]
 pub(super) struct SoftwareRenderer {
@@ -550,6 +552,10 @@ fn rasterize_solid_fan_run(
         .raster_stats
         .as_deref()
         .map(SolidFanRasterWork::from_stats);
+    let fan_bounds = instrumentation
+        .primitive_stats
+        .as_ref()
+        .and_then(|_| polygon_raster_bounds(&mesh.vertices, &fan_polygon[..fan.polygon_len], clip));
     let fan_start = instrumentation.timing_start();
     rasterize_solid_fan(
         surface,
@@ -573,14 +579,15 @@ fn rasterize_solid_fan_run(
     if let Some(stats) = instrumentation.primitive_stats() {
         stats.solid_fan_runs += 1;
         stats.solid_fan_triangles += fan.triangle_count;
-        stats.record_solid_fan(
+        stats.record_solid_fan(SolidFanRasterRecord {
             source,
-            fan.triangle_count,
-            fan.polygon_len,
-            fan.color[3],
-            fan_work,
+            triangle_count: fan.triangle_count,
+            polygon_vertices: fan.polygon_len,
+            alpha: fan.color[3],
+            bounds: fan_bounds,
+            work: fan_work,
             elapsed_us,
-        );
+        });
     }
     if let Some(timings) = instrumentation.timings() {
         timings.solid_fan_raster += elapsed_us;
