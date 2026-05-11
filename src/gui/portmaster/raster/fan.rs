@@ -8,6 +8,8 @@ use super::types::{ClipBounds, TriangleRasterBounds};
 use super::{RasterStats, usize_to_f32};
 use crate::gui::portmaster::surface::SoftwareSurface;
 
+const SOLID_FAN_PRECOMPUTED_EDGE_BUDGET: usize = 256;
+
 pub(in crate::gui::portmaster) fn rasterize_solid_fan(
     surface: &mut SoftwareSurface,
     vertices: &[egui::epaint::Vertex],
@@ -27,10 +29,23 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan(
         stats.solid_fan_calls += 1;
         stats.solid_fan_triangles += triangle_count;
     }
+    let precomputed_edges = precompute_polygon_edges(vertices, polygon, area_sign);
 
     for y in bounds.min_y..bounds.max_y {
-        let scanline =
-            polygon_scanline_span(vertices, polygon, bounds, y, area_sign, stats.is_some());
+        let scanline = precomputed_edges.as_ref().map_or_else(
+            || polygon_scanline_span(vertices, polygon, bounds, y, area_sign, stats.is_some()),
+            |edges| {
+                polygon_scanline_span_precomputed(
+                    edges,
+                    vertices,
+                    polygon,
+                    bounds,
+                    y,
+                    area_sign,
+                    stats.is_some(),
+                )
+            },
+        );
         let span = if scanline.fell_back {
             if let Some(stats) = &mut stats {
                 stats.solid_fan_fallback_rows += 1;
@@ -70,6 +85,55 @@ pub(super) struct PolygonScanlineSpan {
     edge_intersections: usize,
     endpoint_probe_px: usize,
     pub(super) fell_back: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PrecomputedFanEdge {
+    a: egui::Pos2,
+    b: egui::Pos2,
+    slope_x: f32,
+    includes_boundary: bool,
+}
+
+struct PrecomputedFanEdges {
+    edges: [PrecomputedFanEdge; SOLID_FAN_PRECOMPUTED_EDGE_BUDGET],
+    len: usize,
+}
+
+impl PrecomputedFanEdges {
+    fn as_slice(&self) -> &[PrecomputedFanEdge] {
+        &self.edges[..self.len]
+    }
+}
+
+fn precompute_polygon_edges(
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
+    area_sign: f32,
+) -> Option<PrecomputedFanEdges> {
+    if polygon.len() > SOLID_FAN_PRECOMPUTED_EDGE_BUDGET {
+        return None;
+    }
+
+    let mut edges = [PrecomputedFanEdge::default(); SOLID_FAN_PRECOMPUTED_EDGE_BUDGET];
+    for edge_index in 0..polygon.len() {
+        let a = vertices[polygon[edge_index]].pos;
+        let b = vertices[polygon[(edge_index + 1) % polygon.len()]].pos;
+        let slope_x = edge_step_x(a, b) * area_sign;
+        if !slope_x.is_finite() {
+            return None;
+        }
+        edges[edge_index] = PrecomputedFanEdge {
+            a,
+            b,
+            slope_x,
+            includes_boundary: edge_includes_boundary(a, b, area_sign),
+        };
+    }
+    Some(PrecomputedFanEdges {
+        edges,
+        len: polygon.len(),
+    })
 }
 
 fn polygon_raster_bounds(
@@ -163,6 +227,82 @@ pub(super) fn polygon_scanline_span(
             lower = Some(tighter_lower_bound(lower, boundary, includes_boundary));
         } else {
             upper = Some(tighter_upper_bound(upper, boundary, includes_boundary));
+        }
+    }
+    let start_x = polygon_lower_bound_x(lower, bounds);
+    let end_x = polygon_upper_bound_x(upper, bounds).max(start_x);
+    if start_x >= end_x {
+        return PolygonScanlineSpan {
+            edge_intersections,
+            ..PolygonScanlineSpan::default()
+        };
+    }
+
+    let mut span = (start_x, end_x);
+    let endpoint_probe_px = polygon_correct_span_endpoints(
+        &mut span,
+        y,
+        vertices,
+        polygon,
+        area_sign,
+        bounds,
+        collect_stats,
+    );
+    PolygonScanlineSpan {
+        span: (span.0 < span.1).then_some(span),
+        edge_intersections,
+        endpoint_probe_px,
+        fell_back: false,
+    }
+}
+
+fn polygon_scanline_span_precomputed(
+    edges: &PrecomputedFanEdges,
+    vertices: &[egui::epaint::Vertex],
+    polygon: &[usize],
+    bounds: TriangleRasterBounds,
+    y: usize,
+    area_sign: f32,
+    collect_stats: bool,
+) -> PolygonScanlineSpan {
+    let pixel_center_y = usize_to_f32(y) + 0.5;
+    let mut lower = None;
+    let mut upper = None;
+    let mut edge_intersections = 0;
+    for edge_data in edges.as_slice() {
+        let at_origin = edge(edge_data.a, edge_data.b, egui::pos2(0.0, pixel_center_y)) * area_sign;
+        if !at_origin.is_finite() {
+            return PolygonScanlineSpan {
+                fell_back: true,
+                ..PolygonScanlineSpan::default()
+            };
+        }
+        if same_f32(edge_data.slope_x, 0.0) {
+            if !edge_covers_pixel(at_origin, edge_data.includes_boundary) {
+                return PolygonScanlineSpan::default();
+            }
+            continue;
+        }
+        let boundary = -at_origin / edge_data.slope_x;
+        if !boundary.is_finite() {
+            return PolygonScanlineSpan {
+                fell_back: true,
+                ..PolygonScanlineSpan::default()
+            };
+        }
+        edge_intersections += 1;
+        if edge_data.slope_x > 0.0 {
+            lower = Some(tighter_lower_bound(
+                lower,
+                boundary,
+                edge_data.includes_boundary,
+            ));
+        } else {
+            upper = Some(tighter_upper_bound(
+                upper,
+                boundary,
+                edge_data.includes_boundary,
+            ));
         }
     }
     let start_x = polygon_lower_bound_x(lower, bounds);
@@ -396,4 +536,78 @@ fn polygon_covers_pixel(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn precomputed_scanline_solver_matches_reference_solver() {
+        let cases = [
+            vec![
+                test_vertex(32.0, 6.0),
+                test_vertex(48.0, 10.0),
+                test_vertex(58.0, 26.0),
+                test_vertex(56.0, 42.0),
+                test_vertex(40.0, 56.0),
+                test_vertex(22.0, 54.0),
+                test_vertex(8.0, 38.0),
+                test_vertex(10.0, 20.0),
+            ],
+            vec![
+                test_vertex(0.5, 5.0),
+                test_vertex(1.0, 4.4),
+                test_vertex(4.0, 4.1),
+                test_vertex(8.0, 4.4),
+                test_vertex(9.5, 5.0),
+                test_vertex(8.0, 5.6),
+                test_vertex(4.0, 5.9),
+                test_vertex(1.0, 5.6),
+            ],
+            vec![
+                test_vertex(2.25, 1.25),
+                test_vertex(11.75, 2.5),
+                test_vertex(10.5, 9.25),
+                test_vertex(5.5, 11.5),
+                test_vertex(1.25, 7.25),
+            ],
+        ];
+        let bounds = TriangleRasterBounds {
+            min_x: 0,
+            min_y: 0,
+            max_x: 64,
+            max_y: 64,
+        };
+
+        for vertices in cases {
+            let polygon: Vec<_> = (0..vertices.len()).collect();
+            let area_sign = polygon_area_sign(&vertices, &polygon).expect("polygon has area");
+            let precomputed = precompute_polygon_edges(&vertices, &polygon, area_sign)
+                .expect("test polygon fits precompute budget");
+            for y in bounds.min_y..bounds.max_y {
+                assert_eq!(
+                    polygon_scanline_span(&vertices, &polygon, bounds, y, area_sign, true),
+                    polygon_scanline_span_precomputed(
+                        &precomputed,
+                        &vertices,
+                        &polygon,
+                        bounds,
+                        y,
+                        area_sign,
+                        true,
+                    ),
+                    "scanline mismatch at y={y}",
+                );
+            }
+        }
+    }
+
+    fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
+        egui::epaint::Vertex {
+            pos: egui::pos2(x, y),
+            uv: egui::Pos2::ZERO,
+            color: egui::Color32::WHITE,
+        }
+    }
 }
