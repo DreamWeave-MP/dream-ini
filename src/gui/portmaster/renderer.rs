@@ -16,7 +16,7 @@ use super::raster::{
 use super::surface::SoftwareSurface;
 use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
 use super::{GuiFrame, GuiShell};
-use fan::{SolidFanRun, solid_fan_run};
+use fan::{SolidFanPolygonScratch, SolidFanRun, solid_fan_run};
 use quad::try_rasterize_quad_window;
 use stats::{PrimitiveStats, RasterTimings, SolidFanRasterWork, TriangleSource};
 
@@ -198,6 +198,7 @@ impl SoftwareRenderer {
             texture,
             clip,
             primitive_index,
+            solid_fan_polygon_scratch_budget: SOLID_FAN_POLYGON_SCRATCH_CAPACITY,
         };
         rasterize_mesh_contents(
             &mut context,
@@ -242,6 +243,7 @@ struct MeshRasterContext<'a> {
     texture: &'a TextureImage,
     clip: ClipBounds,
     primitive_index: usize,
+    solid_fan_polygon_scratch_budget: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -418,7 +420,10 @@ impl MeshRasterContext<'_> {
             self.texture,
             self.clip,
             index_offset,
-            self.fan_polygon_scratch,
+            SolidFanPolygonScratch {
+                polygon: &mut *self.fan_polygon_scratch,
+                budget: self.solid_fan_polygon_scratch_budget,
+            },
             stats.as_deref_mut().map(|stats| &mut stats.solid_fan_probe),
         )?;
         if let (Some(start), Some(timings)) = (fan_probe_start, borrow_optional_mut(raster_timings))
@@ -761,6 +766,57 @@ mod tests {
                 .expect("solid fan offenders")
                 .contains("offender0_triangles=4 offender0_polygon_vertices=6 offender0_alpha=128")
         );
+    }
+
+    #[test]
+    fn renderer_solid_fan_scratch_overflow_falls_back_to_generic_triangles() {
+        let texture_id = egui::TextureId::Managed(1);
+        let mut renderer = SoftwareRenderer::default();
+        renderer.surface.resize(12, 12).expect("surface");
+        renderer.surface.clear([0, 0, 0, 255]);
+        renderer
+            .textures
+            .apply(&texture_delta(texture_id))
+            .expect("texture");
+        let mesh = solid_fan_mesh(texture_id, [128, 32, 0, 128]);
+        let clip = clip_bounds(12, 12);
+        let reference = render_solid_fan_reference(
+            &mesh,
+            renderer.textures.get(&texture_id).expect("stored texture"),
+            clip,
+        );
+        let mut primitive_stats = PrimitiveStats::default();
+        let mut raster_stats = RasterStats::default();
+
+        {
+            let mut stats = Some(&mut primitive_stats);
+            let mut raster_stats = Some(&mut raster_stats);
+            let mut raster_timings = None;
+            let mut context = MeshRasterContext {
+                surface: &mut renderer.surface,
+                fan_polygon_scratch: &mut renderer.solid_fan_polygon_scratch,
+                mesh: &mesh,
+                texture: renderer.textures.get(&texture_id).expect("stored texture"),
+                clip,
+                primitive_index: 0,
+                solid_fan_polygon_scratch_budget: 5,
+            };
+            rasterize_mesh_contents(
+                &mut context,
+                &mut stats,
+                &mut raster_stats,
+                &mut raster_timings,
+            )
+            .expect("rasterize mesh");
+        }
+
+        assert_eq!(renderer.surface.pixels, reference);
+        assert_eq!(primitive_stats.solid_fan_probe.reject_scratch_overflow, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.polygon_builds, 0);
+        assert_eq!(primitive_stats.solid_fan_probe.accepted_runs, 0);
+        assert_eq!(primitive_stats.solid_fan_runs, 0);
+        assert_eq!(primitive_stats.generic_triangles_rasterized, 4);
+        assert_eq!(raster_stats.solid_fan_calls, 0);
     }
 
     fn quad_vertices() -> [egui::epaint::Vertex; 4] {

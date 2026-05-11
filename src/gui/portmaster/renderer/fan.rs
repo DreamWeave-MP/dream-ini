@@ -15,6 +15,11 @@ pub(super) struct SolidFanRun {
     pub(super) color: [u8; 4],
 }
 
+pub(super) struct SolidFanPolygonScratch<'a> {
+    pub(super) polygon: &'a mut Vec<usize>,
+    pub(super) budget: usize,
+}
+
 #[derive(Clone, Copy)]
 struct FanCandidate {
     center_slot: usize,
@@ -57,7 +62,7 @@ pub(super) fn solid_fan_run<'a>(
     texture: &TextureImage,
     clip: ClipBounds,
     index_offset: usize,
-    polygon_scratch: &'a mut Vec<usize>,
+    mut polygon_scratch: SolidFanPolygonScratch<'a>,
     mut stats: Option<&mut SolidFanProbeStats>,
 ) -> io::Result<Option<SolidFanRun>> {
     if let Some(stats) = stats.as_deref_mut() {
@@ -73,7 +78,7 @@ pub(super) fn solid_fan_run<'a>(
             clip,
             index_offset,
             center_slot,
-            polygon_scratch,
+            &mut polygon_scratch,
             stats.as_deref_mut(),
         )? {
             if let Some(stats) = stats.as_deref_mut() {
@@ -85,13 +90,13 @@ pub(super) fn solid_fan_run<'a>(
     Ok(None)
 }
 
-fn solid_fan_run_for_center<'a>(
-    mesh: &'a egui::Mesh,
+fn solid_fan_run_for_center(
+    mesh: &egui::Mesh,
     texture: &TextureImage,
     clip: ClipBounds,
     index_offset: usize,
     center_slot: usize,
-    polygon_scratch: &'a mut Vec<usize>,
+    polygon_scratch: &mut SolidFanPolygonScratch<'_>,
     mut stats: Option<&mut SolidFanProbeStats>,
 ) -> io::Result<Option<SolidFanRun>> {
     let Some(candidate) =
@@ -99,18 +104,18 @@ fn solid_fan_run_for_center<'a>(
     else {
         return Ok(None);
     };
-    if let Some(stats) = stats.as_deref_mut() {
-        stats.polygon_builds += 1;
-    }
-    if candidate.triangle_count + 2 > polygon_scratch.capacity() {
+    if candidate.triangle_count + 2 > polygon_scratch.budget {
         if let Some(stats) = stats.as_deref_mut() {
             stats.record_reject(SolidFanProbeRejectReason::ScratchOverflow);
         }
         return Ok(None);
     }
-    solid_fan_polygon(mesh, index_offset, candidate, polygon_scratch)?;
-    polygon_scratch.push(candidate.center_vertex_index);
-    if !solid_fan_polygon_is_safe(&mesh.vertices, polygon_scratch) {
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.polygon_builds += 1;
+    }
+    solid_fan_polygon(mesh, index_offset, candidate, polygon_scratch.polygon)?;
+    polygon_scratch.polygon.push(candidate.center_vertex_index);
+    if !solid_fan_polygon_is_safe(&mesh.vertices, polygon_scratch.polygon) {
         if let Some(stats) = stats.as_deref_mut() {
             stats.record_reject(SolidFanProbeRejectReason::UnsafePolygon);
         }
@@ -125,7 +130,7 @@ fn solid_fan_run_for_center<'a>(
         return Ok(None);
     };
     Ok(Some(SolidFanRun {
-        polygon_len: polygon_scratch.len(),
+        polygon_len: polygon_scratch.polygon.len(),
         triangle_count: candidate.triangle_count,
         color,
     }))
