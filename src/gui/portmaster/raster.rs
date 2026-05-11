@@ -1,14 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::cmp::Ordering;
 use std::io;
 use std::time::{Duration, Instant};
 
 use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
 
+mod math;
 mod stats;
 
+pub(super) use math::usize_to_f32;
+use math::{
+    color_to_array, edge, edge_covers_pixel, edge_includes_boundary, edge_step_x, edge_step_y,
+    f32_to_u8_round_clamped, f32_to_usize_ceil_clamped, f32_to_usize_floor_clamped,
+    f32_to_usize_round_clamped, interpolate_channel_value, interpolate_color, modulate_color,
+    near_finite_pos2, same_f32, same_pos2,
+};
 pub(super) use stats::RasterStats;
 
 const UV_AFFINE_EPSILON: f32 = 1.0 / 1_048_576.0;
@@ -145,101 +152,6 @@ fn clamp_rect_value(value: f32, max: usize) -> io::Result<usize> {
         return Err(io::Error::other("non-finite clip rectangle value"));
     }
     Ok(f32_to_usize_floor_clamped(value, max))
-}
-
-pub(super) fn usize_to_f32(value: usize) -> f32 {
-    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
-}
-
-fn f32_to_usize_floor_clamped(value: f32, max: usize) -> usize {
-    f32_to_usize_threshold_clamped(value.floor(), max)
-}
-
-fn f32_to_usize_ceil_clamped(value: f32, max: usize) -> usize {
-    f32_to_usize_threshold_clamped(value.ceil(), max)
-}
-
-fn f32_to_usize_round_clamped(value: f32, max: usize) -> usize {
-    f32_to_usize_threshold_clamped(value.round(), max)
-}
-
-fn f32_to_usize_threshold_clamped(value: f32, max: usize) -> usize {
-    if value <= 0.0 {
-        return 0;
-    }
-    let max_value = usize_to_f32(max);
-    if value >= max_value {
-        return max;
-    }
-    f32_to_usize_bounded(value.clamp(0.0, max_value))
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "value is clamped to a non-negative finite usize range before casting"
-)]
-fn f32_to_usize_bounded(value: f32) -> usize {
-    value as usize
-}
-
-fn f32_to_u8_round_clamped(value: f32) -> u8 {
-    let value = value.round().clamp(0.0, 255.0);
-    f32_to_u8_bounded(value)
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "value is rounded and clamped to the u8 range before casting"
-)]
-fn f32_to_u8_bounded(value: f32) -> u8 {
-    value as u8
-}
-
-fn edge(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
-    (c.x - a.x).mul_add(b.y - a.y, -((c.y - a.y) * (b.x - a.x)))
-}
-
-fn edge_step_x(a: egui::Pos2, b: egui::Pos2) -> f32 {
-    b.y - a.y
-}
-
-fn edge_step_y(a: egui::Pos2, b: egui::Pos2) -> f32 {
-    -(b.x - a.x)
-}
-
-fn edge_is_top_left(a: egui::Pos2, b: egui::Pos2) -> bool {
-    a.y < b.y || (same_f32(a.y, b.y) && a.x > b.x)
-}
-
-fn edge_includes_boundary(a: egui::Pos2, b: egui::Pos2, area: f32) -> bool {
-    if area < 0.0 {
-        edge_is_top_left(a, b)
-    } else {
-        !edge_is_top_left(a, b)
-    }
-}
-
-fn edge_covers_pixel(weight: f32, includes_boundary: bool) -> bool {
-    weight > 0.0 || (same_f32(weight, 0.0) && includes_boundary)
-}
-
-fn same_f32(left: f32, right: f32) -> bool {
-    matches!(left.partial_cmp(&right), Some(Ordering::Equal))
-}
-
-fn same_pos2(left: egui::Pos2, right: egui::Pos2) -> bool {
-    same_f32(left.x, right.x) && same_f32(left.y, right.y)
-}
-
-fn near_finite_pos2(left: egui::Pos2, right: egui::Pos2, epsilon: f32) -> bool {
-    left.x.is_finite()
-        && left.y.is_finite()
-        && right.x.is_finite()
-        && right.y.is_finite()
-        && (left.x - right.x).abs() <= epsilon
-        && (left.y - right.y).abs() <= epsilon
 }
 
 pub(super) fn rasterize_triangle(
@@ -2677,10 +2589,6 @@ fn texel_color(texture: &TextureImage, texel: (usize, usize)) -> [u8; 4] {
     ]
 }
 
-fn color_to_array(color: egui::Color32) -> [u8; 4] {
-    [color.r(), color.g(), color.b(), color.a()]
-}
-
 fn sample_nearest(texture: &TextureImage, uv: egui::Pos2) -> [u8; 4] {
     if texture.width == 0 || texture.height == 0 {
         return [255, 255, 255, 255];
@@ -2688,70 +2596,9 @@ fn sample_nearest(texture: &TextureImage, uv: egui::Pos2) -> [u8; 4] {
     texel_color(texture, nearest_texel(texture, uv))
 }
 
-fn interpolate_color(
-    c0: egui::Color32,
-    c1: egui::Color32,
-    c2: egui::Color32,
-    w0: f32,
-    w1: f32,
-    w2: f32,
-) -> [u8; 4] {
-    [
-        interpolate_channel(c0.r(), c1.r(), c2.r(), w0, w1, w2),
-        interpolate_channel(c0.g(), c1.g(), c2.g(), w0, w1, w2),
-        interpolate_channel(c0.b(), c1.b(), c2.b(), w0, w1, w2),
-        interpolate_channel(c0.a(), c1.a(), c2.a(), w0, w1, w2),
-    ]
-}
-
-fn interpolate_channel(c0: u8, c1: u8, c2: u8, w0: f32, w1: f32, w2: f32) -> u8 {
-    f32_to_u8_round_clamped(interpolate_channel_value(c0, c1, c2, w0, w1, w2))
-}
-
-fn interpolate_channel_value(c0: u8, c1: u8, c2: u8, w0: f32, w1: f32, w2: f32) -> f32 {
-    f32::from(c0).mul_add(w0, f32::from(c1).mul_add(w1, f32::from(c2) * w2))
-}
-
-fn modulate_color(vertex: [u8; 4], texture: [u8; 4]) -> [u8; 4] {
-    [
-        multiply_u8(vertex[0], texture[0]),
-        multiply_u8(vertex[1], texture[1]),
-        multiply_u8(vertex[2], texture[2]),
-        multiply_u8(vertex[3], texture[3]),
-    ]
-}
-
-fn multiply_u8(a: u8, b: u8) -> u8 {
-    u8::try_from((u16::from(a) * u16::from(b) + 127) / 255).unwrap_or(u8::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn usize_conversions_clamp_floor_ceil_and_round() {
-        assert_eq!(f32_to_usize_floor_clamped(-1.25, 10), 0);
-        assert_eq!(f32_to_usize_floor_clamped(1.75, 10), 1);
-        assert_eq!(f32_to_usize_floor_clamped(12.0, 10), 10);
-
-        assert_eq!(f32_to_usize_ceil_clamped(-1.25, 10), 0);
-        assert_eq!(f32_to_usize_ceil_clamped(1.25, 10), 2);
-        assert_eq!(f32_to_usize_ceil_clamped(12.0, 10), 10);
-
-        assert_eq!(f32_to_usize_round_clamped(-1.25, 10), 0);
-        assert_eq!(f32_to_usize_round_clamped(1.49, 10), 1);
-        assert_eq!(f32_to_usize_round_clamped(1.5, 10), 2);
-        assert_eq!(f32_to_usize_round_clamped(12.0, 10), 10);
-    }
-
-    #[test]
-    fn u8_conversion_rounds_and_clamps() {
-        assert_eq!(f32_to_u8_round_clamped(-1.0), 0);
-        assert_eq!(f32_to_u8_round_clamped(1.49), 1);
-        assert_eq!(f32_to_u8_round_clamped(1.5), 2);
-        assert_eq!(f32_to_u8_round_clamped(300.0), 255);
-    }
 
     #[test]
     fn nearest_texture_sampling_clamps_to_edges() {
