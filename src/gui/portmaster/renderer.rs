@@ -205,7 +205,13 @@ impl SoftwareRenderer {
             }
 
             let fan_probe_start = raster_timings.as_ref().map(|_| Instant::now());
-            let fan = solid_fan_run(mesh, texture, clip, index_offset)?;
+            let fan = solid_fan_run(
+                mesh,
+                texture,
+                clip,
+                index_offset,
+                stats.as_deref_mut().map(|stats| &mut stats.solid_fan_probe),
+            )?;
             if let (Some(start), Some(timings)) =
                 (fan_probe_start, borrow_optional_mut(&mut raster_timings))
             {
@@ -632,6 +638,26 @@ mod tests {
         assert_eq!(fan_pixels, reference);
         assert_eq!(primitive_stats.solid_fan_runs, 1);
         assert_eq!(primitive_stats.solid_fan_triangles, 4);
+        assert_eq!(primitive_stats.solid_fan_probe.probe_calls, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.center_slot_attempts, 2);
+        assert_eq!(primitive_stats.solid_fan_probe.cheap_candidate_attempts, 2);
+        assert_eq!(
+            primitive_stats.solid_fan_probe.candidate_triangles_scanned,
+            6
+        );
+        assert_eq!(primitive_stats.solid_fan_probe.repeated_boundary_checks, 3);
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .repeated_boundary_comparisons,
+            9
+        );
+        assert_eq!(primitive_stats.solid_fan_probe.reject_no_candidate, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.accepted_runs, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.accepted_triangles, 4);
+        assert_eq!(primitive_stats.solid_fan_probe.polygon_builds, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.max_candidate_triangles, 4);
+        assert_eq!(primitive_stats.solid_fan_probe.max_accepted_triangles, 4);
         assert_eq!(primitive_stats.generic_triangles_rasterized, 0);
         assert_eq!(raster_stats.solid_fan_calls, 1);
         assert_eq!(raster_stats.solid_fan_triangles, 4);

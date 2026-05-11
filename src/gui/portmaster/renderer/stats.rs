@@ -130,6 +130,7 @@ pub(super) struct PrimitiveStats {
     pub(super) textured_quad_reject_corner_attribute_mismatch: usize,
     pub(super) textured_quad_reject_non_uniform_color: usize,
     pub(super) textured_quad_reject_non_affine_uv: usize,
+    pub(super) solid_fan_probe: SolidFanProbeStats,
     pub(super) solid_fan_runs: usize,
     pub(super) solid_fan_triangles: usize,
     pub(super) generic_triangles_rasterized: usize,
@@ -149,6 +150,69 @@ pub(super) struct PrimitiveStats {
     textured_triangle_offenders: TexturedTriangleOffenders,
     textured_quad_reject_offenders: TexturedQuadRejectOffenders,
     solid_fan_offenders: SolidFanOffenders,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct SolidFanProbeStats {
+    pub(super) probe_calls: usize,
+    pub(super) center_slot_attempts: usize,
+    pub(super) cheap_candidate_attempts: usize,
+    pub(super) candidate_triangles_scanned: usize,
+    pub(super) repeated_boundary_checks: usize,
+    pub(super) repeated_boundary_comparisons: usize,
+    pub(super) reject_no_candidate: usize,
+    pub(super) reject_too_short: usize,
+    pub(super) reject_vertex_lookup_failure: usize,
+    pub(super) reject_winding_mismatch_or_non_finite: usize,
+    pub(super) reject_repeated_boundary: usize,
+    pub(super) reject_unsafe_polygon: usize,
+    pub(super) reject_color_or_bounds_mismatch: usize,
+    pub(super) accepted_runs: usize,
+    pub(super) accepted_triangles: usize,
+    pub(super) polygon_builds: usize,
+    pub(super) max_candidate_triangles: usize,
+    pub(super) max_accepted_triangles: usize,
+}
+
+impl SolidFanProbeStats {
+    pub(super) fn record_reject(&mut self, reason: SolidFanProbeRejectReason) {
+        match reason {
+            SolidFanProbeRejectReason::NoCandidate => self.reject_no_candidate += 1,
+            SolidFanProbeRejectReason::TooShort => self.reject_too_short += 1,
+            SolidFanProbeRejectReason::VertexLookupFailure => {
+                self.reject_vertex_lookup_failure += 1;
+            }
+            SolidFanProbeRejectReason::WindingMismatchOrNonFinite => {
+                self.reject_winding_mismatch_or_non_finite += 1;
+            }
+            SolidFanProbeRejectReason::RepeatedBoundary => self.reject_repeated_boundary += 1,
+            SolidFanProbeRejectReason::UnsafePolygon => self.reject_unsafe_polygon += 1,
+            SolidFanProbeRejectReason::ColorOrBoundsMismatch => {
+                self.reject_color_or_bounds_mismatch += 1;
+            }
+        }
+    }
+
+    pub(super) fn record_candidate_triangles(&mut self, triangle_count: usize) {
+        self.max_candidate_triangles = self.max_candidate_triangles.max(triangle_count);
+    }
+
+    pub(super) fn record_accepted(&mut self, triangle_count: usize) {
+        self.accepted_runs += 1;
+        self.accepted_triangles += triangle_count;
+        self.max_accepted_triangles = self.max_accepted_triangles.max(triangle_count);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SolidFanProbeRejectReason {
+    NoCandidate,
+    TooShort,
+    VertexLookupFailure,
+    WindingMismatchOrNonFinite,
+    RepeatedBoundary,
+    UnsafePolygon,
+    ColorOrBoundsMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -714,7 +778,7 @@ impl PrimitiveStats {
     pub(super) fn log_line(&self, frame_index: u64) -> String {
         let mesh_triangles = self.mesh_indices / 3;
         format!(
-            "software renderer primitive_stats frame={frame_index} mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} mesh_triangles={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
+            "software renderer primitive_stats frame={frame_index} mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} mesh_triangles={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_probe_calls={} solid_fan_center_slot_attempts={} solid_fan_cheap_candidate_attempts={} solid_fan_candidate_triangles_scanned={} solid_fan_repeated_boundary_checks={} solid_fan_repeated_boundary_comparisons={} solid_fan_reject_no_candidate={} solid_fan_reject_too_short={} solid_fan_reject_vertex_lookup_failure={} solid_fan_reject_winding_mismatch_or_non_finite={} solid_fan_reject_repeated_boundary={} solid_fan_reject_unsafe_polygon={} solid_fan_reject_color_or_bounds_mismatch={} solid_fan_accepted_runs={} solid_fan_accepted_triangles={} solid_fan_polygon_builds={} solid_fan_max_candidate_triangles={} solid_fan_max_accepted_triangles={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -735,6 +799,24 @@ impl PrimitiveStats {
             self.textured_quad_reject_corner_attribute_mismatch,
             self.textured_quad_reject_non_uniform_color,
             self.textured_quad_reject_non_affine_uv,
+            self.solid_fan_probe.probe_calls,
+            self.solid_fan_probe.center_slot_attempts,
+            self.solid_fan_probe.cheap_candidate_attempts,
+            self.solid_fan_probe.candidate_triangles_scanned,
+            self.solid_fan_probe.repeated_boundary_checks,
+            self.solid_fan_probe.repeated_boundary_comparisons,
+            self.solid_fan_probe.reject_no_candidate,
+            self.solid_fan_probe.reject_too_short,
+            self.solid_fan_probe.reject_vertex_lookup_failure,
+            self.solid_fan_probe.reject_winding_mismatch_or_non_finite,
+            self.solid_fan_probe.reject_repeated_boundary,
+            self.solid_fan_probe.reject_unsafe_polygon,
+            self.solid_fan_probe.reject_color_or_bounds_mismatch,
+            self.solid_fan_probe.accepted_runs,
+            self.solid_fan_probe.accepted_triangles,
+            self.solid_fan_probe.polygon_builds,
+            self.solid_fan_probe.max_candidate_triangles,
+            self.solid_fan_probe.max_accepted_triangles,
             self.solid_fan_runs,
             self.solid_fan_triangles,
             self.generic_triangles_rasterized,
@@ -1160,6 +1242,9 @@ mod tests {
         );
         stats.textured_quad_fast_path_hits = 2;
         stats.textured_quad_reject_non_affine_uv = 1;
+        stats.solid_fan_probe.probe_calls = 3;
+        stats.solid_fan_probe.accepted_runs = 1;
+        stats.solid_fan_probe.max_candidate_triangles = 4;
         let log_line = stats.log_line(7);
         assert!(log_line.contains("frame=7"));
         assert!(log_line.contains("mesh_triangles=0"));
@@ -1171,6 +1256,9 @@ mod tests {
         assert!(log_line.contains("generic_textured_non_uniform_color_varying_texel=0"));
         assert!(log_line.contains("textured_quad_fast_path_hits=2"));
         assert!(log_line.contains("textured_quad_reject_non_affine_uv=1"));
+        assert!(log_line.contains("solid_fan_probe_calls=3"));
+        assert!(log_line.contains("solid_fan_accepted_runs=1"));
+        assert!(log_line.contains("solid_fan_max_candidate_triangles=4"));
         assert!(log_line.contains("degenerate_triangles=1"));
         assert!(log_line.contains(
             "generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024=2,0,0,0,0,0"
