@@ -9,6 +9,8 @@ use super::{RasterStats, usize_to_f32};
 use crate::gui::portmaster::surface::SoftwareSurface;
 
 const SOLID_FAN_PRECOMPUTED_EDGE_BUDGET: usize = 256;
+const SOLID_FAN_SPAN_CACHE_ENTRIES: usize = 32;
+const SOLID_FAN_SPAN_CACHE_MAX_ROWS: usize = 512;
 
 pub(in crate::gui::portmaster) fn rasterize_solid_fan(
     surface: &mut SoftwareSurface,
@@ -19,20 +21,111 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan(
     clip: ClipBounds,
     mut stats: Option<&mut RasterStats>,
 ) {
+    rasterize_solid_fan_with_cache(
+        surface,
+        SolidFanRasterParams {
+            vertices,
+            polygon,
+            triangle_count,
+            color,
+            clip,
+        },
+        &mut stats,
+        None,
+    );
+}
+
+pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
+    surface: &mut SoftwareSurface,
+    params: SolidFanRasterParams<'_>,
+    stats: &mut Option<&mut RasterStats>,
+    cache: Option<&mut SolidFanSpanCache>,
+) {
+    let SolidFanRasterParams {
+        vertices,
+        polygon,
+        triangle_count,
+        color,
+        clip,
+    } = params;
     let Some(bounds) = polygon_raster_bounds(vertices, polygon, clip) else {
         return;
     };
     let Some(area_sign) = polygon_area_sign(vertices, polygon) else {
         return;
     };
-    if let Some(stats) = &mut stats {
+    if let Some(stats) = stats {
         stats.solid_fan_calls += 1;
         stats.solid_fan_triangles += triangle_count;
     }
-    let precomputed_edges = precompute_polygon_edges(vertices, polygon, area_sign);
-    if let Some(stats) = &mut stats {
+
+    let mut cache = cache;
+    let cache_key = cache
+        .as_ref()
+        .and_then(|_| SolidFanSpanCacheKey::new(vertices, polygon, triangle_count, clip, bounds));
+    if let (Some(cache), Some(cache_key)) = (cache.as_mut(), cache_key.as_ref()) {
+        if let Some(entry) = cache.get(cache_key) {
+            if let Some(stats) = stats {
+                stats.solid_fan_span_cache_hits += 1;
+                stats.solid_fan_span_cache_hit_rows += entry.spans.len();
+            }
+            replay_solid_fan_spans(surface, color, entry, stats);
+            return;
+        }
+        if let Some(stats) = stats {
+            stats.solid_fan_span_cache_misses += 1;
+        }
+    }
+
+    let cache_spans = rasterize_solid_fan_uncached(surface, params, stats, bounds, area_sign);
+
+    if let (Some(cache), Some(key), Some(spans)) = (cache, cache_key, cache_spans) {
+        if let Some(stats) = stats {
+            stats.solid_fan_span_cache_stored_rows += spans.len();
+        }
+        cache.insert(SolidFanSpanCacheEntry { key, bounds, spans });
+    }
+}
+
+fn rasterize_solid_fan_uncached(
+    surface: &mut SoftwareSurface,
+    params: SolidFanRasterParams<'_>,
+    stats: &mut Option<&mut RasterStats>,
+    bounds: TriangleRasterBounds,
+    area_sign: f32,
+) -> Option<Vec<Option<(usize, usize)>>> {
+    let precomputed_edges = precompute_polygon_edges(params.vertices, params.polygon, area_sign);
+    record_solid_fan_precompute_stats(stats, &precomputed_edges);
+    let mut cache_spans = solid_fan_cache_span_storage(stats, bounds, precomputed_edges.is_ok());
+
+    for y in bounds.min_y..bounds.max_y {
+        let scanline = solid_fan_scanline(params, bounds, y, area_sign, &precomputed_edges, stats);
+        let span = if scanline.fell_back {
+            cache_spans = None;
+            if let Some(stats) = stats {
+                stats.solid_fan_fallback_rows += 1;
+            }
+            polygon_fallback_scanline_span(params.vertices, params.polygon, bounds, y, area_sign)
+        } else {
+            record_solid_fan_precomputed_row(stats, precomputed_edges.is_ok());
+            scanline.span
+        };
+        if let Some(spans) = &mut cache_spans {
+            spans.push(span);
+        }
+        rasterize_solid_fan_span(surface, params.color, y, span, stats);
+        record_solid_fan_scanline_stats(stats, scanline);
+    }
+    cache_spans
+}
+
+fn record_solid_fan_precompute_stats(
+    stats: &mut Option<&mut RasterStats>,
+    precomputed_edges: &Result<PrecomputedFanEdges, PrecomputeFanEdgesError>,
+) {
+    if let Some(stats) = stats {
         stats.solid_fan_edge_precompute_calls += 1;
-        match &precomputed_edges {
+        match precomputed_edges {
             Ok(edges) => stats.solid_fan_edge_precompute_edges += edges.len,
             Err(PrecomputeFanEdgesError::Budget) => {
                 stats.solid_fan_edge_precompute_fallback_budget += 1;
@@ -42,50 +135,177 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan(
             }
         }
     }
+}
 
-    for y in bounds.min_y..bounds.max_y {
-        let collect_stats = stats.is_some();
-        let scanline = if let Ok(edges) = &precomputed_edges {
-            polygon_scanline_span_precomputed(
-                edges,
-                vertices,
-                polygon,
-                bounds,
-                y,
-                area_sign,
-                collect_stats,
-            )
-        } else {
-            if let Some(stats) = &mut stats {
-                stats.solid_fan_edge_precompute_old_solver_rows += 1;
+fn solid_fan_cache_span_storage(
+    stats: &mut Option<&mut RasterStats>,
+    bounds: TriangleRasterBounds,
+    precomputed: bool,
+) -> Option<Vec<Option<(usize, usize)>>> {
+    let row_count = bounds.max_y - bounds.min_y;
+    if precomputed && row_count <= SOLID_FAN_SPAN_CACHE_MAX_ROWS {
+        return Some(Vec::with_capacity(row_count));
+    }
+    if precomputed
+        && row_count > SOLID_FAN_SPAN_CACHE_MAX_ROWS
+        && let Some(stats) = stats
+    {
+        stats.solid_fan_span_cache_rejected_too_many_rows += 1;
+    }
+    None
+}
+
+fn solid_fan_scanline(
+    params: SolidFanRasterParams<'_>,
+    bounds: TriangleRasterBounds,
+    y: usize,
+    area_sign: f32,
+    precomputed_edges: &Result<PrecomputedFanEdges, PrecomputeFanEdgesError>,
+    stats: &mut Option<&mut RasterStats>,
+) -> PolygonScanlineSpan {
+    let collect_stats = stats.is_some();
+    if let Ok(edges) = precomputed_edges {
+        return polygon_scanline_span_precomputed(
+            edges,
+            params.vertices,
+            params.polygon,
+            bounds,
+            y,
+            area_sign,
+            collect_stats,
+        );
+    }
+    if let Some(stats) = stats {
+        stats.solid_fan_edge_precompute_old_solver_rows += 1;
+    }
+    polygon_scanline_span(
+        params.vertices,
+        params.polygon,
+        bounds,
+        y,
+        area_sign,
+        collect_stats,
+    )
+}
+
+fn record_solid_fan_precomputed_row(stats: &mut Option<&mut RasterStats>, precomputed: bool) {
+    if precomputed && let Some(stats) = stats {
+        stats.solid_fan_edge_precompute_used_rows += 1;
+    }
+}
+
+fn rasterize_solid_fan_span(
+    surface: &mut SoftwareSurface,
+    color: [u8; 4],
+    y: usize,
+    span: Option<(usize, usize)>,
+    stats: &mut Option<&mut RasterStats>,
+) {
+    let Some((span_start, span_end)) = span else {
+        return;
+    };
+    surface.blend_span(y, span_start, span_end, color);
+    if let Some(stats) = stats {
+        let px = span_end - span_start;
+        stats.solid_fan_rows += 1;
+        stats.solid_fan_px += px;
+        stats.record_alpha_px(color[3], px);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::gui::portmaster) struct SolidFanRasterParams<'a> {
+    pub(in crate::gui::portmaster) vertices: &'a [egui::epaint::Vertex],
+    pub(in crate::gui::portmaster) polygon: &'a [usize],
+    pub(in crate::gui::portmaster) triangle_count: usize,
+    pub(in crate::gui::portmaster) color: [u8; 4],
+    pub(in crate::gui::portmaster) clip: ClipBounds,
+}
+
+#[derive(Debug, Default)]
+pub(in crate::gui::portmaster) struct SolidFanSpanCache {
+    entries: Vec<SolidFanSpanCacheEntry>,
+}
+
+impl SolidFanSpanCache {
+    fn get(&self, key: &SolidFanSpanCacheKey) -> Option<&SolidFanSpanCacheEntry> {
+        self.entries.iter().find(|entry| &entry.key == key)
+    }
+
+    fn insert(&mut self, entry: SolidFanSpanCacheEntry) {
+        if self.entries.len() >= SOLID_FAN_SPAN_CACHE_ENTRIES {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+    }
+}
+
+#[derive(Debug)]
+struct SolidFanSpanCacheEntry {
+    key: SolidFanSpanCacheKey,
+    bounds: TriangleRasterBounds,
+    spans: Vec<Option<(usize, usize)>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SolidFanSpanCacheKey {
+    clip: ClipBounds,
+    bounds: TriangleRasterBounds,
+    triangle_count: usize,
+    positions: Vec<(u32, u32)>,
+}
+
+impl SolidFanSpanCacheKey {
+    fn new(
+        vertices: &[egui::epaint::Vertex],
+        polygon: &[usize],
+        triangle_count: usize,
+        clip: ClipBounds,
+        bounds: TriangleRasterBounds,
+    ) -> Option<Self> {
+        let mut positions = Vec::with_capacity(polygon.len());
+        for vertex_index in polygon {
+            let pos = vertices.get(*vertex_index)?.pos;
+            if !pos.x.is_finite() || !pos.y.is_finite() {
+                return None;
             }
-            polygon_scanline_span(vertices, polygon, bounds, y, area_sign, collect_stats)
-        };
-        let span = if scanline.fell_back {
-            if let Some(stats) = &mut stats {
-                stats.solid_fan_fallback_rows += 1;
-            }
-            polygon_fallback_scanline_span(vertices, polygon, bounds, y, area_sign)
-        } else {
-            if precomputed_edges.is_ok()
-                && let Some(stats) = &mut stats
-            {
-                stats.solid_fan_edge_precompute_used_rows += 1;
-            }
-            scanline.span
-        };
-        let Some((span_start, span_end)) = span else {
-            record_solid_fan_scanline_stats(&mut stats, scanline);
+            positions.push((normalized_f32_bits(pos.x), normalized_f32_bits(pos.y)));
+        }
+        Some(Self {
+            clip,
+            bounds,
+            triangle_count,
+            positions,
+        })
+    }
+}
+
+fn normalized_f32_bits(value: f32) -> u32 {
+    if same_f32(value, 0.0) {
+        0.0f32.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
+fn replay_solid_fan_spans(
+    surface: &mut SoftwareSurface,
+    color: [u8; 4],
+    entry: &SolidFanSpanCacheEntry,
+    stats: &mut Option<&mut RasterStats>,
+) {
+    for (row_offset, span) in entry.spans.iter().enumerate() {
+        let Some((span_start, span_end)) = *span else {
             continue;
         };
-        surface.blend_span(y, span_start, span_end, color);
-        if let Some(stats) = &mut stats {
-            let px = span_end - span_start;
+        surface.blend_span(entry.bounds.min_y + row_offset, span_start, span_end, color);
+        let px = span_end - span_start;
+        if let Some(stats) = stats {
             stats.solid_fan_rows += 1;
             stats.solid_fan_px += px;
+            stats.solid_fan_span_cache_hit_px += px;
             stats.record_alpha_px(color[3], px);
         }
-        record_solid_fan_scanline_stats(&mut stats, scanline);
     }
 }
 

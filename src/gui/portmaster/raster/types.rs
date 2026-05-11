@@ -46,7 +46,7 @@ impl TriangleTexelSample {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gui::portmaster) struct ClipBounds {
     pub(super) min_x: usize,
     pub(super) min_y: usize,

@@ -16,9 +16,11 @@ mod textured;
 mod triangle;
 mod types;
 
+pub(super) use fan::{
+    SolidFanRasterParams, SolidFanSpanCache, polygon_raster_bounds, rasterize_solid_fan_with_cache,
+};
 #[cfg(test)]
-use fan::{polygon_fallback_scanline_span, polygon_scanline_span};
-pub(super) use fan::{polygon_raster_bounds, rasterize_solid_fan};
+use fan::{polygon_fallback_scanline_span, polygon_scanline_span, rasterize_solid_fan};
 use math::edge;
 pub(super) use math::usize_to_f32;
 #[cfg(test)]
@@ -1426,6 +1428,207 @@ mod tests {
     }
 
     #[test]
+    fn solid_fan_span_cache_replays_byte_identical_coverage() {
+        let vertices = solid_fan_vertices([40, 120, 20, 192]);
+        let polygon = test_solid_fan_polygon(&vertices);
+        let clip = full_clip(12, 12);
+        let color = [40, 120, 20, 192];
+        let mut cache = SolidFanSpanCache::default();
+        let mut cached = test_surface(12, 12);
+        let mut uncached = test_surface(12, 12);
+        let mut stats = RasterStats::default();
+
+        rasterize_solid_fan_with_cache(
+            &mut cached,
+            SolidFanRasterParams {
+                vertices: &vertices,
+                polygon: &polygon,
+                triangle_count: vertices.len() - 2,
+                color,
+                clip,
+            },
+            &mut Some(&mut stats),
+            Some(&mut cache),
+        );
+        rasterize_solid_fan_with_cache(
+            &mut cached,
+            SolidFanRasterParams {
+                vertices: &vertices,
+                polygon: &polygon,
+                triangle_count: vertices.len() - 2,
+                color,
+                clip,
+            },
+            &mut Some(&mut stats),
+            Some(&mut cache),
+        );
+        rasterize_solid_fan(
+            &mut uncached,
+            &vertices,
+            &polygon,
+            vertices.len() - 2,
+            color,
+            clip,
+            None,
+        );
+        rasterize_solid_fan(
+            &mut uncached,
+            &vertices,
+            &polygon,
+            vertices.len() - 2,
+            color,
+            clip,
+            None,
+        );
+
+        assert_eq!(cached.pixels, uncached.pixels);
+        assert_eq!(stats.solid_fan_span_cache_misses, 1);
+        assert_eq!(stats.solid_fan_span_cache_hits, 1);
+        assert!(stats.solid_fan_span_cache_hit_px > 0);
+        assert_eq!(stats.solid_fan_edge_precompute_calls, 1);
+    }
+
+    #[test]
+    fn solid_fan_span_cache_reuses_coverage_but_blends_current_alpha() {
+        let vertices = solid_fan_vertices([90, 30, 15, 255]);
+        let polygon = test_solid_fan_polygon(&vertices);
+        let clip = full_clip(12, 12);
+        let mut cache = SolidFanSpanCache::default();
+        let mut cached = test_surface(12, 12);
+        let mut uncached = test_surface(12, 12);
+
+        rasterize_cached_test_fan(
+            &mut cached,
+            &vertices,
+            &polygon,
+            clip,
+            [90, 30, 15, 255],
+            &mut cache,
+        );
+        rasterize_cached_test_fan(
+            &mut cached,
+            &vertices,
+            &polygon,
+            clip,
+            [45, 15, 8, 128],
+            &mut cache,
+        );
+        rasterize_solid_fan(
+            &mut uncached,
+            &vertices,
+            &polygon,
+            vertices.len() - 2,
+            [90, 30, 15, 255],
+            clip,
+            None,
+        );
+        rasterize_solid_fan(
+            &mut uncached,
+            &vertices,
+            &polygon,
+            vertices.len() - 2,
+            [45, 15, 8, 128],
+            clip,
+            None,
+        );
+
+        assert_eq!(cached.pixels, uncached.pixels);
+    }
+
+    #[test]
+    fn solid_fan_span_cache_distinguishes_same_bounds_different_geometry() {
+        let first = solid_fan_vertices([40, 120, 20, 192]);
+        let mut second = first.clone();
+        second[1].pos.x += 0.25;
+        second[2].pos.y += 0.25;
+        let first_polygon = test_solid_fan_polygon(&first);
+        let second_polygon = test_solid_fan_polygon(&second);
+        let clip = full_clip(12, 12);
+        let mut cache = SolidFanSpanCache::default();
+        let mut stats = RasterStats::default();
+        let mut cached = test_surface(12, 12);
+        let mut uncached = test_surface(12, 12);
+
+        rasterize_solid_fan_with_cache(
+            &mut cached,
+            SolidFanRasterParams {
+                vertices: &first,
+                polygon: &first_polygon,
+                triangle_count: first.len() - 2,
+                color: [40, 120, 20, 192],
+                clip,
+            },
+            &mut Some(&mut stats),
+            Some(&mut cache),
+        );
+        rasterize_solid_fan_with_cache(
+            &mut cached,
+            SolidFanRasterParams {
+                vertices: &second,
+                polygon: &second_polygon,
+                triangle_count: second.len() - 2,
+                color: [40, 120, 20, 192],
+                clip,
+            },
+            &mut Some(&mut stats),
+            Some(&mut cache),
+        );
+        rasterize_solid_fan(
+            &mut uncached,
+            &first,
+            &first_polygon,
+            first.len() - 2,
+            [40, 120, 20, 192],
+            clip,
+            None,
+        );
+        rasterize_solid_fan(
+            &mut uncached,
+            &second,
+            &second_polygon,
+            second.len() - 2,
+            [40, 120, 20, 192],
+            clip,
+            None,
+        );
+
+        assert_eq!(cached.pixels, uncached.pixels);
+        assert_eq!(stats.solid_fan_span_cache_hits, 0);
+        assert_eq!(stats.solid_fan_span_cache_misses, 2);
+    }
+
+    #[test]
+    fn solid_fan_span_cache_bypasses_non_finite_fallback() {
+        let vertices = [
+            solid_vertex(0.0, 0.0, [255, 255, 255, 255]),
+            solid_vertex(f32::INFINITY, 0.0, [255, 255, 255, 255]),
+            solid_vertex(0.0, 2.0, [255, 255, 255, 255]),
+        ];
+        let polygon: Vec<_> = (0..vertices.len()).collect();
+        let mut cache = SolidFanSpanCache::default();
+        let mut surface = test_surface(3, 3);
+        let mut stats = RasterStats::default();
+
+        rasterize_solid_fan_with_cache(
+            &mut surface,
+            SolidFanRasterParams {
+                vertices: &vertices,
+                polygon: &polygon,
+                triangle_count: 1,
+                color: [255, 255, 255, 255],
+                clip: full_clip(3, 3),
+            },
+            &mut Some(&mut stats),
+            Some(&mut cache),
+        );
+
+        assert_eq!(stats.solid_fan_span_cache_hits, 0);
+        assert_eq!(stats.solid_fan_span_cache_misses, 0);
+        assert_eq!(stats.solid_fan_span_cache_stored_rows, 0);
+        assert!(stats.solid_fan_fallback_rows > 0);
+    }
+
+    #[test]
     fn raster_stats_rect_px_equals_clipped_rect_area() {
         let vertices = test_quad_vertices();
         let texture = test_white_texture();
@@ -2642,6 +2845,34 @@ mod tests {
             solid_vertex(8.0, 8.0, color),
             solid_vertex(3.0, 9.0, color),
         ]
+    }
+
+    fn test_solid_fan_polygon(vertices: &[egui::epaint::Vertex]) -> Vec<usize> {
+        let mut polygon: Vec<_> = (1..vertices.len()).collect();
+        polygon.push(0);
+        polygon
+    }
+
+    fn rasterize_cached_test_fan(
+        surface: &mut SoftwareSurface,
+        vertices: &[egui::epaint::Vertex],
+        polygon: &[usize],
+        clip: ClipBounds,
+        color: [u8; 4],
+        cache: &mut SolidFanSpanCache,
+    ) {
+        rasterize_solid_fan_with_cache(
+            surface,
+            SolidFanRasterParams {
+                vertices,
+                polygon,
+                triangle_count: vertices.len() - 2,
+                color,
+                clip,
+            },
+            &mut None,
+            Some(cache),
+        );
     }
 
     fn render_test_solid_fan(

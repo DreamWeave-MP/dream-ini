@@ -10,8 +10,8 @@ mod stats;
 use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
-    ClipBounds, RasterStats, classify_triangle, polygon_raster_bounds, rasterize_solid_fan,
-    rasterize_triangle, usize_to_f32,
+    ClipBounds, RasterStats, SolidFanRasterParams, SolidFanSpanCache, classify_triangle,
+    polygon_raster_bounds, rasterize_solid_fan_with_cache, rasterize_triangle, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
@@ -27,6 +27,7 @@ pub(super) struct SoftwareRenderer {
     surface: SoftwareSurface,
     textures: TextureStore,
     solid_fan_polygon_scratch: Vec<usize>,
+    solid_fan_span_cache: SolidFanSpanCache,
 }
 
 const SOLID_FAN_POLYGON_SCRATCH_CAPACITY: usize = 4096;
@@ -37,6 +38,7 @@ impl Default for SoftwareRenderer {
             surface: SoftwareSurface::default(),
             textures: TextureStore::default(),
             solid_fan_polygon_scratch: Vec::with_capacity(SOLID_FAN_POLYGON_SCRATCH_CAPACITY),
+            solid_fan_span_cache: SolidFanSpanCache::default(),
         }
     }
 }
@@ -196,6 +198,7 @@ impl SoftwareRenderer {
         let mut context = MeshRasterContext {
             surface: &mut self.surface,
             fan_polygon_scratch: &mut self.solid_fan_polygon_scratch,
+            fan_span_cache: &mut self.solid_fan_span_cache,
             mesh,
             texture,
             clip,
@@ -241,6 +244,7 @@ fn rasterize_mesh_contents(
 struct MeshRasterContext<'a> {
     surface: &'a mut SoftwareSurface,
     fan_polygon_scratch: &'a mut Vec<usize>,
+    fan_span_cache: &'a mut SolidFanSpanCache,
     mesh: &'a egui::Mesh,
     texture: &'a TextureImage,
     clip: ClipBounds,
@@ -441,13 +445,17 @@ impl MeshRasterContext<'_> {
             raster_stats: borrow_optional_mut(raster_stats),
             timings: borrow_optional_mut(raster_timings),
         };
+        let source = self.source(index_offset);
         rasterize_solid_fan_run(
-            self.surface,
-            self.mesh,
+            SolidFanRasterRunContext {
+                surface: self.surface,
+                mesh: self.mesh,
+                fan_span_cache: self.fan_span_cache,
+                clip: self.clip,
+                source,
+            },
             &fan,
             self.fan_polygon_scratch,
-            self.clip,
-            self.source(index_offset),
             &mut instrumentation,
         );
         let fan_triangle_count = fan.triangle_count;
@@ -540,14 +548,18 @@ fn rasterize_generic_triangle(
 }
 
 fn rasterize_solid_fan_run(
-    surface: &mut SoftwareSurface,
-    mesh: &egui::Mesh,
+    context: SolidFanRasterRunContext<'_>,
     fan: &SolidFanRun,
     fan_polygon: &[usize],
-    clip: ClipBounds,
-    source: TriangleSource,
     instrumentation: &mut RasterInstrumentation<'_>,
 ) {
+    let SolidFanRasterRunContext {
+        surface,
+        mesh,
+        fan_span_cache,
+        clip,
+        source,
+    } = context;
     let fan_work_before = instrumentation
         .raster_stats
         .as_deref()
@@ -557,14 +569,17 @@ fn rasterize_solid_fan_run(
         .as_ref()
         .and_then(|_| polygon_raster_bounds(&mesh.vertices, &fan_polygon[..fan.polygon_len], clip));
     let fan_start = instrumentation.timing_start();
-    rasterize_solid_fan(
+    rasterize_solid_fan_with_cache(
         surface,
-        &mesh.vertices,
-        &fan_polygon[..fan.polygon_len],
-        fan.triangle_count,
-        fan.color,
-        clip,
-        instrumentation.raster_stats(),
+        SolidFanRasterParams {
+            vertices: &mesh.vertices,
+            polygon: &fan_polygon[..fan.polygon_len],
+            triangle_count: fan.triangle_count,
+            color: fan.color,
+            clip,
+        },
+        &mut instrumentation.raster_stats(),
+        Some(fan_span_cache),
     );
     let elapsed_us = fan_start.map_or(0, |start| start.elapsed().as_micros());
     let fan_work_after = instrumentation
@@ -592,6 +607,14 @@ fn rasterize_solid_fan_run(
     if let Some(timings) = instrumentation.timings() {
         timings.solid_fan_raster += elapsed_us;
     }
+}
+
+struct SolidFanRasterRunContext<'a> {
+    surface: &'a mut SoftwareSurface,
+    mesh: &'a egui::Mesh,
+    fan_span_cache: &'a mut SolidFanSpanCache,
+    clip: ClipBounds,
+    source: TriangleSource,
 }
 
 struct RasterInstrumentation<'a> {
@@ -802,6 +825,7 @@ mod tests {
             let mut context = MeshRasterContext {
                 surface: &mut renderer.surface,
                 fan_polygon_scratch: &mut renderer.solid_fan_polygon_scratch,
+                fan_span_cache: &mut renderer.solid_fan_span_cache,
                 mesh: &mesh,
                 texture: renderer.textures.get(&texture_id).expect("stored texture"),
                 clip,
