@@ -60,9 +60,7 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
     }
 
     let mut cache = cache;
-    let cache_key = cache
-        .as_ref()
-        .and_then(|_| SolidFanSpanCacheKey::new(vertices, polygon, triangle_count, clip, bounds));
+    let cache_key = solid_fan_span_cache_key(cache.is_some(), params, bounds);
     if let (Some(cache), Some(cache_key)) = (cache.as_mut(), cache_key.as_ref()) {
         if let Some(entry) = cache.get(cache_key) {
             if let Some(stats) = stats {
@@ -85,6 +83,28 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
         }
         cache.insert(SolidFanSpanCacheEntry { key, bounds, spans });
     }
+}
+
+fn solid_fan_span_cache_key(
+    cache_enabled: bool,
+    params: SolidFanRasterParams<'_>,
+    bounds: TriangleRasterBounds,
+) -> Option<SolidFanSpanCacheKey> {
+    if !cache_enabled || !solid_fan_span_cache_key_eligible(params.polygon, bounds) {
+        return None;
+    }
+    SolidFanSpanCacheKey::new(
+        params.vertices,
+        params.polygon,
+        params.triangle_count,
+        params.clip,
+        bounds,
+    )
+}
+
+fn solid_fan_span_cache_key_eligible(polygon: &[usize], bounds: TriangleRasterBounds) -> bool {
+    polygon.len() <= SOLID_FAN_PRECOMPUTED_EDGE_BUDGET
+        && bounds.max_y - bounds.min_y <= SOLID_FAN_SPAN_CACHE_MAX_ROWS
 }
 
 fn rasterize_solid_fan_uncached(
@@ -847,6 +867,37 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn span_cache_key_is_gated_by_explicit_budgets() {
+        let bounds = TriangleRasterBounds {
+            min_x: 0,
+            min_y: 0,
+            max_x: 8,
+            max_y: 8,
+        };
+        let tall_bounds = TriangleRasterBounds {
+            max_y: SOLID_FAN_SPAN_CACHE_MAX_ROWS + 1,
+            ..bounds
+        };
+        let over_budget_polygon: Vec<_> = (0..=SOLID_FAN_PRECOMPUTED_EDGE_BUDGET).collect();
+        let params = SolidFanRasterParams {
+            vertices: &[],
+            polygon: &over_budget_polygon,
+            triangle_count: over_budget_polygon.len() - 2,
+            color: [255, 255, 255, 255],
+            clip: ClipBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: 8,
+                max_y: 8,
+            },
+        };
+
+        assert!(solid_fan_span_cache_key(true, params, bounds).is_none());
+        assert!(solid_fan_span_cache_key(true, params, tall_bounds).is_none());
+        assert!(solid_fan_span_cache_key(false, params, bounds).is_none());
     }
 
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
