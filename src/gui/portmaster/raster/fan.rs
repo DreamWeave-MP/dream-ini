@@ -60,7 +60,7 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
     }
 
     let mut cache = cache;
-    let cache_key = solid_fan_span_cache_key(cache.is_some(), params, bounds);
+    let cache_key = solid_fan_span_cache_key(cache.is_some(), params, bounds, stats);
     if let (Some(cache), Some(cache_key)) = (cache.as_mut(), cache_key.as_ref()) {
         if let Some(entry) = cache.get(cache_key) {
             if let Some(stats) = stats {
@@ -97,9 +97,20 @@ fn solid_fan_span_cache_key(
     cache_enabled: bool,
     params: SolidFanRasterParams<'_>,
     bounds: TriangleRasterBounds,
+    stats: &mut Option<&mut RasterStats>,
 ) -> Option<SolidFanSpanCacheKey> {
-    if !cache_enabled || !solid_fan_span_cache_key_eligible(params.polygon, bounds) {
+    if !cache_enabled {
         return None;
+    }
+    match solid_fan_span_cache_key_eligibility(params.polygon, bounds) {
+        SolidFanSpanCacheKeyEligibility::Eligible => {}
+        SolidFanSpanCacheKeyEligibility::TooManyRows => {
+            if let Some(stats) = stats {
+                stats.solid_fan_span_cache_rejected_too_many_rows += 1;
+            }
+            return None;
+        }
+        SolidFanSpanCacheKeyEligibility::TooManyEdges => return None,
     }
     SolidFanSpanCacheKey::new(
         params.vertices,
@@ -110,9 +121,45 @@ fn solid_fan_span_cache_key(
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SolidFanSpanCacheKeyEligibility {
+    Eligible,
+    TooManyRows,
+    TooManyEdges,
+}
+
+fn solid_fan_span_cache_key_eligibility(
+    polygon: &[usize],
+    bounds: TriangleRasterBounds,
+) -> SolidFanSpanCacheKeyEligibility {
+    if bounds.max_y - bounds.min_y > SOLID_FAN_SPAN_CACHE_MAX_ROWS {
+        return SolidFanSpanCacheKeyEligibility::TooManyRows;
+    }
+    if polygon.len() > SOLID_FAN_PRECOMPUTED_EDGE_BUDGET {
+        return SolidFanSpanCacheKeyEligibility::TooManyEdges;
+    }
+    SolidFanSpanCacheKeyEligibility::Eligible
+}
+
 fn solid_fan_span_cache_key_eligible(polygon: &[usize], bounds: TriangleRasterBounds) -> bool {
-    polygon.len() <= SOLID_FAN_PRECOMPUTED_EDGE_BUDGET
-        && bounds.max_y - bounds.min_y <= SOLID_FAN_SPAN_CACHE_MAX_ROWS
+    solid_fan_span_cache_key_eligibility(polygon, bounds)
+        == SolidFanSpanCacheKeyEligibility::Eligible
+}
+
+fn solid_fan_span_cache_key_from_eligible(
+    params: SolidFanRasterParams<'_>,
+    bounds: TriangleRasterBounds,
+) -> Option<SolidFanSpanCacheKey> {
+    if !solid_fan_span_cache_key_eligible(params.polygon, bounds) {
+        return None;
+    }
+    SolidFanSpanCacheKey::new(
+        params.vertices,
+        params.polygon,
+        params.triangle_count,
+        params.clip,
+        bounds,
+    )
 }
 
 fn rasterize_solid_fan_uncached(
@@ -125,12 +172,8 @@ fn rasterize_solid_fan_uncached(
 ) -> Option<Vec<Option<(usize, usize)>>> {
     let precomputed_edges = precompute_polygon_edges(params.vertices, params.polygon, area_sign);
     record_solid_fan_precompute_stats(stats, &precomputed_edges);
-    let mut cache_spans = solid_fan_cache_span_storage(
-        stats,
-        bounds,
-        precomputed_edges.is_ok(),
-        cache_key_available,
-    );
+    let mut cache_spans =
+        solid_fan_cache_span_storage(bounds, precomputed_edges.is_ok(), cache_key_available);
 
     for y in bounds.min_y..bounds.max_y {
         let scanline = solid_fan_scanline(params, bounds, y, area_sign, &precomputed_edges, stats);
@@ -172,7 +215,6 @@ fn record_solid_fan_precompute_stats(
 }
 
 fn solid_fan_cache_span_storage(
-    stats: &mut Option<&mut RasterStats>,
     bounds: TriangleRasterBounds,
     precomputed: bool,
     cache_key_available: bool,
@@ -183,12 +225,6 @@ fn solid_fan_cache_span_storage(
     let row_count = bounds.max_y - bounds.min_y;
     if precomputed && row_count <= SOLID_FAN_SPAN_CACHE_MAX_ROWS {
         return Some(Vec::with_capacity(row_count));
-    }
-    if precomputed
-        && row_count > SOLID_FAN_SPAN_CACHE_MAX_ROWS
-        && let Some(stats) = stats
-    {
-        stats.solid_fan_span_cache_rejected_too_many_rows += 1;
     }
     None
 }
@@ -912,10 +948,20 @@ mod tests {
                 max_y: 8,
             },
         };
+        let mut stats = RasterStats::default();
 
-        assert!(solid_fan_span_cache_key(true, params, bounds).is_none());
-        assert!(solid_fan_span_cache_key(true, params, tall_bounds).is_none());
-        assert!(solid_fan_span_cache_key(false, params, bounds).is_none());
+        assert!(solid_fan_span_cache_key(true, params, bounds, &mut Some(&mut stats)).is_none());
+        assert_eq!(stats.solid_fan_span_cache_rejected_too_many_rows, 0);
+
+        assert!(
+            solid_fan_span_cache_key(true, params, tall_bounds, &mut Some(&mut stats)).is_none()
+        );
+        assert_eq!(stats.solid_fan_span_cache_rejected_too_many_rows, 1);
+
+        assert!(
+            solid_fan_span_cache_key(false, params, tall_bounds, &mut Some(&mut stats)).is_none()
+        );
+        assert_eq!(stats.solid_fan_span_cache_rejected_too_many_rows, 1);
     }
 
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
