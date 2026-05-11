@@ -12,6 +12,7 @@ mod quad;
 mod sampling;
 mod solid;
 mod stats;
+mod triangle;
 mod types;
 
 use coverage::triangle_scanline_x_range;
@@ -23,8 +24,7 @@ use math::color_to_array;
 pub(super) use math::usize_to_f32;
 use math::{
     edge, edge_covers_pixel, edge_includes_boundary, edge_step_x, edge_step_y,
-    f32_to_u8_round_clamped, f32_to_usize_ceil_clamped, f32_to_usize_floor_clamped,
-    interpolate_channel_value, interpolate_color, modulate_color,
+    f32_to_u8_round_clamped, interpolate_channel_value, interpolate_color, modulate_color,
 };
 pub(super) use quad::{
     is_axis_aligned_quad, rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad,
@@ -37,13 +37,14 @@ pub(super) use sampling::triangle_nearest_texel_sample;
 pub(super) use solid::solid_triangle_color_decision;
 use solid::{rasterize_solid_triangle, solid_triangle_color};
 pub(super) use stats::RasterStats;
+use triangle::{TRIANGLE_SCANLINE_NARROWING_MIN_AREA, TriangleVertices, triangle_positions};
+pub(super) use triangle::{classify_triangle, estimate_triangle_scan_work, triangle_raster_bounds};
 pub(super) use types::{
     ClipBounds, SolidTriangleColorDecision, TexturedQuadFastPathRejection, TriangleClassification,
     TriangleRasterBounds, TriangleScanWorkEstimate, TriangleTexelSample,
 };
 
 const UV_AFFINE_EPSILON: f32 = 1.0 / 1_048_576.0;
-const TRIANGLE_SCANLINE_NARROWING_MIN_AREA: usize = 1024;
 
 fn duration_as_us(duration: Duration) -> usize {
     usize::try_from(duration.as_micros()).unwrap_or(usize::MAX)
@@ -137,82 +138,6 @@ fn record_textured_triangle_call(
 
 const fn is_white_texel(texture_color: [u8; 4]) -> bool {
     matches!(texture_color, [255, 255, 255, 255])
-}
-
-pub(super) fn triangle_raster_bounds(
-    v0: &egui::epaint::Vertex,
-    v1: &egui::epaint::Vertex,
-    v2: &egui::epaint::Vertex,
-    clip: ClipBounds,
-) -> Option<TriangleRasterBounds> {
-    let min_x = f32_to_usize_floor_clamped(v0.pos.x.min(v1.pos.x).min(v2.pos.x), clip.max_x)
-        .max(clip.min_x);
-    let max_x =
-        f32_to_usize_ceil_clamped(v0.pos.x.max(v1.pos.x).max(v2.pos.x), clip.max_x).min(clip.max_x);
-    let min_y = f32_to_usize_floor_clamped(v0.pos.y.min(v1.pos.y).min(v2.pos.y), clip.max_y)
-        .max(clip.min_y);
-    let max_y =
-        f32_to_usize_ceil_clamped(v0.pos.y.max(v1.pos.y).max(v2.pos.y), clip.max_y).min(clip.max_y);
-    if min_x >= max_x || min_y >= max_y {
-        return None;
-    }
-
-    Some(TriangleRasterBounds {
-        min_x,
-        min_y,
-        max_x,
-        max_y,
-    })
-}
-
-pub(super) fn estimate_triangle_scan_work(
-    positions: [egui::Pos2; 3],
-    bounds: TriangleRasterBounds,
-) -> TriangleScanWorkEstimate {
-    let mut estimate = TriangleScanWorkEstimate::default();
-    let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
-    for y in bounds.min_y..bounds.max_y {
-        let (start_x, end_x) = if narrow_scanlines {
-            triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
-        } else {
-            (bounds.min_x, bounds.max_x)
-        };
-        let candidate_px = end_x - start_x;
-        estimate.candidate_px += candidate_px;
-        if candidate_px < bounds.max_x - bounds.min_x {
-            estimate.narrowed_rows += 1;
-        } else {
-            estimate.full_scan_rows += 1;
-        }
-    }
-    estimate
-}
-
-fn triangle_positions(vertices: TriangleVertices<'_>) -> [egui::Pos2; 3] {
-    [vertices.v0.pos, vertices.v1.pos, vertices.v2.pos]
-}
-
-pub(super) fn classify_triangle(
-    v0: &egui::epaint::Vertex,
-    v1: &egui::epaint::Vertex,
-    v2: &egui::epaint::Vertex,
-    texture: &TextureImage,
-) -> TriangleClassification {
-    if edge(v0.pos, v1.pos, v2.pos).abs() <= f32::EPSILON {
-        return TriangleClassification::Degenerate;
-    }
-    if solid_triangle_color(v0, v1, v2, texture).is_some() {
-        TriangleClassification::Solid
-    } else {
-        TriangleClassification::Textured
-    }
-}
-
-#[derive(Clone, Copy)]
-struct TriangleVertices<'a> {
-    v0: &'a egui::epaint::Vertex,
-    v1: &'a egui::epaint::Vertex,
-    v2: &'a egui::epaint::Vertex,
 }
 
 fn rasterize_textured_triangle(
