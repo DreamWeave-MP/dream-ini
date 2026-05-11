@@ -35,12 +35,12 @@ pub(super) use sampling::triangle_nearest_texel_sample;
 pub(super) use solid::solid_triangle_color_decision;
 use solid::{rasterize_solid_triangle, solid_triangle_color};
 pub(super) use stats::RasterStats;
-#[cfg(test)]
-use textured::textured_triangle_pixel_color;
 use textured::{
     TexturedTriangleKind, is_white_texel, rasterize_constant_texel_textured_triangle,
     rasterize_textured_triangle, record_textured_triangle_call,
 };
+#[cfg(test)]
+use textured::{textured_triangle_pixel_color, white_constant_texel_alpha_only_vertices};
 use triangle::{TRIANGLE_SCANLINE_NARROWING_MIN_AREA, TriangleVertices, triangle_positions};
 pub(super) use triangle::{classify_triangle, estimate_triangle_scan_work, triangle_raster_bounds};
 pub(super) use types::{
@@ -306,6 +306,107 @@ mod tests {
                 &vertices[1],
                 &vertices[2],
                 &texture
+            )
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_alpha_only_banner_triangles_match_generic() {
+        assert_white_constant_texel_alpha_only_matches_generic(
+            640,
+            32,
+            [
+                solid_vertex(5.0, 5.0, [255, 255, 255, 128]),
+                solid_vertex(635.0, 5.0, [255, 255, 255, 128]),
+                solid_vertex(5.0, 25.0, [255, 255, 255, 0]),
+            ],
+        );
+        assert_white_constant_texel_alpha_only_matches_generic(
+            640,
+            32,
+            [
+                solid_vertex(5.0, 5.0, [255, 255, 255, 0]),
+                solid_vertex(635.0, 5.0, [255, 255, 255, 128]),
+                solid_vertex(635.0, 25.0, [255, 255, 255, 0]),
+            ],
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_alpha_only_thin_horizontal_bar_matches_generic() {
+        assert_white_constant_texel_alpha_only_matches_generic(
+            640,
+            32,
+            [
+                solid_vertex(5.0, 12.0, [255, 255, 255, 255]),
+                solid_vertex(635.0, 12.5, [255, 255, 255, 255]),
+                solid_vertex(5.0, 15.0, [255, 255, 255, 0]),
+            ],
+        );
+        assert_white_constant_texel_alpha_only_matches_generic(
+            640,
+            32,
+            [
+                solid_vertex(5.0, 15.0, [255, 255, 255, 0]),
+                solid_vertex(635.0, 12.5, [255, 255, 255, 0]),
+                solid_vertex(635.0, 15.5, [255, 255, 255, 255]),
+            ],
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_alpha_only_skinny_strip_matches_generic() {
+        assert_white_constant_texel_alpha_only_matches_generic(
+            80,
+            240,
+            [
+                solid_vertex(28.0, 5.0, [255, 255, 255, 96]),
+                solid_vertex(31.0, 5.0, [255, 255, 255, 96]),
+                solid_vertex(45.0, 235.0, [255, 255, 255, 0]),
+            ],
+        );
+        assert_white_constant_texel_alpha_only_matches_generic(
+            80,
+            240,
+            [
+                solid_vertex(31.0, 5.0, [255, 255, 255, 0]),
+                solid_vertex(45.0, 235.0, [255, 255, 255, 0]),
+                solid_vertex(48.0, 235.0, [255, 255, 255, 96]),
+            ],
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_alpha_only_rejects_non_white_vertex_rgb() {
+        let vertices = [
+            solid_vertex(5.0, 5.0, [255, 255, 255, 128]),
+            solid_vertex(635.0, 5.0, [254, 255, 255, 128]),
+            solid_vertex(5.0, 25.0, [255, 255, 255, 0]),
+        ];
+
+        assert!(!white_constant_texel_alpha_only_vertices(
+            TriangleVertices {
+                v0: &vertices[0],
+                v1: &vertices[1],
+                v2: &vertices[2],
+            }
+        ));
+        assert_eq!(
+            render_test_triangle_with(
+                640,
+                32,
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &test_white_texture(),
+            ),
+            render_test_triangle_generic(
+                640,
+                32,
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &test_white_texture(),
             )
         );
     }
@@ -2138,6 +2239,43 @@ mod tests {
 
         assert_eq!(routed.pixels, reference.pixels);
         assert_eq!(direct.pixels, reference.pixels);
+    }
+
+    fn assert_white_constant_texel_alpha_only_matches_generic(
+        width: usize,
+        height: usize,
+        vertices: [egui::epaint::Vertex; 3],
+    ) {
+        let texture = test_white_texture();
+
+        assert!(white_constant_texel_alpha_only_vertices(TriangleVertices {
+            v0: &vertices[0],
+            v1: &vertices[1],
+            v2: &vertices[2],
+        }));
+        assert_eq!(
+            triangle_nearest_texel_sample(&vertices[0], &vertices[1], &vertices[2], &texture)
+                .uniform_color,
+            Some([255, 255, 255, 255])
+        );
+        assert_eq!(
+            render_test_triangle_with(
+                width,
+                height,
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &texture,
+            ),
+            render_test_triangle_generic(
+                width,
+                height,
+                &vertices[0],
+                &vertices[1],
+                &vertices[2],
+                &texture,
+            )
+        );
     }
 
     fn reference_rasterize_solid_triangle(
