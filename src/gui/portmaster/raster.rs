@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::io;
 use std::time::{Duration, Instant};
 
 use super::surface::SoftwareSurface;
@@ -8,6 +7,7 @@ use super::texture::TextureImage;
 
 mod math;
 mod stats;
+mod types;
 
 pub(super) use math::usize_to_f32;
 use math::{
@@ -17,52 +17,14 @@ use math::{
     near_finite_pos2, same_f32, same_pos2,
 };
 pub(super) use stats::RasterStats;
+pub(super) use types::{
+    ClipBounds, SolidTriangleColorDecision, TexturedQuadFastPathRejection, TriangleClassification,
+    TriangleRasterBounds, TriangleScanWorkEstimate, TriangleTexelSample,
+};
 
 const UV_AFFINE_EPSILON: f32 = 1.0 / 1_048_576.0;
 const TRIANGLE_SCANLINE_NARROWING_MIN_AREA: usize = 1024;
 const TRIANGLE_SCANLINE_NARROWING_GUARD_PX: usize = 2;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TriangleClassification {
-    Degenerate,
-    Solid,
-    Textured,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TexturedQuadFastPathRejection {
-    NotRectangleDiagonal,
-    NotAxisAlignedRectangle,
-    CornerAttributeMismatch,
-    NonUniformColor,
-    NonAffineUv,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SolidTriangleColorDecision {
-    Solid([u8; 4]),
-    NonUniformVertexColor,
-    NonUniformTexel,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct TriangleScanWorkEstimate {
-    pub(super) candidate_px: usize,
-    pub(super) narrowed_rows: usize,
-    pub(super) full_scan_rows: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct TriangleTexelSample {
-    pub(super) texels: Option<[(usize, usize); 3]>,
-    pub(super) uniform_color: Option<[u8; 4]>,
-}
-
-impl TriangleTexelSample {
-    pub(super) const fn is_uniform(self) -> bool {
-        self.uniform_color.is_some()
-    }
-}
 
 impl RasterStats {
     fn record_textured_rect_classification(
@@ -104,54 +66,6 @@ impl RasterStats {
 
 fn duration_as_us(duration: Duration) -> usize {
     usize::try_from(duration.as_micros()).unwrap_or(usize::MAX)
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ClipBounds {
-    min_x: usize,
-    min_y: usize,
-    max_x: usize,
-    max_y: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct TriangleRasterBounds {
-    pub(super) min_x: usize,
-    pub(super) min_y: usize,
-    pub(super) max_x: usize,
-    pub(super) max_y: usize,
-}
-
-impl TriangleRasterBounds {
-    pub(super) const fn pixel_area(self) -> usize {
-        (self.max_x - self.min_x) * (self.max_y - self.min_y)
-    }
-}
-
-impl ClipBounds {
-    pub(super) fn new(rect: egui::Rect, width: usize, height: usize) -> io::Result<Self> {
-        let min_x = clamp_rect_value(rect.min.x.floor(), width)?;
-        let min_y = clamp_rect_value(rect.min.y.floor(), height)?;
-        let max_x = clamp_rect_value(rect.max.x.ceil(), width)?;
-        let max_y = clamp_rect_value(rect.max.y.ceil(), height)?;
-        Ok(Self {
-            min_x,
-            min_y,
-            max_x,
-            max_y,
-        })
-    }
-
-    pub(super) const fn is_empty(self) -> bool {
-        self.min_x >= self.max_x || self.min_y >= self.max_y
-    }
-}
-
-fn clamp_rect_value(value: f32, max: usize) -> io::Result<usize> {
-    if !value.is_finite() {
-        return Err(io::Error::other("non-finite clip rectangle value"));
-    }
-    Ok(f32_to_usize_floor_clamped(value, max))
 }
 
 pub(super) fn rasterize_triangle(
