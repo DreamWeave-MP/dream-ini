@@ -147,6 +147,7 @@ pub(super) struct PrimitiveStats {
     pub(super) generic_triangle_bbox_non_finite: usize,
     solid_triangle_offenders: SolidTriangleOffenders,
     textured_triangle_offenders: TexturedTriangleOffenders,
+    textured_quad_reject_offenders: TexturedQuadRejectOffenders,
     solid_fan_offenders: SolidFanOffenders,
 }
 
@@ -199,6 +200,34 @@ struct TexturedTriangleOffenders {
 }
 
 const TEXTURED_TRIANGLE_OFFENDER_LIMIT: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TexturedQuadRejectWorkEstimate {
+    candidate_px: usize,
+    clipped_bbox_px: usize,
+    bounds: Option<TriangleRasterBounds>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TexturedQuadRejectOffender {
+    rejection: TexturedQuadFastPathRejection,
+    work: TexturedQuadRejectWorkEstimate,
+    source: TriangleSource,
+    positions: [egui::Pos2; 6],
+    uvs: [egui::Pos2; 6],
+    alphas: [u8; 6],
+    uniform_color: bool,
+    first_texel_sample: TriangleTexelSample,
+    second_texel_sample: TriangleTexelSample,
+}
+
+#[derive(Debug, Default)]
+struct TexturedQuadRejectOffenders {
+    entries: [Option<TexturedQuadRejectOffender>; TEXTURED_QUAD_REJECT_OFFENDER_LIMIT],
+    len: usize,
+}
+
+const TEXTURED_QUAD_REJECT_OFFENDER_LIMIT: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct SolidFanRasterWork {
@@ -342,6 +371,60 @@ fn compare_textured_triangle_offenders(
         .candidate_px
         .cmp(&right.scan_work.candidate_px)
         .then_with(|| left.clipped_bbox_px.cmp(&right.clipped_bbox_px))
+        .then_with(|| {
+            right
+                .source
+                .primitive_index
+                .cmp(&left.source.primitive_index)
+        })
+        .then_with(|| {
+            right
+                .source
+                .mesh_index_offset
+                .cmp(&left.source.mesh_index_offset)
+        })
+}
+
+impl TexturedQuadRejectOffenders {
+    fn record(&mut self, offender: &TexturedQuadRejectOffender) {
+        if self.len < TEXTURED_QUAD_REJECT_OFFENDER_LIMIT {
+            self.entries[self.len] = Some(*offender);
+            self.len += 1;
+            self.sort_used_entries();
+            return;
+        }
+
+        let Some(last) = self.entries[self.len - 1] else {
+            return;
+        };
+        if compare_textured_quad_reject_offenders(offender, &last).is_gt() {
+            self.entries[self.len - 1] = Some(*offender);
+            self.sort_used_entries();
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn sort_used_entries(&mut self) {
+        self.entries[..self.len].sort_by(|left, right| match (left, right) {
+            (Some(left), Some(right)) => compare_textured_quad_reject_offenders(right, left),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+    }
+}
+
+fn compare_textured_quad_reject_offenders(
+    left: &TexturedQuadRejectOffender,
+    right: &TexturedQuadRejectOffender,
+) -> std::cmp::Ordering {
+    left.work
+        .candidate_px
+        .cmp(&right.work.candidate_px)
+        .then_with(|| left.work.clipped_bbox_px.cmp(&right.work.clipped_bbox_px))
         .then_with(|| {
             right
                 .source
@@ -581,6 +664,10 @@ impl PrimitiveStats {
     pub(super) fn record_textured_quad_rejection(
         &mut self,
         rejection: TexturedQuadFastPathRejection,
+        vertices: [&egui::epaint::Vertex; 6],
+        texture: &TextureImage,
+        clip: ClipBounds,
+        source: TriangleSource,
     ) {
         match rejection {
             TexturedQuadFastPathRejection::NotRectangleDiagonal => {
@@ -599,6 +686,10 @@ impl PrimitiveStats {
                 self.textured_quad_reject_non_affine_uv += 1;
             }
         }
+        self.textured_quad_reject_offenders
+            .record(&textured_quad_reject_offender(
+                rejection, vertices, texture, clip, source,
+            ));
     }
 
     pub(super) fn record_solid_fan(
@@ -702,6 +793,27 @@ impl PrimitiveStats {
         Some(log_line)
     }
 
+    pub(super) fn textured_quad_reject_offenders_log_line(&self) -> Option<String> {
+        if self.textured_quad_reject_offenders.is_empty() {
+            return None;
+        }
+
+        let mut log_line = format!(
+            "software renderer textured_quad_reject_offenders shown={} cap={}",
+            self.textured_quad_reject_offenders.len, TEXTURED_QUAD_REJECT_OFFENDER_LIMIT
+        );
+        for (index, offender) in self.textured_quad_reject_offenders.entries
+            [..self.textured_quad_reject_offenders.len]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            log_line.push(' ');
+            log_line.push_str(&format_textured_quad_reject_offender(index, offender));
+        }
+        Some(log_line)
+    }
+
     pub(super) fn solid_fan_offenders_log_line(&self) -> Option<String> {
         if self.solid_fan_offenders.is_empty() {
             return None;
@@ -770,6 +882,152 @@ fn format_textured_triangle_offender(index: usize, offender: TexturedTriangleOff
         format_triangle_texels(offender.texel_sample),
         u8::from(offender.texel_sample.is_uniform()),
         format_texel_rgba(offender.texel_sample.uniform_color),
+    )
+}
+
+fn textured_quad_reject_offender(
+    rejection: TexturedQuadFastPathRejection,
+    vertices: [&egui::epaint::Vertex; 6],
+    texture: &TextureImage,
+    clip: ClipBounds,
+    source: TriangleSource,
+) -> TexturedQuadRejectOffender {
+    let first_bounds = triangle_raster_bounds(vertices[0], vertices[1], vertices[2], clip);
+    let second_bounds = triangle_raster_bounds(vertices[3], vertices[4], vertices[5], clip);
+    TexturedQuadRejectOffender {
+        rejection,
+        work: textured_quad_reject_work(vertices, first_bounds, second_bounds),
+        source,
+        positions: vertices.map(|vertex| vertex.pos),
+        uvs: vertices.map(|vertex| vertex.uv),
+        alphas: vertices.map(|vertex| vertex.color.a()),
+        uniform_color: vertices
+            .iter()
+            .all(|vertex| vertex.color == vertices[0].color),
+        first_texel_sample: triangle_nearest_texel_sample(
+            vertices[0],
+            vertices[1],
+            vertices[2],
+            texture,
+        ),
+        second_texel_sample: triangle_nearest_texel_sample(
+            vertices[3],
+            vertices[4],
+            vertices[5],
+            texture,
+        ),
+    }
+}
+
+fn textured_quad_reject_work(
+    vertices: [&egui::epaint::Vertex; 6],
+    first_bounds: Option<TriangleRasterBounds>,
+    second_bounds: Option<TriangleRasterBounds>,
+) -> TexturedQuadRejectWorkEstimate {
+    let first_px = first_bounds.map_or(0, |bounds| {
+        estimate_triangle_scan_work([vertices[0].pos, vertices[1].pos, vertices[2].pos], bounds)
+            .candidate_px
+    });
+    let second_px = second_bounds.map_or(0, |bounds| {
+        estimate_triangle_scan_work([vertices[3].pos, vertices[4].pos, vertices[5].pos], bounds)
+            .candidate_px
+    });
+    let bounds = union_raster_bounds(first_bounds, second_bounds);
+    TexturedQuadRejectWorkEstimate {
+        candidate_px: first_px + second_px,
+        clipped_bbox_px: bounds.map_or(0, TriangleRasterBounds::pixel_area),
+        bounds,
+    }
+}
+
+fn union_raster_bounds(
+    first: Option<TriangleRasterBounds>,
+    second: Option<TriangleRasterBounds>,
+) -> Option<TriangleRasterBounds> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(TriangleRasterBounds {
+            min_x: first.min_x.min(second.min_x),
+            min_y: first.min_y.min(second.min_y),
+            max_x: first.max_x.max(second.max_x),
+            max_y: first.max_y.max(second.max_y),
+        }),
+        (Some(bounds), None) | (None, Some(bounds)) => Some(bounds),
+        (None, None) => None,
+    }
+}
+
+fn format_textured_quad_reject_offender(
+    index: usize,
+    offender: &TexturedQuadRejectOffender,
+) -> String {
+    let bounds = offender
+        .work
+        .bounds
+        .map_or_else(|| "none".to_owned(), format_bounds);
+    format!(
+        "offender{index}_candidate_px={} offender{index}_clipped_bbox_px={} offender{index}_bounds={} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_reason={} offender{index}_uniform_color={} offender{index}_alphas={} offender{index}_v0={:.1},{:.1} offender{index}_uv0={:.3},{:.3} offender{index}_v1={:.1},{:.1} offender{index}_uv1={:.3},{:.3} offender{index}_v2={:.1},{:.1} offender{index}_uv2={:.3},{:.3} offender{index}_v3={:.1},{:.1} offender{index}_uv3={:.3},{:.3} offender{index}_v4={:.1},{:.1} offender{index}_uv4={:.3},{:.3} offender{index}_v5={:.1},{:.1} offender{index}_uv5={:.3},{:.3} offender{index}_tri0_texels={} offender{index}_tri0_constant_texel={} offender{index}_tri0_texel_rgba={} offender{index}_tri1_texels={} offender{index}_tri1_constant_texel={} offender{index}_tri1_texel_rgba={}",
+        offender.work.candidate_px,
+        offender.work.clipped_bbox_px,
+        bounds,
+        offender.source.primitive_index,
+        offender.source.mesh_index_offset,
+        format_textured_quad_rejection(offender.rejection),
+        u8::from(offender.uniform_color),
+        format_alphas(offender.alphas),
+        offender.positions[0].x,
+        offender.positions[0].y,
+        offender.uvs[0].x,
+        offender.uvs[0].y,
+        offender.positions[1].x,
+        offender.positions[1].y,
+        offender.uvs[1].x,
+        offender.uvs[1].y,
+        offender.positions[2].x,
+        offender.positions[2].y,
+        offender.uvs[2].x,
+        offender.uvs[2].y,
+        offender.positions[3].x,
+        offender.positions[3].y,
+        offender.uvs[3].x,
+        offender.uvs[3].y,
+        offender.positions[4].x,
+        offender.positions[4].y,
+        offender.uvs[4].x,
+        offender.uvs[4].y,
+        offender.positions[5].x,
+        offender.positions[5].y,
+        offender.uvs[5].x,
+        offender.uvs[5].y,
+        format_triangle_texels(offender.first_texel_sample),
+        u8::from(offender.first_texel_sample.is_uniform()),
+        format_texel_rgba(offender.first_texel_sample.uniform_color),
+        format_triangle_texels(offender.second_texel_sample),
+        u8::from(offender.second_texel_sample.is_uniform()),
+        format_texel_rgba(offender.second_texel_sample.uniform_color),
+    )
+}
+
+fn format_textured_quad_rejection(rejection: TexturedQuadFastPathRejection) -> &'static str {
+    match rejection {
+        TexturedQuadFastPathRejection::NotRectangleDiagonal => "not_rectangle_diagonal",
+        TexturedQuadFastPathRejection::NotAxisAlignedRectangle => "not_axis_aligned_rectangle",
+        TexturedQuadFastPathRejection::CornerAttributeMismatch => "corner_attribute_mismatch",
+        TexturedQuadFastPathRejection::NonUniformColor => "non_uniform_color",
+        TexturedQuadFastPathRejection::NonAffineUv => "non_affine_uv",
+    }
+}
+
+fn format_bounds(bounds: TriangleRasterBounds) -> String {
+    format!(
+        "{},{},{},{}",
+        bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y
+    )
+}
+
+fn format_alphas(alphas: [u8; 6]) -> String {
+    format!(
+        "{},{},{},{},{},{}",
+        alphas[0], alphas[1], alphas[2], alphas[3], alphas[4], alphas[5]
     )
 }
 
@@ -1395,6 +1653,90 @@ mod tests {
     }
 
     #[test]
+    fn primitive_stats_keeps_top_textured_quad_reject_offenders_ordered_and_capped() {
+        let mut offenders = TexturedQuadRejectOffenders::default();
+
+        for candidate_px in 1..=10 {
+            offenders.record(&test_textured_quad_reject_offender(
+                candidate_px,
+                candidate_px * 2,
+                candidate_px,
+                candidate_px * 3,
+            ));
+        }
+
+        assert_eq!(offenders.len, TEXTURED_QUAD_REJECT_OFFENDER_LIMIT);
+        let candidate_px: Vec<_> = offenders.entries[..offenders.len]
+            .iter()
+            .flatten()
+            .map(|offender| offender.work.candidate_px)
+            .collect();
+        assert_eq!(candidate_px, vec![10, 9, 8, 7, 6, 5, 4, 3]);
+    }
+
+    #[test]
+    fn primitive_stats_formats_textured_quad_reject_offenders_log_line() {
+        let mut stats = PrimitiveStats::default();
+        stats
+            .textured_quad_reject_offenders
+            .record(&TexturedQuadRejectOffender {
+                rejection: TexturedQuadFastPathRejection::NotAxisAlignedRectangle,
+                work: TexturedQuadRejectWorkEstimate {
+                    candidate_px: 14,
+                    clipped_bbox_px: 9,
+                    bounds: Some(TriangleRasterBounds {
+                        min_x: 1,
+                        min_y: 2,
+                        max_x: 4,
+                        max_y: 5,
+                    }),
+                },
+                source: triangle_source(7, 12),
+                positions: [
+                    egui::pos2(1.25, 2.5),
+                    egui::pos2(3.0, 4.0),
+                    egui::pos2(5.0, 6.75),
+                    egui::pos2(7.0, 8.0),
+                    egui::pos2(9.0, 10.0),
+                    egui::pos2(11.0, 12.0),
+                ],
+                uvs: [
+                    egui::pos2(0.0, 0.5),
+                    egui::pos2(1.0, 0.25),
+                    egui::pos2(0.75, 1.0),
+                    egui::pos2(0.1, 0.2),
+                    egui::pos2(0.3, 0.4),
+                    egui::pos2(0.5, 0.6),
+                ],
+                alphas: [255, 254, 253, 252, 251, 250],
+                uniform_color: false,
+                first_texel_sample: TriangleTexelSample {
+                    texels: Some([(0, 1), (2, 3), (4, 5)]),
+                    uniform_color: None,
+                },
+                second_texel_sample: TriangleTexelSample {
+                    texels: Some([(6, 7), (8, 9), (10, 11)]),
+                    uniform_color: Some([1, 2, 3, 4]),
+                },
+            });
+
+        assert_eq!(
+            stats.textured_quad_reject_offenders_log_line().as_deref(),
+            Some(
+                "software renderer textured_quad_reject_offenders shown=1 cap=8 offender0_candidate_px=14 offender0_clipped_bbox_px=9 offender0_bounds=1,2,4,5 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_reason=not_axis_aligned_rectangle offender0_uniform_color=0 offender0_alphas=255,254,253,252,251,250 offender0_v0=1.2,2.5 offender0_uv0=0.000,0.500 offender0_v1=3.0,4.0 offender0_uv1=1.000,0.250 offender0_v2=5.0,6.8 offender0_uv2=0.750,1.000 offender0_v3=7.0,8.0 offender0_uv3=0.100,0.200 offender0_v4=9.0,10.0 offender0_uv4=0.300,0.400 offender0_v5=11.0,12.0 offender0_uv5=0.500,0.600 offender0_tri0_texels=0,1;2,3;4,5 offender0_tri0_constant_texel=0 offender0_tri0_texel_rgba=none offender0_tri1_texels=6,7;8,9;10,11 offender0_tri1_constant_texel=1 offender0_tri1_texel_rgba=1,2,3,4"
+            )
+        );
+    }
+
+    #[test]
+    fn primitive_stats_skips_textured_quad_reject_offenders_log_line_when_empty() {
+        assert_eq!(
+            PrimitiveStats::default().textured_quad_reject_offenders_log_line(),
+            None
+        );
+    }
+
+    #[test]
     fn primitive_stats_keeps_top_solid_fan_offenders_ordered_and_capped() {
         let mut offenders = SolidFanOffenders::default();
 
@@ -1565,6 +1907,40 @@ mod tests {
             positions: [egui::Pos2::ZERO; 3],
             uvs: [egui::Pos2::ZERO; 3],
             texel_sample: TriangleTexelSample {
+                texels: Some([(0, 0), (0, 0), (0, 0)]),
+                uniform_color: Some([255, 255, 255, 255]),
+            },
+        }
+    }
+
+    fn test_textured_quad_reject_offender(
+        candidate_px: usize,
+        clipped_bbox_px: usize,
+        primitive_index: usize,
+        mesh_index_offset: usize,
+    ) -> TexturedQuadRejectOffender {
+        TexturedQuadRejectOffender {
+            rejection: TexturedQuadFastPathRejection::NotAxisAlignedRectangle,
+            work: TexturedQuadRejectWorkEstimate {
+                candidate_px,
+                clipped_bbox_px,
+                bounds: Some(TriangleRasterBounds {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: clipped_bbox_px,
+                    max_y: 1,
+                }),
+            },
+            source: triangle_source(primitive_index, mesh_index_offset),
+            positions: [egui::Pos2::ZERO; 6],
+            uvs: [egui::Pos2::ZERO; 6],
+            alphas: [255; 6],
+            uniform_color: true,
+            first_texel_sample: TriangleTexelSample {
+                texels: Some([(0, 0), (0, 0), (0, 0)]),
+                uniform_color: Some([255, 255, 255, 255]),
+            },
+            second_texel_sample: TriangleTexelSample {
                 texels: Some([(0, 0), (0, 0), (0, 0)]),
                 uniform_color: Some([255, 255, 255, 255]),
             },

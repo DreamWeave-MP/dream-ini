@@ -97,6 +97,9 @@ impl SoftwareRenderer {
             if let Some(log_line) = stats.textured_triangle_offenders_log_line() {
                 write_log(frame.log, log_line);
             }
+            if let Some(log_line) = stats.textured_quad_reject_offenders_log_line() {
+                write_log(frame.log, log_line);
+            }
             if let Some(log_line) = stats.solid_fan_offenders_log_line() {
                 write_log(frame.log, log_line);
             }
@@ -207,6 +210,10 @@ impl SoftwareRenderer {
                     texture,
                     clip,
                     quad,
+                    TriangleSource {
+                        primitive_index,
+                        mesh_index_offset: index_offset,
+                    },
                     &mut instrumentation,
                 )? {
                     index_offset += 6;
@@ -468,6 +475,12 @@ mod tests {
         assert_eq!(stats.textured_quad_fast_path_hits, 0);
         assert_eq!(stats.textured_quad_reject_non_affine_uv, 1);
         assert_eq!(stats.generic_triangles_rasterized, 2);
+        assert!(
+            stats
+                .textured_quad_reject_offenders_log_line()
+                .expect("textured quad reject offenders")
+                .contains("offender0_reason=non_affine_uv")
+        );
     }
 
     #[test]

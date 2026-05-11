@@ -3,8 +3,9 @@
 use std::io;
 
 use super::stats::{
-    record_quad_probe_elapsed, record_solid_quad_elapsed, record_solid_quad_reject_elapsed,
-    record_textured_quad_elapsed, record_textured_quad_reject_elapsed,
+    TriangleSource, record_quad_probe_elapsed, record_solid_quad_elapsed,
+    record_solid_quad_reject_elapsed, record_textured_quad_elapsed,
+    record_textured_quad_reject_elapsed,
 };
 use super::{RasterInstrumentation, mesh_index_to_usize};
 use crate::gui::portmaster::raster::{
@@ -20,6 +21,7 @@ pub(super) fn try_rasterize_quad_window(
     texture: &TextureImage,
     clip: ClipBounds,
     quad: &[u32],
+    source: TriangleSource,
     instrumentation: &mut RasterInstrumentation<'_>,
 ) -> io::Result<bool> {
     let probe_start = instrumentation.timing_start();
@@ -99,7 +101,7 @@ pub(super) fn try_rasterize_quad_window(
     if let Some(stats) = instrumentation.primitive_stats()
         && let Some(rejection) = textured_quad_fast_path_rejection(vertices)
     {
-        stats.record_textured_quad_rejection(rejection);
+        stats.record_textured_quad_rejection(rejection, vertices, texture, clip, source);
     }
     Ok(false)
 }
