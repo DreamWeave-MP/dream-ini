@@ -5,10 +5,10 @@ use std::time::Instant;
 
 use super::RasterInstrumentation;
 use crate::gui::portmaster::raster::{
-    ClipBounds, SolidTriangleColorDecision, TexturedQuadFastPathRejection, TriangleClassification,
-    TriangleRasterBounds, TriangleScanWorkEstimate, TriangleTexelSample, classify_triangle,
-    estimate_triangle_scan_work, is_axis_aligned_quad, solid_triangle_color_decision,
-    triangle_nearest_texel_sample, triangle_raster_bounds,
+    ClipBounds, RasterStats, SolidTriangleColorDecision, TexturedQuadFastPathRejection,
+    TriangleClassification, TriangleRasterBounds, TriangleScanWorkEstimate, TriangleTexelSample,
+    classify_triangle, estimate_triangle_scan_work, is_axis_aligned_quad,
+    solid_triangle_color_decision, triangle_nearest_texel_sample, triangle_raster_bounds,
 };
 use crate::gui::portmaster::texture::TextureImage;
 
@@ -19,7 +19,8 @@ pub(super) struct RasterTimings {
     pub(super) solid_quad_reject: u128,
     pub(super) textured_quad: u128,
     pub(super) textured_quad_reject: u128,
-    pub(super) solid_fan: u128,
+    pub(super) solid_fan_probe: u128,
+    pub(super) solid_fan_raster: u128,
     pub(super) generic_solid_triangle: u128,
     pub(super) generic_textured_triangle: u128,
     pub(super) generic_degenerate_triangle: u128,
@@ -48,13 +49,14 @@ impl RasterTimings {
 
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_timings quad_window_probe_us={} solid_quad_us={} solid_quad_reject_us={} textured_quad_us={} textured_quad_reject_us={} solid_fan_us={} generic_solid_triangle_us={} generic_textured_triangle_us={} generic_degenerate_triangle_us={}",
+            "software renderer raster_timings quad_window_probe_us={} solid_quad_us={} solid_quad_reject_us={} textured_quad_us={} textured_quad_reject_us={} solid_fan_probe_us={} solid_fan_raster_us={} generic_solid_triangle_us={} generic_textured_triangle_us={} generic_degenerate_triangle_us={}",
             self.quad_window_probe,
             self.solid_quad,
             self.solid_quad_reject,
             self.textured_quad,
             self.textured_quad_reject,
-            self.solid_fan,
+            self.solid_fan_probe,
+            self.solid_fan_raster,
             self.generic_solid_triangle,
             self.generic_textured_triangle,
             self.generic_degenerate_triangle,
@@ -145,6 +147,7 @@ pub(super) struct PrimitiveStats {
     pub(super) generic_triangle_bbox_non_finite: usize,
     solid_triangle_offenders: SolidTriangleOffenders,
     textured_triangle_offenders: TexturedTriangleOffenders,
+    solid_fan_offenders: SolidFanOffenders,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -196,6 +199,56 @@ struct TexturedTriangleOffenders {
 }
 
 const TEXTURED_TRIANGLE_OFFENDER_LIMIT: usize = 8;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct SolidFanRasterWork {
+    px: usize,
+    rows: usize,
+    endpoint_probe_px: usize,
+    fallback_rows: usize,
+}
+
+impl SolidFanRasterWork {
+    pub(super) const fn from_stats(stats: &RasterStats) -> Self {
+        Self {
+            px: stats.solid_fan_px,
+            rows: stats.solid_fan_rows,
+            endpoint_probe_px: stats.solid_fan_endpoint_probe_px,
+            fallback_rows: stats.solid_fan_fallback_rows,
+        }
+    }
+}
+
+impl std::ops::Sub for SolidFanRasterWork {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            px: self.px.saturating_sub(rhs.px),
+            rows: self.rows.saturating_sub(rhs.rows),
+            endpoint_probe_px: self.endpoint_probe_px.saturating_sub(rhs.endpoint_probe_px),
+            fallback_rows: self.fallback_rows.saturating_sub(rhs.fallback_rows),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SolidFanOffender {
+    elapsed_us: u128,
+    source: TriangleSource,
+    triangle_count: usize,
+    polygon_vertices: usize,
+    alpha: u8,
+    work: SolidFanRasterWork,
+}
+
+#[derive(Debug, Default)]
+struct SolidFanOffenders {
+    entries: [Option<SolidFanOffender>; SOLID_FAN_OFFENDER_LIMIT],
+    len: usize,
+}
+
+const SOLID_FAN_OFFENDER_LIMIT: usize = 8;
 
 impl SolidTriangleOffenders {
     fn record(&mut self, offender: SolidTriangleOffender) {
@@ -289,6 +342,61 @@ fn compare_textured_triangle_offenders(
         .candidate_px
         .cmp(&right.scan_work.candidate_px)
         .then_with(|| left.clipped_bbox_px.cmp(&right.clipped_bbox_px))
+        .then_with(|| {
+            right
+                .source
+                .primitive_index
+                .cmp(&left.source.primitive_index)
+        })
+        .then_with(|| {
+            right
+                .source
+                .mesh_index_offset
+                .cmp(&left.source.mesh_index_offset)
+        })
+}
+
+impl SolidFanOffenders {
+    fn record(&mut self, offender: SolidFanOffender) {
+        if self.len < SOLID_FAN_OFFENDER_LIMIT {
+            self.entries[self.len] = Some(offender);
+            self.len += 1;
+            self.sort_used_entries();
+            return;
+        }
+
+        let Some(last) = self.entries[self.len - 1] else {
+            return;
+        };
+        if compare_solid_fan_offenders(&offender, &last).is_gt() {
+            self.entries[self.len - 1] = Some(offender);
+            self.sort_used_entries();
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn sort_used_entries(&mut self) {
+        self.entries[..self.len].sort_by(|left, right| match (left, right) {
+            (Some(left), Some(right)) => compare_solid_fan_offenders(right, left),
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+    }
+}
+
+fn compare_solid_fan_offenders(
+    left: &SolidFanOffender,
+    right: &SolidFanOffender,
+) -> std::cmp::Ordering {
+    left.elapsed_us
+        .cmp(&right.elapsed_us)
+        .then_with(|| left.work.px.cmp(&right.work.px))
+        .then_with(|| left.work.rows.cmp(&right.work.rows))
+        .then_with(|| left.triangle_count.cmp(&right.triangle_count))
         .then_with(|| {
             right
                 .source
@@ -493,6 +601,25 @@ impl PrimitiveStats {
         }
     }
 
+    pub(super) fn record_solid_fan(
+        &mut self,
+        source: TriangleSource,
+        triangle_count: usize,
+        polygon_vertices: usize,
+        alpha: u8,
+        work: SolidFanRasterWork,
+        elapsed_us: u128,
+    ) {
+        self.solid_fan_offenders.record(SolidFanOffender {
+            elapsed_us,
+            source,
+            triangle_count,
+            polygon_vertices,
+            alpha,
+            work,
+        });
+    }
+
     pub(super) fn log_line(&self) -> String {
         format!(
             "software renderer primitive_stats mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
@@ -574,6 +701,26 @@ impl PrimitiveStats {
         }
         Some(log_line)
     }
+
+    pub(super) fn solid_fan_offenders_log_line(&self) -> Option<String> {
+        if self.solid_fan_offenders.is_empty() {
+            return None;
+        }
+
+        let mut log_line = format!(
+            "software renderer solid_fan_offenders shown={} cap={}",
+            self.solid_fan_offenders.len, SOLID_FAN_OFFENDER_LIMIT
+        );
+        for (index, offender) in self.solid_fan_offenders.entries[..self.solid_fan_offenders.len]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            log_line.push(' ');
+            log_line.push_str(&format_solid_fan_offender(index, *offender));
+        }
+        Some(log_line)
+    }
 }
 
 fn format_solid_triangle_offender(index: usize, offender: SolidTriangleOffender) -> String {
@@ -623,6 +770,22 @@ fn format_textured_triangle_offender(index: usize, offender: TexturedTriangleOff
         format_triangle_texels(offender.texel_sample),
         u8::from(offender.texel_sample.is_uniform()),
         format_texel_rgba(offender.texel_sample.uniform_color),
+    )
+}
+
+fn format_solid_fan_offender(index: usize, offender: SolidFanOffender) -> String {
+    format!(
+        "offender{index}_elapsed_us={} offender{index}_primitive={} offender{index}_mesh_index_offset={} offender{index}_triangles={} offender{index}_polygon_vertices={} offender{index}_alpha={} offender{index}_px={} offender{index}_rows={} offender{index}_endpoint_probe_px={} offender{index}_fallback_rows={}",
+        offender.elapsed_us,
+        offender.source.primitive_index,
+        offender.source.mesh_index_offset,
+        offender.triangle_count,
+        offender.polygon_vertices,
+        offender.alpha,
+        offender.work.px,
+        offender.work.rows,
+        offender.work.endpoint_probe_px,
+        offender.work.fallback_rows,
     )
 }
 
@@ -1232,6 +1395,61 @@ mod tests {
     }
 
     #[test]
+    fn primitive_stats_keeps_top_solid_fan_offenders_ordered_and_capped() {
+        let mut offenders = SolidFanOffenders::default();
+
+        for elapsed_us in 1..=10 {
+            offenders.record(test_solid_fan_offender(
+                elapsed_us,
+                usize::try_from(elapsed_us).expect("elapsed"),
+                usize::try_from(elapsed_us * 3).expect("offset"),
+            ));
+        }
+
+        assert_eq!(offenders.len, SOLID_FAN_OFFENDER_LIMIT);
+        let elapsed_us: Vec<_> = offenders.entries[..offenders.len]
+            .iter()
+            .flatten()
+            .map(|offender| offender.elapsed_us)
+            .collect();
+        assert_eq!(elapsed_us, vec![10, 9, 8, 7, 6, 5, 4, 3]);
+    }
+
+    #[test]
+    fn primitive_stats_formats_solid_fan_offenders_log_line() {
+        let mut stats = PrimitiveStats::default();
+
+        stats.record_solid_fan(
+            triangle_source(7, 12),
+            4,
+            6,
+            128,
+            SolidFanRasterWork {
+                px: 33,
+                rows: 5,
+                endpoint_probe_px: 9,
+                fallback_rows: 1,
+            },
+            42,
+        );
+
+        assert_eq!(
+            stats.solid_fan_offenders_log_line().as_deref(),
+            Some(
+                "software renderer solid_fan_offenders shown=1 cap=8 offender0_elapsed_us=42 offender0_primitive=7 offender0_mesh_index_offset=12 offender0_triangles=4 offender0_polygon_vertices=6 offender0_alpha=128 offender0_px=33 offender0_rows=5 offender0_endpoint_probe_px=9 offender0_fallback_rows=1"
+            )
+        );
+    }
+
+    #[test]
+    fn primitive_stats_skips_solid_fan_offenders_log_line_when_empty() {
+        assert_eq!(
+            PrimitiveStats::default().solid_fan_offenders_log_line(),
+            None
+        );
+    }
+
+    #[test]
     fn renderer_stats_raster_timings_log_line() {
         let timings = RasterTimings {
             quad_window_probe: 1,
@@ -1239,15 +1457,16 @@ mod tests {
             solid_quad_reject: 3,
             textured_quad: 4,
             textured_quad_reject: 5,
-            solid_fan: 6,
-            generic_solid_triangle: 7,
-            generic_textured_triangle: 8,
-            generic_degenerate_triangle: 9,
+            solid_fan_probe: 6,
+            solid_fan_raster: 7,
+            generic_solid_triangle: 8,
+            generic_textured_triangle: 9,
+            generic_degenerate_triangle: 10,
         };
 
         assert_eq!(
             timings.log_line(),
-            "software renderer raster_timings quad_window_probe_us=1 solid_quad_us=2 solid_quad_reject_us=3 textured_quad_us=4 textured_quad_reject_us=5 solid_fan_us=6 generic_solid_triangle_us=7 generic_textured_triangle_us=8 generic_degenerate_triangle_us=9"
+            "software renderer raster_timings quad_window_probe_us=1 solid_quad_us=2 solid_quad_reject_us=3 textured_quad_us=4 textured_quad_reject_us=5 solid_fan_probe_us=6 solid_fan_raster_us=7 generic_solid_triangle_us=8 generic_textured_triangle_us=9 generic_degenerate_triangle_us=10"
         );
     }
 
@@ -1266,7 +1485,8 @@ mod tests {
         assert_eq!(timings.solid_quad_reject, 2);
         assert_eq!(timings.textured_quad, 0);
         assert_eq!(timings.textured_quad_reject, 3);
-        assert_eq!(timings.solid_fan, 0);
+        assert_eq!(timings.solid_fan_probe, 0);
+        assert_eq!(timings.solid_fan_raster, 0);
         assert_eq!(timings.generic_solid_triangle, 5);
         assert_eq!(timings.generic_textured_triangle, 7);
         assert_eq!(timings.generic_degenerate_triangle, 11);
@@ -1347,6 +1567,26 @@ mod tests {
             texel_sample: TriangleTexelSample {
                 texels: Some([(0, 0), (0, 0), (0, 0)]),
                 uniform_color: Some([255, 255, 255, 255]),
+            },
+        }
+    }
+
+    fn test_solid_fan_offender(
+        elapsed_us: u128,
+        primitive_index: usize,
+        mesh_index_offset: usize,
+    ) -> SolidFanOffender {
+        SolidFanOffender {
+            elapsed_us,
+            source: triangle_source(primitive_index, mesh_index_offset),
+            triangle_count: 4,
+            polygon_vertices: 6,
+            alpha: 255,
+            work: SolidFanRasterWork {
+                px: usize::try_from(elapsed_us).expect("elapsed"),
+                rows: 1,
+                endpoint_probe_px: 2,
+                fallback_rows: 0,
             },
         }
     }

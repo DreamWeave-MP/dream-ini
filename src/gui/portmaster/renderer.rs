@@ -17,9 +17,9 @@ use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
 use super::texture::TextureStore;
 use super::{GuiFrame, GuiShell};
-use fan::solid_fan_run;
+use fan::{SolidFanRun, solid_fan_run};
 use quad::try_rasterize_quad_window;
-use stats::{PrimitiveStats, RasterTimings, TriangleSource};
+use stats::{PrimitiveStats, RasterTimings, SolidFanRasterWork, TriangleSource};
 
 #[derive(Debug, Default)]
 pub(super) struct SoftwareRenderer {
@@ -95,6 +95,9 @@ impl SoftwareRenderer {
                 write_log(frame.log, log_line);
             }
             if let Some(log_line) = stats.textured_triangle_offenders_log_line() {
+                write_log(frame.log, log_line);
+            }
+            if let Some(log_line) = stats.solid_fan_offenders_log_line() {
                 write_log(frame.log, log_line);
             }
         }
@@ -211,25 +214,29 @@ impl SoftwareRenderer {
                 }
             }
 
-            if let Some(fan) = solid_fan_run(mesh, texture, clip, index_offset)? {
-                let fan_start = raster_timings.as_ref().map(|_| Instant::now());
-                rasterize_solid_fan(
+            let fan_probe_start = raster_timings.as_ref().map(|_| Instant::now());
+            let fan = solid_fan_run(mesh, texture, clip, index_offset)?;
+            if let (Some(start), Some(timings)) =
+                (fan_probe_start, borrow_optional_mut(&mut raster_timings))
+            {
+                timings.solid_fan_probe += start.elapsed().as_micros();
+            }
+            if let Some(fan) = fan {
+                let mut instrumentation = RasterInstrumentation {
+                    primitive_stats: borrow_optional_mut(&mut stats),
+                    raster_stats: borrow_optional_mut(&mut raster_stats),
+                    timings: borrow_optional_mut(&mut raster_timings),
+                };
+                rasterize_solid_fan_run(
                     surface,
-                    &fan.polygon,
-                    fan.triangle_count,
-                    fan.color,
+                    &fan,
                     clip,
-                    borrow_optional_mut(&mut raster_stats),
+                    TriangleSource {
+                        primitive_index,
+                        mesh_index_offset: index_offset,
+                    },
+                    &mut instrumentation,
                 );
-                if let Some(stats) = borrow_optional_mut(&mut stats) {
-                    stats.solid_fan_runs += 1;
-                    stats.solid_fan_triangles += fan.triangle_count;
-                }
-                if let (Some(start), Some(timings)) =
-                    (fan_start, borrow_optional_mut(&mut raster_timings))
-                {
-                    timings.solid_fan += start.elapsed().as_micros();
-                }
                 index_offset += fan.triangle_count * 3;
                 continue;
             }
@@ -307,6 +314,53 @@ fn rasterize_generic_triangle(
         borrow_optional_mut(raster_timings),
     ) {
         timings.record_generic_triangle(classification, start.elapsed().as_micros());
+    }
+}
+
+fn rasterize_solid_fan_run(
+    surface: &mut SoftwareSurface,
+    fan: &SolidFanRun<'_>,
+    clip: ClipBounds,
+    source: TriangleSource,
+    instrumentation: &mut RasterInstrumentation<'_>,
+) {
+    let fan_work_before = instrumentation
+        .raster_stats
+        .as_deref()
+        .map(SolidFanRasterWork::from_stats);
+    let fan_start = instrumentation.timing_start();
+    rasterize_solid_fan(
+        surface,
+        &fan.polygon,
+        fan.triangle_count,
+        fan.color,
+        clip,
+        instrumentation.raster_stats(),
+    );
+    let elapsed_us = fan_start.map_or(0, |start| start.elapsed().as_micros());
+    let fan_work_after = instrumentation
+        .raster_stats
+        .as_deref()
+        .map(SolidFanRasterWork::from_stats);
+    let fan_work = fan_work_before
+        .zip(fan_work_after)
+        .map_or_else(SolidFanRasterWork::default, |(before, after)| {
+            after - before
+        });
+    if let Some(stats) = instrumentation.primitive_stats() {
+        stats.solid_fan_runs += 1;
+        stats.solid_fan_triangles += fan.triangle_count;
+        stats.record_solid_fan(
+            source,
+            fan.triangle_count,
+            fan.polygon.len(),
+            fan.color[3],
+            fan_work,
+            elapsed_us,
+        );
+    }
+    if let Some(timings) = instrumentation.timings() {
+        timings.solid_fan_raster += elapsed_us;
     }
 }
 
@@ -430,6 +484,7 @@ mod tests {
         let clip_rect = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(12.0, 12.0));
         let mut primitive_stats = PrimitiveStats::default();
         let mut raster_stats = RasterStats::default();
+        let mut raster_timings = RasterTimings::default();
 
         renderer
             .rasterize_mesh(
@@ -438,7 +493,7 @@ mod tests {
                 0,
                 Some(&mut primitive_stats),
                 Some(&mut raster_stats),
-                None,
+                Some(&mut raster_timings),
             )
             .expect("rasterize mesh");
         let fan_pixels = renderer.surface.pixels.clone();
@@ -454,6 +509,14 @@ mod tests {
         assert!(raster_stats.solid_fan_rows > 0);
         assert!(raster_stats.solid_fan_px > 0);
         assert_eq!(raster_stats.translucent_px, raster_stats.solid_fan_px);
+        assert_eq!(raster_timings.generic_solid_triangle, 0);
+        assert_eq!(raster_timings.generic_textured_triangle, 0);
+        assert!(
+            primitive_stats
+                .solid_fan_offenders_log_line()
+                .expect("solid fan offenders")
+                .contains("offender0_triangles=4 offender0_polygon_vertices=6 offender0_alpha=128")
+        );
     }
 
     fn quad_vertices() -> [egui::epaint::Vertex; 4] {
