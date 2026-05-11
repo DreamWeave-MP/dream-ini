@@ -75,7 +75,15 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
         }
     }
 
-    let cache_spans = rasterize_solid_fan_uncached(surface, params, stats, bounds, area_sign);
+    let cache_key_available = cache_key.is_some();
+    let cache_spans = rasterize_solid_fan_uncached(
+        surface,
+        params,
+        stats,
+        bounds,
+        area_sign,
+        cache_key_available,
+    );
 
     if let (Some(cache), Some(key), Some(spans)) = (cache, cache_key, cache_spans) {
         if let Some(stats) = stats {
@@ -113,10 +121,16 @@ fn rasterize_solid_fan_uncached(
     stats: &mut Option<&mut RasterStats>,
     bounds: TriangleRasterBounds,
     area_sign: f32,
+    cache_key_available: bool,
 ) -> Option<Vec<Option<(usize, usize)>>> {
     let precomputed_edges = precompute_polygon_edges(params.vertices, params.polygon, area_sign);
     record_solid_fan_precompute_stats(stats, &precomputed_edges);
-    let mut cache_spans = solid_fan_cache_span_storage(stats, bounds, precomputed_edges.is_ok());
+    let mut cache_spans = solid_fan_cache_span_storage(
+        stats,
+        bounds,
+        precomputed_edges.is_ok(),
+        cache_key_available,
+    );
 
     for y in bounds.min_y..bounds.max_y {
         let scanline = solid_fan_scanline(params, bounds, y, area_sign, &precomputed_edges, stats);
@@ -161,7 +175,11 @@ fn solid_fan_cache_span_storage(
     stats: &mut Option<&mut RasterStats>,
     bounds: TriangleRasterBounds,
     precomputed: bool,
+    cache_key_available: bool,
 ) -> Option<Vec<Option<(usize, usize)>>> {
+    if !cache_key_available {
+        return None;
+    }
     let row_count = bounds.max_y - bounds.min_y;
     if precomputed && row_count <= SOLID_FAN_SPAN_CACHE_MAX_ROWS {
         return Some(Vec::with_capacity(row_count));
