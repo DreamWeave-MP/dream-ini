@@ -6,6 +6,7 @@ use super::surface::SoftwareSurface;
 use super::texture::TextureImage;
 
 mod math;
+mod sampling;
 mod stats;
 mod types;
 
@@ -13,9 +14,11 @@ pub(super) use math::usize_to_f32;
 use math::{
     color_to_array, edge, edge_covers_pixel, edge_includes_boundary, edge_step_x, edge_step_y,
     f32_to_u8_round_clamped, f32_to_usize_ceil_clamped, f32_to_usize_floor_clamped,
-    f32_to_usize_round_clamped, interpolate_channel_value, interpolate_color, modulate_color,
-    near_finite_pos2, same_f32, same_pos2,
+    interpolate_channel_value, interpolate_color, modulate_color, near_finite_pos2, same_f32,
+    same_pos2,
 };
+pub(super) use sampling::triangle_nearest_texel_sample;
+use sampling::{nearest_texel, sample_nearest, texel_color};
 pub(super) use stats::RasterStats;
 pub(super) use types::{
     ClipBounds, SolidTriangleColorDecision, TexturedQuadFastPathRejection, TriangleClassification,
@@ -2438,36 +2441,6 @@ pub(super) fn solid_triangle_color_decision(
     ))
 }
 
-pub(super) fn triangle_nearest_texel_sample(
-    v0: &egui::epaint::Vertex,
-    v1: &egui::epaint::Vertex,
-    v2: &egui::epaint::Vertex,
-    texture: &TextureImage,
-) -> TriangleTexelSample {
-    if texture.width == 0 || texture.height == 0 {
-        return TriangleTexelSample {
-            texels: None,
-            uniform_color: Some([255, 255, 255, 255]),
-        };
-    }
-
-    let texels = [
-        nearest_texel(texture, v0.uv),
-        nearest_texel(texture, v1.uv),
-        nearest_texel(texture, v2.uv),
-    ];
-    let uniform_color = if texels[0] == texels[1] && texels[0] == texels[2] {
-        Some(texel_color(texture, texels[0]))
-    } else {
-        None
-    };
-
-    TriangleTexelSample {
-        texels: Some(texels),
-        uniform_color,
-    }
-}
-
 fn solid_triangle_color(
     v0: &egui::epaint::Vertex,
     v1: &egui::epaint::Vertex,
@@ -2481,57 +2454,9 @@ fn solid_triangle_color(
     }
 }
 
-fn nearest_texel(texture: &TextureImage, uv: egui::Pos2) -> (usize, usize) {
-    let x = f32_to_usize_round_clamped(
-        uv.x.clamp(0.0, 1.0) * usize_to_f32(texture.width.saturating_sub(1)),
-        texture.width.saturating_sub(1),
-    );
-    let y = f32_to_usize_round_clamped(
-        uv.y.clamp(0.0, 1.0) * usize_to_f32(texture.height.saturating_sub(1)),
-        texture.height.saturating_sub(1),
-    );
-    (x, y)
-}
-
-fn texel_color(texture: &TextureImage, texel: (usize, usize)) -> [u8; 4] {
-    let offset = (texel.1 * texture.width + texel.0) * 4;
-    [
-        texture.pixels[offset],
-        texture.pixels[offset + 1],
-        texture.pixels[offset + 2],
-        texture.pixels[offset + 3],
-    ]
-}
-
-fn sample_nearest(texture: &TextureImage, uv: egui::Pos2) -> [u8; 4] {
-    if texture.width == 0 || texture.height == 0 {
-        return [255, 255, 255, 255];
-    }
-    texel_color(texture, nearest_texel(texture, uv))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nearest_texture_sampling_clamps_to_edges() {
-        let texture = TextureImage {
-            width: 2,
-            height: 2,
-            pixels: vec![
-                1, 0, 0, 255, // top-left
-                2, 0, 0, 255, // top-right
-                3, 0, 0, 255, // bottom-left
-                4, 0, 0, 255, // bottom-right
-            ],
-        };
-
-        assert_eq!(sample_nearest(&texture, egui::pos2(-1.0, -1.0))[0], 1);
-        assert_eq!(sample_nearest(&texture, egui::pos2(2.0, -1.0))[0], 2);
-        assert_eq!(sample_nearest(&texture, egui::pos2(-1.0, 2.0))[0], 3);
-        assert_eq!(sample_nearest(&texture, egui::pos2(2.0, 2.0))[0], 4);
-    }
 
     #[test]
     fn triangle_rasterizer_draws_into_tiny_surface() {
