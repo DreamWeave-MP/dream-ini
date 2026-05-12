@@ -669,10 +669,101 @@ fn emit_white_constant_texel_run_no_stats(
     color_step: [f32; 4],
     start_dx: usize,
     len: usize,
-    mut pixel_offset: usize,
+    pixel_offset: usize,
 ) {
-    for run_dx in 0..len {
-        let dx = start_dx + run_dx;
+    if let Some(alpha) =
+        white_constant_texel_constant_run_alpha(row_color, color_step, start_dx, len)
+    {
+        emit_white_constant_texel_constant_alpha_run_no_stats(
+            surface,
+            row_color,
+            color_step,
+            WhiteConstantTexelRun {
+                start_dx,
+                len,
+                pixel_offset,
+            },
+            alpha,
+        );
+        return;
+    }
+
+    emit_white_constant_texel_variable_alpha_run_no_stats(
+        surface,
+        row_color,
+        color_step,
+        WhiteConstantTexelRun {
+            start_dx,
+            len,
+            pixel_offset,
+        },
+    );
+}
+
+#[derive(Clone, Copy)]
+struct WhiteConstantTexelRun {
+    start_dx: usize,
+    len: usize,
+    pixel_offset: usize,
+}
+
+fn white_constant_texel_constant_run_alpha(
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    start_dx: usize,
+    len: usize,
+) -> Option<u8> {
+    if len == 0 || !row_color[3].is_finite() || !color_step[3].is_finite() {
+        return None;
+    }
+
+    let last_dx = start_dx.checked_add(len - 1)?;
+    let first = white_constant_texel_pixel_alpha(row_color, color_step, start_dx);
+    let last = white_constant_texel_pixel_alpha(row_color, color_step, last_dx);
+    (first == last).then_some(first)
+}
+
+fn emit_white_constant_texel_constant_alpha_run_no_stats(
+    surface: &mut SoftwareSurface,
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    run: WhiteConstantTexelRun,
+    alpha: u8,
+) {
+    match alpha {
+        0 => {}
+        u8::MAX => {
+            let mut pixel_offset = run.pixel_offset;
+            for run_dx in 0..run.len {
+                let dx = run.start_dx + run_dx;
+                let color =
+                    white_constant_texel_pixel_color_with_alpha(row_color, color_step, dx, alpha);
+                surface.write_opaque_pixel_at_offset(pixel_offset, color);
+                pixel_offset += 4;
+            }
+        }
+        _ => {
+            let mut pixel_offset = run.pixel_offset;
+            for run_dx in 0..run.len {
+                let dx = run.start_dx + run_dx;
+                let color =
+                    white_constant_texel_pixel_color_with_alpha(row_color, color_step, dx, alpha);
+                surface.blend_translucent_pixel_at_offset(pixel_offset, color);
+                pixel_offset += 4;
+            }
+        }
+    }
+}
+
+fn emit_white_constant_texel_variable_alpha_run_no_stats(
+    surface: &mut SoftwareSurface,
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    run: WhiteConstantTexelRun,
+) {
+    let mut pixel_offset = run.pixel_offset;
+    for run_dx in 0..run.len {
+        let dx = run.start_dx + run_dx;
         let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
         match alpha {
             0 => {}
@@ -697,14 +788,48 @@ fn emit_white_constant_texel_run_with_stats(
     color_step: [f32; 4],
     start_dx: usize,
     len: usize,
-    mut pixel_offset: usize,
+    pixel_offset: usize,
     stats: &mut RasterStats,
 ) {
     stats.textured_triangle_covered_px += len;
     stats.constant_texel_textured_triangle_covered_px += len;
     stats.constant_texel_textured_triangle_white_texel_covered_px += len;
-    for run_dx in 0..len {
-        let dx = start_dx + run_dx;
+
+    let run = WhiteConstantTexelRun {
+        start_dx,
+        len,
+        pixel_offset,
+    };
+    if let Some(alpha) =
+        white_constant_texel_constant_run_alpha(row_color, color_step, start_dx, len)
+    {
+        stats.constant_texel_textured_triangle_white_constant_alpha_run_calls += 1;
+        stats.constant_texel_textured_triangle_white_constant_alpha_run_px += len;
+        stats.record_alpha_px(alpha, len);
+        stats.record_constant_texel_alpha_px(alpha, len);
+        emit_white_constant_texel_constant_alpha_run_no_stats(
+            surface, row_color, color_step, run, alpha,
+        );
+        return;
+    }
+
+    stats.constant_texel_textured_triangle_white_variable_alpha_run_calls += 1;
+    stats.constant_texel_textured_triangle_white_variable_alpha_run_px += len;
+    emit_white_constant_texel_variable_alpha_run_with_stats(
+        surface, row_color, color_step, run, stats,
+    );
+}
+
+fn emit_white_constant_texel_variable_alpha_run_with_stats(
+    surface: &mut SoftwareSurface,
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    run: WhiteConstantTexelRun,
+    stats: &mut RasterStats,
+) {
+    let mut pixel_offset = run.pixel_offset;
+    for run_dx in 0..run.len {
+        let dx = run.start_dx + run_dx;
         let alpha = white_constant_texel_pixel_alpha(row_color, color_step, dx);
         match alpha {
             0 => {
@@ -1149,6 +1274,9 @@ fn interpolate_constant_texel_vertex_color(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gui::portmaster::raster::math::{
+        f32_to_usize_ceil_clamped, f32_to_usize_floor_clamped,
+    };
 
     #[test]
     fn constant_alpha_only_runs_match_reference_for_translucent_alpha() {
@@ -1224,6 +1352,420 @@ mod tests {
         );
         assert_eq!(stats.textured_triangle_covered_px, len);
         assert_alpha_stats_match_run(&stats, row_alpha, alpha_step, alpha_offset, len);
+    }
+
+    #[test]
+    fn white_constant_texel_runs_match_reference_for_transparent_alpha() {
+        assert_white_constant_texel_run_matches_reference(
+            [20.0, 40.0, 60.0, -8.0],
+            [1.25, -0.5, 0.75, 0.0],
+            2,
+            8,
+            2,
+            4,
+            AlphaRunKind::Constant(0),
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_runs_match_reference_for_opaque_alpha() {
+        assert_white_constant_texel_run_matches_reference(
+            [20.0, 40.0, 60.0, 260.0],
+            [1.25, -0.5, 0.75, 0.0],
+            2,
+            8,
+            2,
+            4,
+            AlphaRunKind::Constant(u8::MAX),
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_runs_match_reference_for_translucent_alpha() {
+        assert_white_constant_texel_run_matches_reference(
+            [20.0, 40.0, 60.0, 117.4],
+            [1.25, -0.5, 0.75, 0.0],
+            2,
+            8,
+            2,
+            4,
+            AlphaRunKind::Constant(117),
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_variable_alpha_runs_match_reference_and_fallback() {
+        assert_white_constant_texel_run_matches_reference(
+            [12.0, 220.0, 40.0, 63.25],
+            [2.5, -3.0, 1.25, 7.5],
+            2,
+            11,
+            2,
+            3,
+            AlphaRunKind::Variable,
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_negative_alpha_step_fixed_rounding_matches_reference() {
+        assert_white_constant_texel_run_matches_reference(
+            [12.0, 220.0, 40.0, 128.49],
+            [2.5, -3.0, 1.25, -0.03],
+            4,
+            5,
+            2,
+            3,
+            AlphaRunKind::Constant(128),
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_nonzero_start_dx_matches_reference() {
+        assert_white_constant_texel_run_matches_reference(
+            [12.0, 220.0, 40.0, 73.2],
+            [2.5, -3.0, 1.25, 0.01],
+            7,
+            9,
+            2,
+            3,
+            AlphaRunKind::Constant(73),
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_len_one_matches_reference() {
+        assert_white_constant_texel_run_matches_reference(
+            [12.0, 220.0, 40.0, 41.2],
+            [2.5, -3.0, 1.25, 12.0],
+            6,
+            1,
+            2,
+            3,
+            AlphaRunKind::Constant(113),
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_threshold_and_clamp_edges_match_reference() {
+        assert_white_constant_texel_run_matches_reference(
+            [12.0, 220.0, 40.0, -3.0],
+            [2.5, -3.0, 1.25, 0.2],
+            0,
+            10,
+            2,
+            3,
+            AlphaRunKind::Constant(0),
+        );
+        assert_white_constant_texel_run_matches_reference(
+            [12.0, 220.0, 40.0, 255.6],
+            [2.5, -3.0, 1.25, 0.2],
+            0,
+            10,
+            3,
+            3,
+            AlphaRunKind::Constant(u8::MAX),
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_constant_alpha_detection_rejects_invalid_endpoints() {
+        assert_eq!(
+            white_constant_texel_constant_run_alpha([0.0; 4], [0.0; 4], 0, 0),
+            None
+        );
+        assert_eq!(
+            white_constant_texel_constant_run_alpha([0.0, 0.0, 0.0, f32::INFINITY], [0.0; 4], 0, 1,),
+            None
+        );
+        assert_eq!(
+            white_constant_texel_constant_run_alpha([0.0; 4], [0.0, 0.0, 0.0, f32::NAN], 0, 1,),
+            None
+        );
+        assert_eq!(
+            white_constant_texel_constant_run_alpha([0.0; 4], [0.0; 4], usize::MAX - 1, 3),
+            None
+        );
+    }
+
+    #[test]
+    fn varying_rgb_white_texel_triangles_match_sampled_reference_and_classify_alpha_runs() {
+        let texture = TextureImage {
+            width: 1,
+            height: 1,
+            pixels: vec![255, 255, 255, 255],
+        };
+        let mut optimized = test_surface(32, 24);
+        let mut reference = test_surface(32, 24);
+        let mut stats = RasterStats::default();
+
+        let constant_alpha_vertices = [
+            test_vertex(egui::pos2(2.0, 2.0), [40, 20, 10, 128]),
+            test_vertex(egui::pos2(22.0, 3.0), [220, 80, 30, 128]),
+            test_vertex(egui::pos2(5.0, 15.0), [80, 200, 160, 128]),
+        ];
+        rasterize_white_triangle_pair(
+            &mut optimized,
+            &mut reference,
+            &texture,
+            &constant_alpha_vertices,
+            Some(&mut stats),
+        );
+
+        let variable_alpha_vertices = [
+            test_vertex(egui::pos2(11.0, 7.0), [30, 210, 80, 16]),
+            test_vertex(egui::pos2(29.0, 8.0), [180, 40, 220, 248]),
+            test_vertex(egui::pos2(15.0, 22.0), [90, 160, 40, 96]),
+        ];
+        rasterize_white_triangle_pair(
+            &mut optimized,
+            &mut reference,
+            &texture,
+            &variable_alpha_vertices,
+            Some(&mut stats),
+        );
+
+        assert_eq!(optimized.pixels, reference.pixels);
+        assert!(stats.constant_texel_textured_triangle_white_constant_alpha_run_calls > 0);
+        assert!(stats.constant_texel_textured_triangle_white_constant_alpha_run_px > 0);
+        assert!(stats.constant_texel_textured_triangle_white_variable_alpha_run_calls > 0);
+        assert!(stats.constant_texel_textured_triangle_white_variable_alpha_run_px > 0);
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum AlphaRunKind {
+        Constant(u8),
+        Variable,
+    }
+
+    fn assert_white_constant_texel_run_matches_reference(
+        row_color: [f32; 4],
+        color_step: [f32; 4],
+        start_dx: usize,
+        len: usize,
+        y: usize,
+        x: usize,
+        expected_kind: AlphaRunKind,
+    ) {
+        let pixel_offset = test_surface(1, 1).row_offset(0);
+        let run = WhiteConstantTexelRun {
+            start_dx,
+            len,
+            pixel_offset: pixel_offset + (y * 20 + x) * 4,
+        };
+        let mut actual = test_surface(20, 7);
+        let mut actual_no_stats = test_surface(20, 7);
+        let mut reference = test_surface(20, 7);
+        let mut stats = RasterStats::default();
+        let mut scalar_stats = RasterStats::default();
+
+        emit_white_constant_texel_run_with_stats(
+            &mut actual,
+            row_color,
+            color_step,
+            start_dx,
+            len,
+            run.pixel_offset,
+            &mut stats,
+        );
+        emit_white_constant_texel_run_no_stats(
+            &mut actual_no_stats,
+            row_color,
+            color_step,
+            start_dx,
+            len,
+            run.pixel_offset,
+        );
+        emit_white_constant_texel_run_reference(
+            &mut reference,
+            row_color,
+            color_step,
+            run,
+            Some(&mut scalar_stats),
+        );
+
+        assert_eq!(actual.pixels, reference.pixels);
+        assert_eq!(actual_no_stats.pixels, reference.pixels);
+        assert_eq!(
+            white_constant_texel_constant_run_alpha(row_color, color_step, start_dx, len),
+            expected_kind.alpha()
+        );
+        assert_white_constant_texel_classification_stats(&stats, expected_kind, len);
+        assert_white_constant_texel_alpha_stats_match(&stats, &scalar_stats);
+    }
+
+    impl AlphaRunKind {
+        const fn alpha(self) -> Option<u8> {
+            match self {
+                Self::Constant(alpha) => Some(alpha),
+                Self::Variable => None,
+            }
+        }
+    }
+
+    fn assert_white_constant_texel_classification_stats(
+        stats: &RasterStats,
+        expected_kind: AlphaRunKind,
+        len: usize,
+    ) {
+        match expected_kind {
+            AlphaRunKind::Constant(_) => {
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_alpha_run_calls,
+                    1
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_alpha_run_px,
+                    len
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_alpha_run_calls,
+                    0
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_alpha_run_px,
+                    0
+                );
+            }
+            AlphaRunKind::Variable => {
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_alpha_run_calls,
+                    0
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_alpha_run_px,
+                    0
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_alpha_run_calls,
+                    1
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_alpha_run_px,
+                    len
+                );
+            }
+        }
+    }
+
+    fn assert_white_constant_texel_alpha_stats_match(
+        stats: &RasterStats,
+        scalar_stats: &RasterStats,
+    ) {
+        assert_eq!(
+            stats.textured_triangle_covered_px,
+            scalar_stats.textured_triangle_covered_px
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_covered_px,
+            scalar_stats.constant_texel_textured_triangle_covered_px,
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_white_texel_covered_px,
+            scalar_stats.constant_texel_textured_triangle_white_texel_covered_px,
+        );
+        assert_eq!(stats.opaque_px, scalar_stats.opaque_px);
+        assert_eq!(stats.translucent_px, scalar_stats.translucent_px);
+        assert_eq!(stats.transparent_px, scalar_stats.transparent_px);
+        assert_eq!(
+            stats.constant_texel_textured_triangle_opaque_px,
+            scalar_stats.constant_texel_textured_triangle_opaque_px,
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_translucent_px,
+            scalar_stats.constant_texel_textured_triangle_translucent_px,
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_transparent_px,
+            scalar_stats.constant_texel_textured_triangle_transparent_px,
+        );
+    }
+
+    fn emit_white_constant_texel_run_reference(
+        surface: &mut SoftwareSurface,
+        row_color: [f32; 4],
+        color_step: [f32; 4],
+        run: WhiteConstantTexelRun,
+        mut stats: Option<&mut RasterStats>,
+    ) {
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.textured_triangle_covered_px += run.len;
+            stats.constant_texel_textured_triangle_covered_px += run.len;
+            stats.constant_texel_textured_triangle_white_texel_covered_px += run.len;
+        }
+        let mut pixel_offset = run.pixel_offset;
+        for run_dx in 0..run.len {
+            let dx = run.start_dx + run_dx;
+            let color = white_constant_texel_pixel_color(row_color, color_step, dx);
+            if let Some(stats) = stats.as_deref_mut() {
+                stats.record_alpha_px(color[3], 1);
+                stats.record_constant_texel_alpha_px(color[3], 1);
+            }
+            match color[3] {
+                0 => {}
+                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+            }
+            pixel_offset += 4;
+        }
+    }
+
+    fn rasterize_white_triangle_pair(
+        optimized: &mut SoftwareSurface,
+        reference: &mut SoftwareSurface,
+        texture: &TextureImage,
+        vertices: &[egui::epaint::Vertex; 3],
+        stats: Option<&mut RasterStats>,
+    ) {
+        let [v0, v1, v2] = vertices;
+        let triangle = TriangleVertices { v0, v1, v2 };
+        let bounds = test_triangle_bounds(vertices);
+        let area = edge(v0.pos, v1.pos, v2.pos);
+        rasterize_constant_texel_textured_triangle(
+            optimized,
+            triangle,
+            bounds,
+            area,
+            [255, 255, 255, 255],
+            stats,
+        );
+        rasterize_textured_triangle(reference, triangle, texture, bounds, area, None);
+    }
+
+    fn test_triangle_bounds(vertices: &[egui::epaint::Vertex; 3]) -> TriangleRasterBounds {
+        let min_x = vertices
+            .iter()
+            .map(|vertex| f32_to_usize_floor_clamped(vertex.pos.x, usize::MAX))
+            .min()
+            .expect("triangle has vertices");
+        let min_y = vertices
+            .iter()
+            .map(|vertex| f32_to_usize_floor_clamped(vertex.pos.y, usize::MAX))
+            .min()
+            .expect("triangle has vertices");
+        let max_x = vertices
+            .iter()
+            .map(|vertex| f32_to_usize_ceil_clamped(vertex.pos.x, usize::MAX))
+            .max()
+            .expect("triangle has vertices");
+        let max_y = vertices
+            .iter()
+            .map(|vertex| f32_to_usize_ceil_clamped(vertex.pos.y, usize::MAX))
+            .max()
+            .expect("triangle has vertices");
+        TriangleRasterBounds {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }
+    }
+
+    fn test_vertex(pos: egui::Pos2, color: [u8; 4]) -> egui::epaint::Vertex {
+        egui::epaint::Vertex {
+            pos,
+            uv: egui::pos2(0.0, 0.0),
+            color: egui::Color32::from_rgba_premultiplied(color[0], color[1], color[2], color[3]),
+        }
     }
 
     fn assert_constant_alpha_only_run_matches_reference(

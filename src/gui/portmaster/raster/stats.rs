@@ -92,6 +92,14 @@ pub(in crate::gui::portmaster) struct RasterStats {
         usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px:
         usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_constant_alpha_run_calls:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_constant_alpha_run_px:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_variable_alpha_run_calls:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_variable_alpha_run_px:
+        usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_us: usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_texel_us: usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_non_white_texel_us: usize,
@@ -125,7 +133,7 @@ impl RasterStats {
 
     pub(in crate::gui::portmaster) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} textured_rect_constant_texel_calls={} textured_rect_constant_texel_px={} textured_rect_constant_texel_us={} textured_rect_sampled_calls={} textured_rect_sampled_px={} textured_rect_sampled_us={} textured_rect_white_texel_calls={} textured_rect_white_texel_px={} textured_rect_uniform_color_calls={} textured_rect_uniform_color_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} solid_fan_edge_intersections={} solid_fan_endpoint_probe_px={} solid_fan_fallback_rows={} solid_fan_edge_precompute_calls={} solid_fan_edge_precompute_edges={} solid_fan_edge_precompute_used_rows={} solid_fan_edge_precompute_fallback_budget={} solid_fan_edge_precompute_fallback_non_finite={} solid_fan_edge_precompute_old_solver_rows={} solid_fan_span_cache_hits={} solid_fan_span_cache_misses={} solid_fan_span_cache_hit_rows={} solid_fan_span_cache_hit_px={} solid_fan_span_cache_stored_rows={} solid_fan_span_cache_rejected_too_many_rows={} solid_fan_span_cache_resident_entries={} solid_fan_span_cache_resident_rows={} solid_fan_span_cache_total_evictions={} solid_fan_span_cache_row_budget_evictions={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_white_alpha_only_eligible_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={} sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} textured_rect_constant_texel_calls={} textured_rect_constant_texel_px={} textured_rect_constant_texel_us={} textured_rect_sampled_calls={} textured_rect_sampled_px={} textured_rect_sampled_us={} textured_rect_white_texel_calls={} textured_rect_white_texel_px={} textured_rect_uniform_color_calls={} textured_rect_uniform_color_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} solid_fan_edge_intersections={} solid_fan_endpoint_probe_px={} solid_fan_fallback_rows={} solid_fan_edge_precompute_calls={} solid_fan_edge_precompute_edges={} solid_fan_edge_precompute_used_rows={} solid_fan_edge_precompute_fallback_budget={} solid_fan_edge_precompute_fallback_non_finite={} solid_fan_edge_precompute_old_solver_rows={} solid_fan_span_cache_hits={} solid_fan_span_cache_misses={} solid_fan_span_cache_hit_rows={} solid_fan_span_cache_hit_px={} solid_fan_span_cache_stored_rows={} solid_fan_span_cache_rejected_too_many_rows={} solid_fan_span_cache_resident_entries={} solid_fan_span_cache_resident_rows={} solid_fan_span_cache_total_evictions={} solid_fan_span_cache_row_budget_evictions={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_white_alpha_only_eligible_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px={} constant_texel_textured_triangle_white_constant_alpha_run_calls={} constant_texel_textured_triangle_white_constant_alpha_run_px={} constant_texel_textured_triangle_white_variable_alpha_run_calls={} constant_texel_textured_triangle_white_variable_alpha_run_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={} sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -207,6 +215,10 @@ impl RasterStats {
             self.constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px,
             self.constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls,
             self.constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px,
+            self.constant_texel_textured_triangle_white_constant_alpha_run_calls,
+            self.constant_texel_textured_triangle_white_constant_alpha_run_px,
+            self.constant_texel_textured_triangle_white_variable_alpha_run_calls,
+            self.constant_texel_textured_triangle_white_variable_alpha_run_px,
             self.constant_texel_textured_triangle_us,
             self.constant_texel_textured_triangle_white_texel_us,
             self.constant_texel_textured_triangle_non_white_texel_us,
@@ -310,6 +322,10 @@ mod tests {
             constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px: 87,
             constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls: 88,
             constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px: 89,
+            constant_texel_textured_triangle_white_constant_alpha_run_calls: 94,
+            constant_texel_textured_triangle_white_constant_alpha_run_px: 95,
+            constant_texel_textured_triangle_white_variable_alpha_run_calls: 96,
+            constant_texel_textured_triangle_white_variable_alpha_run_px: 97,
             constant_texel_textured_triangle_us: 56,
             constant_texel_textured_triangle_white_texel_us: 68,
             constant_texel_textured_triangle_non_white_texel_us: 69,
@@ -339,6 +355,12 @@ mod tests {
              constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls=92 \
              constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls=93 \
              constant_texel_textured_triangle_candidate_px=54"
+        ));
+        assert!(line.contains(
+            "constant_texel_textured_triangle_white_constant_alpha_run_calls=94 \
+             constant_texel_textured_triangle_white_constant_alpha_run_px=95 \
+             constant_texel_textured_triangle_white_variable_alpha_run_calls=96 \
+             constant_texel_textured_triangle_white_variable_alpha_run_px=97"
         ));
     }
 }
