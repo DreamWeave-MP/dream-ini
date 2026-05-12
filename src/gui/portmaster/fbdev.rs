@@ -19,6 +19,7 @@ const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 pub(super) const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
+const FORCE_GENERIC_BLIT_ENV_VAR: &str = "DREAM_INI_PM_FORCE_GENERIC_BLIT";
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -245,13 +246,18 @@ impl Framebuffer {
             ));
         }
 
-        let blit_format = detect_fast_blit_format(&self.var)
-            .map_or(BlitFormat::GenericPackColor, BlitFormat::Fast32ByteAligned);
+        let blit_format = if force_generic_blit_enabled() {
+            BlitFormat::GenericPackColor
+        } else {
+            detect_fast_blit_format(&self.var).map_or(BlitFormat::GenericPackColor, |format| {
+                BlitFormat::Fast32(Fast32BlitMode::from_byte_aligned(format))
+            })
+        };
 
         // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
         let pixels =
             unsafe { std::slice::from_raw_parts_mut(self.memory.as_ptr(), self.memory_len.get()) };
-        if let BlitFormat::Fast32ByteAligned(format) = blit_format {
+        if let BlitFormat::Fast32(format) = blit_format {
             blit_fast32_rows(pixels, surface, viewport, format)?;
             return Ok(blit_format);
         }
@@ -726,15 +732,46 @@ fn viewport_row_offset(viewport: &VisibleViewport, y: usize) -> io::Result<usize
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlitFormat {
-    Fast32ByteAligned(Fast32ByteAlignedBlit),
+    Fast32(Fast32BlitMode),
     GenericPackColor,
 }
 
 impl BlitFormat {
     const fn name(self) -> &'static str {
         match self {
-            Self::Fast32ByteAligned(_) => "fast32-byte-aligned",
+            Self::Fast32(format) => format.name(),
             Self::GenericPackColor => "generic-pack-color",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fast32BlitMode {
+    BgrxZero,
+    BgraOpaque,
+    RgbxZero,
+    RgbaOpaque,
+    ByteAligned(Fast32ByteAlignedBlit),
+}
+
+impl Fast32BlitMode {
+    const fn from_byte_aligned(format: Fast32ByteAlignedBlit) -> Self {
+        match (format.red, format.green, format.blue, format.alpha) {
+            (2, 1, 0, None) => Self::BgrxZero,
+            (2, 1, 0, Some(3)) => Self::BgraOpaque,
+            (0, 1, 2, None) => Self::RgbxZero,
+            (0, 1, 2, Some(3)) => Self::RgbaOpaque,
+            _ => Self::ByteAligned(format),
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::BgrxZero => "fast32-bgrx-zero",
+            Self::BgraOpaque => "fast32-bgra-opaque",
+            Self::RgbxZero => "fast32-rgbx-zero",
+            Self::RgbaOpaque => "fast32-rgba-opaque",
+            Self::ByteAligned(_) => "fast32-byte-shuffle",
         }
     }
 }
@@ -754,6 +791,10 @@ pub(super) fn framebuffer_draw_enabled() -> bool {
             "0" | "false" | "False" | "FALSE" | "off" | "Off" | "OFF"
         )
     })
+}
+
+fn force_generic_blit_enabled() -> bool {
+    env::var(FORCE_GENERIC_BLIT_ENV_VAR).is_ok_and(|value| value == "1")
 }
 
 fn pack_color(var: &FbVarScreeninfo, (red, green, blue): (u8, u8, u8)) -> u32 {
@@ -844,7 +885,7 @@ fn blit_fast32_rows(
     pixels: &mut [u8],
     surface: &SoftwareSurface,
     viewport: &VisibleViewport,
-    format: Fast32ByteAlignedBlit,
+    format: Fast32BlitMode,
 ) -> io::Result<()> {
     if viewport.bytes_per_pixel != 4 {
         return Err(io::Error::other(
@@ -895,7 +936,55 @@ fn blit_fast32_rows(
     Ok(())
 }
 
-fn convert_rgba_row_to_fast32(
+fn convert_rgba_row_to_fast32(destination: &mut [u8], source: &[u8], format: Fast32BlitMode) {
+    match format {
+        Fast32BlitMode::BgrxZero => convert_rgba_row_to_bgrx_zero(destination, source),
+        Fast32BlitMode::BgraOpaque => convert_rgba_row_to_bgra_opaque(destination, source),
+        Fast32BlitMode::RgbxZero => convert_rgba_row_to_rgbx_zero(destination, source),
+        Fast32BlitMode::RgbaOpaque => convert_rgba_row_to_rgba_opaque(destination, source),
+        Fast32BlitMode::ByteAligned(format) => {
+            convert_rgba_row_to_byte_aligned(destination, source, format);
+        }
+    }
+}
+
+fn convert_rgba_row_to_bgrx_zero(destination: &mut [u8], source: &[u8]) {
+    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+        destination[0] = source[2];
+        destination[1] = source[1];
+        destination[2] = source[0];
+        destination[3] = 0;
+    }
+}
+
+fn convert_rgba_row_to_bgra_opaque(destination: &mut [u8], source: &[u8]) {
+    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+        destination[0] = source[2];
+        destination[1] = source[1];
+        destination[2] = source[0];
+        destination[3] = u8::MAX;
+    }
+}
+
+fn convert_rgba_row_to_rgbx_zero(destination: &mut [u8], source: &[u8]) {
+    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+        destination[0] = source[0];
+        destination[1] = source[1];
+        destination[2] = source[2];
+        destination[3] = 0;
+    }
+}
+
+fn convert_rgba_row_to_rgba_opaque(destination: &mut [u8], source: &[u8]) {
+    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+        destination[0] = source[0];
+        destination[1] = source[1];
+        destination[2] = source[2];
+        destination[3] = u8::MAX;
+    }
+}
+
+fn convert_rgba_row_to_byte_aligned(
     destination: &mut [u8],
     source: &[u8],
     format: Fast32ByteAlignedBlit,
@@ -1055,6 +1144,7 @@ mod tests {
     fn portmaster_fast_blit_matches_pack_color_for_common_rgb32_layout() {
         let var = rgb32_var_without_alpha();
         let format = detect_fast_blit_format(&var).expect("fast blit format");
+        let mode = Fast32BlitMode::from_byte_aligned(format);
         let color = (0x12, 0x34, 0x56);
         let mut fast_pixel = [0xff; 4];
         let mut generic_pixel = [0xff; 4];
@@ -1063,12 +1153,35 @@ mod tests {
         write_pixel(&mut generic_pixel, 4, pack_color(&var, color));
 
         assert_eq!(fast_pixel, generic_pixel);
+        assert_eq!(mode, Fast32BlitMode::BgrxZero);
+    }
+
+    #[test]
+    fn portmaster_fast32_specialized_converters_match_byte_shuffle_and_pack_color() {
+        assert_fast32_mode_matches_byte_shuffle_and_pack_color(
+            rgb32_var_without_alpha(),
+            Fast32BlitMode::BgrxZero,
+        );
+        assert_fast32_mode_matches_byte_shuffle_and_pack_color(
+            rgb32_var_with_alpha(),
+            Fast32BlitMode::BgraOpaque,
+        );
+        assert_fast32_mode_matches_byte_shuffle_and_pack_color(
+            reversed_rgb32_var_without_alpha(),
+            Fast32BlitMode::RgbxZero,
+        );
+        assert_fast32_mode_matches_byte_shuffle_and_pack_color(
+            reversed_rgb32_var_with_alpha(),
+            Fast32BlitMode::RgbaOpaque,
+        );
     }
 
     #[test]
     fn portmaster_fast32_row_blit_matches_generic_pack_color() {
         let var = rgb32_var_without_alpha();
-        let format = detect_fast_blit_format(&var).expect("fast blit format");
+        let format = Fast32BlitMode::from_byte_aligned(
+            detect_fast_blit_format(&var).expect("fast blit format"),
+        );
         let viewport = VisibleViewport {
             width: 3,
             height: 2,
@@ -1088,7 +1201,38 @@ mod tests {
     #[test]
     fn portmaster_fast32_row_blit_preserves_stride_padding() {
         let var = rgb32_var_without_alpha();
-        let format = detect_fast_blit_format(&var).expect("fast blit format");
+        let format = Fast32BlitMode::from_byte_aligned(
+            detect_fast_blit_format(&var).expect("fast blit format"),
+        );
+        let viewport = VisibleViewport {
+            xoffset: 1,
+            width: 3,
+            height: 2,
+            line_length: 20,
+            x_offset_bytes: 4,
+            base_offset: 4,
+            ..test_viewport(0)
+        };
+        let surface = test_surface(viewport.width, viewport.height);
+        let mut fast = vec![0xaa; viewport.line_length * viewport.height];
+        let mut generic = fast.clone();
+
+        blit_fast32_rows(&mut fast, &surface, &viewport, format).expect("fast row blit");
+        blit_generic_for_test(&mut generic, &surface, &viewport, &var).expect("generic blit");
+
+        assert_eq!(fast, generic);
+        assert_eq!(&fast[0..4], &[0xaa; 4]);
+        assert_eq!(&fast[16..20], &[0xaa; 4]);
+        assert_eq!(&fast[20..24], &[0xaa; 4]);
+        assert_eq!(&fast[36..40], &[0xaa; 4]);
+    }
+
+    #[test]
+    fn portmaster_fast32_alpha_row_blit_preserves_stride_padding() {
+        let var = rgb32_var_with_alpha();
+        let format = Fast32BlitMode::from_byte_aligned(
+            detect_fast_blit_format(&var).expect("fast blit format"),
+        );
         let viewport = VisibleViewport {
             xoffset: 1,
             width: 3,
@@ -1148,6 +1292,74 @@ mod tests {
             },
             transp: FbBitfield::default(),
             ..Default::default()
+        }
+    }
+
+    fn rgb32_var_with_alpha() -> FbVarScreeninfo {
+        FbVarScreeninfo {
+            transp: FbBitfield {
+                offset: 24,
+                length: 8,
+                ..Default::default()
+            },
+            ..rgb32_var_without_alpha()
+        }
+    }
+
+    fn reversed_rgb32_var_without_alpha() -> FbVarScreeninfo {
+        FbVarScreeninfo {
+            bits_per_pixel: 32,
+            red: FbBitfield {
+                offset: 0,
+                length: 8,
+                ..Default::default()
+            },
+            green: FbBitfield {
+                offset: 8,
+                length: 8,
+                ..Default::default()
+            },
+            blue: FbBitfield {
+                offset: 16,
+                length: 8,
+                ..Default::default()
+            },
+            transp: FbBitfield::default(),
+            ..Default::default()
+        }
+    }
+
+    fn reversed_rgb32_var_with_alpha() -> FbVarScreeninfo {
+        FbVarScreeninfo {
+            transp: FbBitfield {
+                offset: 24,
+                length: 8,
+                ..Default::default()
+            },
+            ..reversed_rgb32_var_without_alpha()
+        }
+    }
+
+    fn assert_fast32_mode_matches_byte_shuffle_and_pack_color(
+        var: FbVarScreeninfo,
+        expected_mode: Fast32BlitMode,
+    ) {
+        let byte_aligned = detect_fast_blit_format(&var).expect("fast blit format");
+        let mode = Fast32BlitMode::from_byte_aligned(byte_aligned);
+        let source = test_surface(3, 1).pixels;
+        let mut specialized = vec![0xee; source.len()];
+        let mut byte_shuffle = specialized.clone();
+
+        convert_rgba_row_to_fast32(&mut specialized, &source, mode);
+        convert_rgba_row_to_byte_aligned(&mut byte_shuffle, &source, byte_aligned);
+
+        assert_eq!(mode, expected_mode);
+        assert_eq!(specialized, byte_shuffle);
+        for (source, destination) in source.chunks_exact(4).zip(specialized.chunks_exact(4)) {
+            let color = (source[0], source[1], source[2]);
+            let mut packed = [0; 4];
+            write_pixel(&mut packed, 4, pack_color(&var, color));
+            assert_eq!(destination, packed);
         }
     }
 
