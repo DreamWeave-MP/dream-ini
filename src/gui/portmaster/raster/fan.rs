@@ -9,7 +9,8 @@ use super::{RasterStats, usize_to_f32};
 use crate::gui::portmaster::surface::SoftwareSurface;
 
 const SOLID_FAN_PRECOMPUTED_EDGE_BUDGET: usize = 256;
-const SOLID_FAN_SPAN_CACHE_ENTRIES: usize = 32;
+const SOLID_FAN_SPAN_CACHE_ENTRIES: usize = 128;
+const SOLID_FAN_SPAN_CACHE_RESIDENT_ROWS: usize = 4096;
 const SOLID_FAN_SPAN_CACHE_MAX_ROWS: usize = 512;
 
 pub(in crate::gui::portmaster) fn rasterize_solid_fan(
@@ -66,6 +67,7 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
             if let Some(stats) = stats {
                 stats.solid_fan_span_cache_hits += 1;
                 stats.solid_fan_span_cache_hit_rows += entry.spans.len();
+                cache.record_stats(stats);
             }
             replay_solid_fan_spans(surface, color, entry, stats);
             return;
@@ -85,11 +87,16 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
         cache_key_available,
     );
 
-    if let (Some(cache), Some(key), Some(spans)) = (cache, cache_key, cache_spans) {
-        if let Some(stats) = stats {
-            stats.solid_fan_span_cache_stored_rows += spans.len();
+    if let Some(cache) = cache {
+        if let (Some(key), Some(spans)) = (cache_key, cache_spans) {
+            if let Some(stats) = stats {
+                stats.solid_fan_span_cache_stored_rows += spans.len();
+            }
+            cache.insert(SolidFanSpanCacheEntry { key, bounds, spans });
         }
-        cache.insert(SolidFanSpanCacheEntry { key, bounds, spans });
+        if let Some(stats) = stats {
+            cache.record_stats(stats);
+        }
     }
 }
 
@@ -299,6 +306,9 @@ pub(in crate::gui::portmaster) struct SolidFanRasterParams<'a> {
 #[derive(Debug, Default)]
 pub(in crate::gui::portmaster) struct SolidFanSpanCache {
     entries: Vec<SolidFanSpanCacheEntry>,
+    resident_rows: usize,
+    total_evictions: usize,
+    row_budget_evictions: usize,
 }
 
 impl SolidFanSpanCache {
@@ -307,10 +317,26 @@ impl SolidFanSpanCache {
     }
 
     fn insert(&mut self, entry: SolidFanSpanCacheEntry) {
-        if self.entries.len() >= SOLID_FAN_SPAN_CACHE_ENTRIES {
-            self.entries.remove(0);
-        }
+        self.resident_rows = self.resident_rows.saturating_add(entry.resident_rows());
         self.entries.push(entry);
+        while self.entries.len() > SOLID_FAN_SPAN_CACHE_ENTRIES
+            || self.resident_rows > SOLID_FAN_SPAN_CACHE_RESIDENT_ROWS
+        {
+            let row_budget_eviction = self.resident_rows > SOLID_FAN_SPAN_CACHE_RESIDENT_ROWS;
+            let removed = self.entries.remove(0);
+            self.resident_rows = self.resident_rows.saturating_sub(removed.resident_rows());
+            self.total_evictions += 1;
+            if row_budget_eviction {
+                self.row_budget_evictions += 1;
+            }
+        }
+    }
+
+    fn record_stats(&self, stats: &mut RasterStats) {
+        stats.solid_fan_span_cache_resident_entries = self.entries.len();
+        stats.solid_fan_span_cache_resident_rows = self.resident_rows;
+        stats.solid_fan_span_cache_total_evictions = self.total_evictions;
+        stats.solid_fan_span_cache_row_budget_evictions = self.row_budget_evictions;
     }
 }
 
@@ -319,6 +345,12 @@ struct SolidFanSpanCacheEntry {
     key: SolidFanSpanCacheKey,
     bounds: TriangleRasterBounds,
     spans: Vec<Option<(usize, usize)>>,
+}
+
+impl SolidFanSpanCacheEntry {
+    fn resident_rows(&self) -> usize {
+        self.spans.len()
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -962,6 +994,91 @@ mod tests {
             solid_fan_span_cache_key(false, params, tall_bounds, &mut Some(&mut stats)).is_none()
         );
         assert_eq!(stats.solid_fan_span_cache_rejected_too_many_rows, 1);
+    }
+
+    #[test]
+    fn solid_fan_span_cache_evicts_oldest_entry_at_entry_limit() {
+        let mut cache = SolidFanSpanCache::default();
+
+        for index in 0..=SOLID_FAN_SPAN_CACHE_ENTRIES {
+            cache.insert(test_span_cache_entry(index, 1));
+        }
+
+        assert_eq!(cache.entries.len(), SOLID_FAN_SPAN_CACHE_ENTRIES);
+        assert_eq!(cache.resident_rows, SOLID_FAN_SPAN_CACHE_ENTRIES);
+        assert_eq!(cache.total_evictions, 1);
+        assert_eq!(cache.row_budget_evictions, 0);
+        assert!(cache.get(&test_span_cache_key(0)).is_none());
+        assert!(cache.get(&test_span_cache_key(1)).is_some());
+        assert!(
+            cache
+                .get(&test_span_cache_key(SOLID_FAN_SPAN_CACHE_ENTRIES))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn solid_fan_span_cache_evicts_oldest_entries_at_row_budget() {
+        let mut cache = SolidFanSpanCache::default();
+
+        for index in 0..9 {
+            cache.insert(test_span_cache_entry(index, SOLID_FAN_SPAN_CACHE_MAX_ROWS));
+        }
+
+        assert_eq!(cache.entries.len(), 8);
+        assert_eq!(cache.resident_rows, SOLID_FAN_SPAN_CACHE_RESIDENT_ROWS);
+        assert_eq!(cache.total_evictions, 1);
+        assert_eq!(cache.row_budget_evictions, 1);
+        assert!(cache.get(&test_span_cache_key(0)).is_none());
+        assert!(cache.get(&test_span_cache_key(1)).is_some());
+    }
+
+    #[test]
+    fn solid_fan_span_cache_does_not_retain_oversize_entry() {
+        let mut cache = SolidFanSpanCache::default();
+
+        cache.insert(test_span_cache_entry(
+            0,
+            SOLID_FAN_SPAN_CACHE_RESIDENT_ROWS + 1,
+        ));
+
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.resident_rows, 0);
+        assert_eq!(cache.total_evictions, 1);
+        assert_eq!(cache.row_budget_evictions, 1);
+        assert!(cache.get(&test_span_cache_key(0)).is_none());
+    }
+
+    fn test_span_cache_entry(index: usize, rows: usize) -> SolidFanSpanCacheEntry {
+        SolidFanSpanCacheEntry {
+            key: test_span_cache_key(index),
+            bounds: TriangleRasterBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: 1,
+                max_y: rows,
+            },
+            spans: vec![None; rows],
+        }
+    }
+
+    fn test_span_cache_key(index: usize) -> SolidFanSpanCacheKey {
+        SolidFanSpanCacheKey {
+            clip: ClipBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: 1,
+                max_y: 1,
+            },
+            bounds: TriangleRasterBounds {
+                min_x: 0,
+                min_y: 0,
+                max_x: 1,
+                max_y: 1,
+            },
+            triangle_count: 1,
+            positions: vec![(u32::try_from(index).expect("test index fits u32"), 0)],
+        }
     }
 
     fn test_vertex(x: f32, y: f32) -> egui::epaint::Vertex {
