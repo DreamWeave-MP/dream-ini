@@ -717,19 +717,31 @@ fn rasterize_separable_uv_textured_rect_no_stats_with_color(
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
-        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        for x in range.start_x..range.end_x {
-            let texel =
-                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
-            let color = pixel_color(texel);
-            match color[3] {
-                0 => {}
-                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
-                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
-            }
-            pixel_offset += 4;
+        let row_runs =
+            SeparableUvTexturedRectRow::new(surface, texture, range, row, texture_row_offset, y);
+        emit_separable_uv_textured_rect_row_runs_no_stats(surface, row_runs, &pixel_color);
+    }
+}
+
+fn emit_separable_uv_textured_rect_row_runs_no_stats(
+    surface: &mut SoftwareSurface,
+    row: SeparableUvTexturedRectRow<'_>,
+    pixel_color: &impl Fn([u8; 4]) -> [u8; 4],
+) {
+    let Some(mut run) = row.first_run(pixel_color) else {
+        return;
+    };
+
+    for x in row.range.start_x + 1..row.range.end_x {
+        let color = row.pixel_color(x, pixel_color);
+        if color == run.color {
+            run.len += 1;
+        } else {
+            emit_separable_uv_textured_rect_run_no_stats(surface, run);
+            run = run.next(color);
         }
     }
+    emit_separable_uv_textured_rect_run_no_stats(surface, run);
 }
 
 fn rasterize_separable_uv_textured_rect_with_stats(
@@ -776,20 +788,115 @@ fn rasterize_separable_uv_textured_rect_with_stats_and_color(
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
-        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        for x in range.start_x..range.end_x {
-            let texel =
-                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
-            let color = pixel_color(texel);
-            stats.record_alpha_px(color[3], 1);
-            match color[3] {
-                0 => {}
-                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
-                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
-            }
-            pixel_offset += 4;
+        let row_runs =
+            SeparableUvTexturedRectRow::new(surface, texture, range, row, texture_row_offset, y);
+        emit_separable_uv_textured_rect_row_runs_with_stats(surface, row_runs, stats, &pixel_color);
+    }
+}
+
+fn emit_separable_uv_textured_rect_row_runs_with_stats(
+    surface: &mut SoftwareSurface,
+    row: SeparableUvTexturedRectRow<'_>,
+    stats: &mut RasterStats,
+    pixel_color: &impl Fn([u8; 4]) -> [u8; 4],
+) {
+    let Some(mut run) = row.first_run(pixel_color) else {
+        return;
+    };
+
+    for x in row.range.start_x + 1..row.range.end_x {
+        let color = row.pixel_color(x, pixel_color);
+        if color == run.color {
+            run.len += 1;
+        } else {
+            emit_separable_uv_textured_rect_run_with_stats(surface, run, stats);
+            run = run.next(color);
         }
     }
+    emit_separable_uv_textured_rect_run_with_stats(surface, run, stats);
+}
+
+#[derive(Clone, Copy)]
+struct SeparableUvTexturedRectRow<'a> {
+    texture: &'a TextureImage,
+    range: RectRasterRange,
+    row: RectUvRow,
+    texture_row_offset: usize,
+    pixel_offset: usize,
+}
+
+impl<'a> SeparableUvTexturedRectRow<'a> {
+    fn new(
+        surface: &SoftwareSurface,
+        texture: &'a TextureImage,
+        range: RectRasterRange,
+        row: RectUvRow,
+        texture_row_offset: usize,
+        y: usize,
+    ) -> Self {
+        Self {
+            texture,
+            range,
+            row,
+            texture_row_offset,
+            pixel_offset: surface.row_offset(y) + range.start_x * 4,
+        }
+    }
+
+    fn first_run(
+        self,
+        pixel_color: &impl Fn([u8; 4]) -> [u8; 4],
+    ) -> Option<SeparableUvTexturedRectRun> {
+        (self.range.start_x < self.range.end_x).then(|| SeparableUvTexturedRectRun {
+            color: self.pixel_color(self.range.start_x, pixel_color),
+            len: 1,
+            pixel_offset: self.pixel_offset,
+        })
+    }
+
+    fn pixel_color(self, x: usize, pixel_color: &impl Fn([u8; 4]) -> [u8; 4]) -> [u8; 4] {
+        let texel = separable_uv_texel_color(
+            self.texture,
+            self.texture_row_offset,
+            self.row,
+            x,
+            self.range.start_x,
+        );
+        pixel_color(texel)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SeparableUvTexturedRectRun {
+    color: [u8; 4],
+    len: usize,
+    pixel_offset: usize,
+}
+
+impl SeparableUvTexturedRectRun {
+    fn next(self, color: [u8; 4]) -> Self {
+        Self {
+            color,
+            len: 1,
+            pixel_offset: self.pixel_offset + self.len * 4,
+        }
+    }
+}
+
+fn emit_separable_uv_textured_rect_run_no_stats(
+    surface: &mut SoftwareSurface,
+    run: SeparableUvTexturedRectRun,
+) {
+    surface.blend_constant_color_span_at_offset(run.pixel_offset, run.len, run.color);
+}
+
+fn emit_separable_uv_textured_rect_run_with_stats(
+    surface: &mut SoftwareSurface,
+    run: SeparableUvTexturedRectRun,
+    stats: &mut RasterStats,
+) {
+    stats.record_alpha_px(run.color[3], run.len);
+    emit_separable_uv_textured_rect_run_no_stats(surface, run);
 }
 
 fn separable_uv_texture_row_offset(texture: &TextureImage, v: f32) -> usize {
