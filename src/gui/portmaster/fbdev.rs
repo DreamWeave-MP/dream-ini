@@ -180,8 +180,10 @@ impl Framebuffer {
         frame: &mut GuiFrame<'_, S>,
     ) -> io::Result<FramebufferDrawOutcome> {
         let log_frame = frame.log_frame;
-        let total_start = log_frame.then(Instant::now);
-        let stage_start = log_frame.then(Instant::now);
+        let log_hitches = frame.hitch_log_threshold.is_some();
+        let log_timings = log_frame || log_hitches;
+        let total_start = log_timings.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         self.var = get_var_info(&self.file).map_err(|error| {
             write_log(
                 frame.log,
@@ -191,7 +193,7 @@ impl Framebuffer {
         })?;
         let var_refresh_elapsed = elapsed_micros(stage_start);
 
-        let stage_start = log_frame.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         self.validate_format()?;
         let viewport = visible_viewport(&self.fix, &self.var)?;
         let validate_viewport_elapsed = elapsed_micros(stage_start);
@@ -200,15 +202,16 @@ impl Framebuffer {
             log_derived_page_info(frame.log, &self.var);
         }
 
-        let stage_start = log_frame.then(Instant::now);
-        let repaint_delay = renderer.render(viewport.width, viewport.height, frame)?;
+        let stage_start = log_timings.then(Instant::now);
+        let render_outcome = renderer.render(viewport.width, viewport.height, frame)?;
+        let repaint_delay = render_outcome.repaint_delay;
         let render_elapsed = elapsed_micros(stage_start);
 
-        let stage_start = log_frame.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         self.capture_snapshot_if_needed(frame.snapshots, &viewport, frame.log)?;
         let snapshot_elapsed = elapsed_micros(stage_start);
 
-        let stage_start = log_frame.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         let blit_format = self.blit_rgba_surface(renderer.surface(), &viewport)?;
         let blit_elapsed = elapsed_micros(stage_start);
         let total_elapsed = elapsed_micros(total_start);
@@ -231,6 +234,25 @@ impl Framebuffer {
                     "framebuffer draw timings frame={} blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}",
                     frame.frame_index,
                 ),
+            );
+        }
+        if let Some(threshold) = frame.hitch_log_threshold
+            && should_log_hitch(total_elapsed, threshold)
+        {
+            log_hitch(
+                frame,
+                &HitchLogTimingFields {
+                    threshold,
+                    total_elapsed,
+                    render_elapsed,
+                    blit_elapsed,
+                    snapshot_elapsed,
+                    var_refresh_elapsed,
+                    validate_viewport_elapsed,
+                    renderer_timings: render_outcome.timings,
+                    primitive_count: render_outcome.primitive_count,
+                    repaint_delay,
+                },
             );
         }
         Ok(FramebufferDrawOutcome { repaint_delay })
@@ -1025,9 +1047,68 @@ fn elapsed_micros(start: Option<Instant>) -> u128 {
     start.map_or(0, |start| start.elapsed().as_micros())
 }
 
+fn should_log_hitch(total_elapsed_us: u128, threshold: Duration) -> bool {
+    total_elapsed_us > threshold.as_micros()
+}
+
+struct HitchLogTimingFields {
+    threshold: Duration,
+    total_elapsed: u128,
+    render_elapsed: u128,
+    blit_elapsed: u128,
+    snapshot_elapsed: u128,
+    var_refresh_elapsed: u128,
+    validate_viewport_elapsed: u128,
+    renderer_timings: Option<super::renderer::RenderTimings>,
+    primitive_count: usize,
+    repaint_delay: Duration,
+}
+
+fn log_hitch<S: GuiShell>(frame: &GuiFrame<'_, S>, timings: &HitchLogTimingFields) {
+    let repaint_delay = format_repaint_delay(timings.repaint_delay);
+    let renderer_fields = timings.renderer_timings.map_or_else(String::new, |timings| {
+        format!(
+            " resize_clear_us={} egui_run_us={} texture_apply_us={} tessellate_us={} rasterize_us={} texture_free_us={} renderer_total_us={}",
+            timings.resize_clear,
+            timings.egui_run,
+            timings.texture_apply,
+            timings.tessellate,
+            timings.rasterize,
+            timings.texture_free,
+            timings.total,
+        )
+    });
+    write_log(
+        frame.log,
+        format!(
+            "portmaster hitch frame={} threshold_ms={} total_us={} render_us={} blit_us={} snapshot_us={} var_refresh_us={} validate_viewport_us={}{} primitives={} repaint_delay={}",
+            frame.frame_index,
+            timings.threshold.as_millis(),
+            timings.total_elapsed,
+            timings.render_elapsed,
+            timings.blit_elapsed,
+            timings.snapshot_elapsed,
+            timings.var_refresh_elapsed,
+            timings.validate_viewport_elapsed,
+            renderer_fields,
+            timings.primitive_count,
+            repaint_delay,
+        ),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hitch_logging_requires_exceeding_threshold() {
+        let threshold = Duration::from_millis(16);
+
+        assert!(!should_log_hitch(15_999, threshold));
+        assert!(!should_log_hitch(16_000, threshold));
+        assert!(should_log_hitch(16_001, threshold));
+    }
 
     #[test]
     fn visible_viewport_uses_panned_page_base_offset() {

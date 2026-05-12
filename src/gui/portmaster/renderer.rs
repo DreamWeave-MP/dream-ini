@@ -49,15 +49,15 @@ impl SoftwareRenderer {
         width: usize,
         height: usize,
         frame: &mut GuiFrame<'_, S>,
-    ) -> io::Result<Duration> {
-        let log_frame = frame.log_frame;
-        let total_start = log_frame.then(Instant::now);
-        let stage_start = log_frame.then(Instant::now);
+    ) -> io::Result<RenderOutcome> {
+        let log_timings = frame.log_frame || frame.hitch_log_threshold.is_some();
+        let total_start = log_timings.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         self.surface.resize(width, height)?;
         self.surface.clear([17, 20, 28, 255]);
         let resize_clear_elapsed = elapsed_micros(stage_start);
 
-        let stage_start = log_frame.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -72,23 +72,24 @@ impl SoftwareRenderer {
         let repaint_delay = root_repaint_delay(&output);
         let egui_run_elapsed = elapsed_micros(stage_start);
 
-        let stage_start = log_frame.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         let texture_delta_stats = self.textures.apply(&output.textures_delta)?;
         let texture_apply_elapsed = elapsed_micros(stage_start);
 
-        let stage_start = log_frame.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         let primitives = frame.context.tessellate(output.shapes, 1.0);
+        let primitive_count = primitives.len();
         let tessellate_elapsed = elapsed_micros(stage_start);
         log_surface_stats(
             frame,
             &self.surface,
             &self.textures,
             &texture_delta_stats,
-            primitives.len(),
+            primitive_count,
         );
 
-        let stage_start = log_frame.then(Instant::now);
-        let collect_stats = should_collect_deep_stats(log_frame, frame.log_render_stats);
+        let stage_start = log_timings.then(Instant::now);
+        let collect_stats = should_collect_deep_stats(frame.log_render_stats);
         let mut primitive_stats = collect_stats.then(PrimitiveStats::default);
         let mut raster_stats = collect_stats.then(RasterStats::default);
         let mut raster_timings = collect_stats.then(RasterTimings::default);
@@ -108,26 +109,27 @@ impl SoftwareRenderer {
         );
         rasterize_result?;
 
-        let stage_start = log_frame.then(Instant::now);
+        let stage_start = log_timings.then(Instant::now);
         for id in output.textures_delta.free {
             self.textures.free(id);
         }
         let texture_free_elapsed = elapsed_micros(stage_start);
         let total_elapsed = elapsed_micros(total_start);
-        log_render_timings(
-            frame,
-            RenderTimings {
-                resize_clear: resize_clear_elapsed,
-                egui_run: egui_run_elapsed,
-                texture_apply: texture_apply_elapsed,
-                tessellate: tessellate_elapsed,
-                rasterize: rasterize_elapsed,
-                texture_free: texture_free_elapsed,
-                total: total_elapsed,
-            },
+        let timings = log_timings.then_some(RenderTimings {
+            resize_clear: resize_clear_elapsed,
+            egui_run: egui_run_elapsed,
+            texture_apply: texture_apply_elapsed,
+            tessellate: tessellate_elapsed,
+            rasterize: rasterize_elapsed,
+            texture_free: texture_free_elapsed,
+            total: total_elapsed,
+        });
+        log_render_timings(frame, timings, repaint_delay);
+        Ok(RenderOutcome {
             repaint_delay,
-        );
-        Ok(repaint_delay)
+            timings,
+            primitive_count,
+        })
     }
 
     pub(super) const fn surface(&self) -> &SoftwareSurface {
@@ -256,14 +258,21 @@ struct MeshRasterContext<'a> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct RenderTimings {
-    resize_clear: u128,
-    egui_run: u128,
-    texture_apply: u128,
-    tessellate: u128,
-    rasterize: u128,
-    texture_free: u128,
-    total: u128,
+pub(super) struct RenderOutcome {
+    pub(super) repaint_delay: Duration,
+    pub(super) timings: Option<RenderTimings>,
+    pub(super) primitive_count: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RenderTimings {
+    pub(super) resize_clear: u128,
+    pub(super) egui_run: u128,
+    pub(super) texture_apply: u128,
+    pub(super) tessellate: u128,
+    pub(super) rasterize: u128,
+    pub(super) texture_free: u128,
+    pub(super) total: u128,
 }
 
 fn log_surface_stats<S: GuiShell>(
@@ -347,12 +356,15 @@ fn log_raster_stats<S: GuiShell>(
 
 fn log_render_timings<S: GuiShell>(
     frame: &GuiFrame<'_, S>,
-    timings: RenderTimings,
+    timings: Option<RenderTimings>,
     repaint_delay: Duration,
 ) {
     if !frame.log_frame {
         return;
     }
+    let Some(timings) = timings else {
+        return;
+    };
     let repaint_delay = format_repaint_delay(repaint_delay);
     write_log(
         frame.log,
@@ -659,7 +671,7 @@ fn elapsed_micros(start: Option<Instant>) -> u128 {
     start.map_or(0, |start| start.elapsed().as_micros())
 }
 
-const fn should_collect_deep_stats(_log_frame: bool, log_render_stats: bool) -> bool {
+const fn should_collect_deep_stats(log_render_stats: bool) -> bool {
     log_render_stats
 }
 
@@ -673,10 +685,8 @@ mod tests {
 
     #[test]
     fn coarse_frame_logging_does_not_enable_deep_stats_collection() {
-        assert!(!should_collect_deep_stats(false, false));
-        assert!(!should_collect_deep_stats(true, false));
-        assert!(should_collect_deep_stats(false, true));
-        assert!(should_collect_deep_stats(true, true));
+        assert!(!should_collect_deep_stats(false));
+        assert!(should_collect_deep_stats(true));
     }
 
     #[test]

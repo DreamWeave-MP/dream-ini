@@ -49,6 +49,8 @@ const RENDER_STATS_ENV_VAR: &str = "DREAM_INI_PM_RENDER_STATS";
 #[cfg(target_os = "linux")]
 const RENDER_STATS_EVERY_ENV_VAR: &str = "DREAM_INI_PM_RENDER_STATS_EVERY";
 #[cfg(target_os = "linux")]
+const HITCH_LOG_ENV_VAR: &str = "DREAM_INI_PM_HITCH_LOG_MS";
+#[cfg(target_os = "linux")]
 const RENDER_TRACE_ENV_VAR: &str = "DREAM_INI_PM_RENDER_TRACE";
 #[cfg(target_os = "linux")]
 const DEFAULT_RENDER_STATS_EVERY: u64 = 30;
@@ -303,6 +305,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
             log: self.log,
             log_frame,
             log_render_stats: should_log_render_stats(frame_count, self.render_log_config),
+            hitch_log_threshold: self.render_log_config.hitch_log_threshold,
             frame_index: frame_count,
             repaint_request_due_before_frame: requested_repaint_now,
         };
@@ -377,6 +380,7 @@ struct RenderLogConfig {
     stats_enabled: bool,
     trace_enabled: bool,
     stats_every: u64,
+    hitch_log_threshold: Option<Duration>,
 }
 
 #[cfg(target_os = "linux")]
@@ -385,21 +389,29 @@ impl RenderLogConfig {
         Self::from_values(
             env::var(RENDER_STATS_ENV_VAR).ok().as_deref(),
             env::var(RENDER_STATS_EVERY_ENV_VAR).ok().as_deref(),
+            env::var(HITCH_LOG_ENV_VAR).ok().as_deref(),
             env::var(RENDER_TRACE_ENV_VAR).ok().as_deref(),
         )
     }
 
-    fn from_values(stats: Option<&str>, stats_every: Option<&str>, trace: Option<&str>) -> Self {
+    fn from_values(
+        stats: Option<&str>,
+        stats_every: Option<&str>,
+        hitch_log_ms: Option<&str>,
+        trace: Option<&str>,
+    ) -> Self {
         let stats_enabled = env_flag_enabled(stats);
         let trace_enabled = env_flag_enabled(trace);
         let stats_every = stats_every
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value != 0)
             .unwrap_or(DEFAULT_RENDER_STATS_EVERY);
+        let hitch_log_threshold = parse_hitch_log_threshold(hitch_log_ms);
         Self {
             stats_enabled,
             trace_enabled,
             stats_every,
+            hitch_log_threshold,
         }
     }
 
@@ -407,14 +419,18 @@ impl RenderLogConfig {
         write_log(
             log,
             format!(
-                "portmaster render logging stats_enabled={} trace_enabled={} stats_every={} env_{}={:?} env_{}={:?} env_{}={:?}",
+                "portmaster render logging stats_enabled={} trace_enabled={} stats_every={} hitch_log_threshold_ms={} env_{}={:?} env_{}={:?} env_{}={:?} env_{}={:?}",
                 self.stats_enabled,
                 self.trace_enabled,
                 self.stats_every,
+                self.hitch_log_threshold
+                    .map_or(0, |threshold| threshold.as_millis()),
                 RENDER_STATS_ENV_VAR,
                 env::var_os(RENDER_STATS_ENV_VAR),
                 RENDER_STATS_EVERY_ENV_VAR,
                 env::var_os(RENDER_STATS_EVERY_ENV_VAR),
+                HITCH_LOG_ENV_VAR,
+                env::var_os(HITCH_LOG_ENV_VAR),
                 RENDER_TRACE_ENV_VAR,
                 env::var_os(RENDER_TRACE_ENV_VAR),
             ),
@@ -428,6 +444,14 @@ fn env_flag_enabled(value: Option<&str>) -> bool {
         value,
         Some("1" | "true" | "True" | "TRUE" | "yes" | "Yes" | "YES" | "on" | "On" | "ON")
     )
+}
+
+#[cfg(target_os = "linux")]
+fn parse_hitch_log_threshold(value: Option<&str>) -> Option<Duration> {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+        .map(Duration::from_millis)
 }
 
 #[cfg(target_os = "linux")]
@@ -505,6 +529,7 @@ struct GuiFrame<'a, S: GuiShell> {
     log: Option<&'a SharedLog>,
     log_frame: bool,
     log_render_stats: bool,
+    hitch_log_threshold: Option<Duration>,
     frame_index: u64,
     repaint_request_due_before_frame: bool,
 }
@@ -550,17 +575,18 @@ mod tests {
 
     #[test]
     fn render_log_config_defaults_to_disabled_with_default_interval() {
-        let config = RenderLogConfig::from_values(None, None, None);
+        let config = RenderLogConfig::from_values(None, None, None, None);
 
         assert!(!config.stats_enabled);
         assert!(!config.trace_enabled);
         assert_eq!(config.stats_every, DEFAULT_RENDER_STATS_EVERY);
+        assert_eq!(config.hitch_log_threshold, None);
         assert!(!should_log_render_stats(0, config));
     }
 
     #[test]
     fn render_stats_logging_samples_configured_interval() {
-        let config = RenderLogConfig::from_values(Some("1"), Some("5"), None);
+        let config = RenderLogConfig::from_values(Some("1"), Some("5"), None, None);
 
         assert!(should_log_render_stats(0, config));
         assert!(!should_log_render_stats(1, config));
@@ -570,7 +596,7 @@ mod tests {
 
     #[test]
     fn render_trace_logging_reports_every_frame() {
-        let config = RenderLogConfig::from_values(None, Some("0"), Some("1"));
+        let config = RenderLogConfig::from_values(None, Some("0"), None, Some("1"));
 
         assert_eq!(config.stats_every, DEFAULT_RENDER_STATS_EVERY);
         assert!(should_log_render_stats(0, config));
@@ -584,5 +610,22 @@ mod tests {
         assert!(!should_log_frame(1));
         assert!(!should_log_frame(29));
         assert!(should_log_frame(30));
+    }
+
+    #[test]
+    fn hitch_log_threshold_is_disabled_by_default_or_zero() {
+        assert_eq!(parse_hitch_log_threshold(None), None);
+        assert_eq!(parse_hitch_log_threshold(Some("0")), None);
+        assert_eq!(parse_hitch_log_threshold(Some("nope")), None);
+
+        let config = RenderLogConfig::from_values(None, None, Some("0"), None);
+        assert_eq!(config.hitch_log_threshold, None);
+    }
+
+    #[test]
+    fn hitch_log_threshold_uses_positive_milliseconds() {
+        let config = RenderLogConfig::from_values(None, None, Some("17"), None);
+
+        assert_eq!(config.hitch_log_threshold, Some(Duration::from_millis(17)));
     }
 }
