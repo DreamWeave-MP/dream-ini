@@ -166,6 +166,9 @@ impl SoftwareRenderer {
                 }
             }
         }
+        if let Some(stats) = raster_stats {
+            self.solid_fan_span_cache.record_stats(stats);
+        }
         Ok(())
     }
 
@@ -795,6 +798,50 @@ mod tests {
                 .solid_fan_offenders_log_line()
                 .expect("solid fan offenders")
                 .contains("offender0_triangles=4 offender0_polygon_vertices=6 offender0_alpha=128")
+        );
+    }
+
+    #[test]
+    fn renderer_reports_resident_solid_fan_cache_without_fan_call_in_frame() {
+        let texture_id = egui::TextureId::Managed(1);
+        let mut renderer = SoftwareRenderer::default();
+        renderer.surface.resize(12, 12).expect("surface");
+        renderer.surface.clear([0, 0, 0, 255]);
+        renderer
+            .textures
+            .apply(&texture_delta(texture_id))
+            .expect("texture");
+        let clip_rect = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(12.0, 12.0));
+
+        let mut first_frame_stats = RasterStats::default();
+        let first_frame = egui::ClippedPrimitive {
+            clip_rect,
+            primitive: egui::epaint::Primitive::Mesh(solid_fan_mesh(texture_id, [128, 32, 0, 128])),
+        };
+        renderer
+            .rasterize(&[first_frame], None, Some(&mut first_frame_stats), None)
+            .expect("rasterize first frame");
+        assert_eq!(first_frame_stats.solid_fan_span_cache_misses, 1);
+        assert_eq!(first_frame_stats.solid_fan_span_cache_resident_entries, 1);
+        assert!(first_frame_stats.solid_fan_span_cache_resident_rows > 0);
+
+        let mut second_frame_stats = RasterStats::default();
+        let second_frame = egui::ClippedPrimitive {
+            clip_rect,
+            primitive: egui::epaint::Primitive::Mesh(textured_quad_mesh(texture_id)),
+        };
+        renderer
+            .rasterize(&[second_frame], None, Some(&mut second_frame_stats), None)
+            .expect("rasterize second frame");
+
+        assert_eq!(second_frame_stats.solid_fan_calls, 0);
+        assert_eq!(second_frame_stats.solid_fan_span_cache_hits, 0);
+        assert_eq!(second_frame_stats.solid_fan_span_cache_misses, 0);
+        assert_eq!(second_frame_stats.solid_fan_span_cache_stored_rows, 0);
+        assert_eq!(second_frame_stats.solid_fan_span_cache_resident_entries, 1);
+        assert_eq!(
+            second_frame_stats.solid_fan_span_cache_resident_rows,
+            first_frame_stats.solid_fan_span_cache_resident_rows
         );
     }
 

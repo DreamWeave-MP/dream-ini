@@ -67,7 +67,6 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
             if let Some(stats) = stats {
                 stats.solid_fan_span_cache_hits += 1;
                 stats.solid_fan_span_cache_hit_rows += entry.spans.len();
-                cache.record_stats(stats);
             }
             replay_solid_fan_spans(surface, color, entry, stats);
             return;
@@ -87,16 +86,11 @@ pub(in crate::gui::portmaster) fn rasterize_solid_fan_with_cache(
         cache_key_available,
     );
 
-    if let Some(cache) = cache {
-        if let (Some(key), Some(spans)) = (cache_key, cache_spans) {
-            if let Some(stats) = stats {
-                stats.solid_fan_span_cache_stored_rows += spans.len();
-            }
-            cache.insert(SolidFanSpanCacheEntry { key, bounds, spans });
-        }
+    if let (Some(cache), Some(key), Some(spans)) = (cache, cache_key, cache_spans) {
         if let Some(stats) = stats {
-            cache.record_stats(stats);
+            stats.solid_fan_span_cache_stored_rows += spans.len();
         }
+        cache.insert(SolidFanSpanCacheEntry { key, bounds, spans });
     }
 }
 
@@ -332,7 +326,7 @@ impl SolidFanSpanCache {
         }
     }
 
-    fn record_stats(&self, stats: &mut RasterStats) {
+    pub(in crate::gui::portmaster) fn record_stats(&self, stats: &mut RasterStats) {
         stats.solid_fan_span_cache_resident_entries = self.entries.len();
         stats.solid_fan_span_cache_resident_rows = self.resident_rows;
         stats.solid_fan_span_cache_total_evictions = self.total_evictions;
