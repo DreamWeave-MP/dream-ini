@@ -766,23 +766,7 @@ fn emit_white_constant_texel_constant_color_run_no_stats(
     run: WhiteConstantTexelRun,
     color: [u8; 4],
 ) {
-    match color[3] {
-        0 => {}
-        u8::MAX => {
-            let mut pixel_offset = run.pixel_offset;
-            for _ in 0..run.len {
-                surface.write_opaque_pixel_at_offset(pixel_offset, color);
-                pixel_offset += 4;
-            }
-        }
-        _ => {
-            let mut pixel_offset = run.pixel_offset;
-            for _ in 0..run.len {
-                surface.blend_translucent_pixel_at_offset(pixel_offset, color);
-                pixel_offset += 4;
-            }
-        }
-    }
+    surface.blend_constant_color_span_at_offset(run.pixel_offset, run.len, color);
 }
 
 fn emit_white_constant_texel_variable_color_constant_alpha_run_no_stats(

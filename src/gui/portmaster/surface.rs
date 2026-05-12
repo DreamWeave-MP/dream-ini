@@ -59,6 +59,38 @@ impl SoftwareSurface {
         );
     }
 
+    pub(super) fn blend_constant_color_span_at_offset(
+        &mut self,
+        offset: usize,
+        len: usize,
+        color: [u8; 4],
+    ) {
+        match color[3] {
+            0 => {}
+            u8::MAX => self.write_opaque_span_at_offset(offset, len, color),
+            _ => self.blend_translucent_span_at_offset(offset, len, color),
+        }
+    }
+
+    fn write_opaque_span_at_offset(&mut self, offset: usize, len: usize, color: [u8; 4]) {
+        let end = offset + len * 4;
+        for pixel in self.pixels[offset..end].chunks_exact_mut(4) {
+            pixel.copy_from_slice(&color);
+        }
+    }
+
+    fn blend_translucent_span_at_offset(&mut self, offset: usize, len: usize, color: [u8; 4]) {
+        let inverse_alpha = u16::from(u8::MAX - color[3]);
+        let end = offset + len * 4;
+        for pixel in self.pixels[offset..end].chunks_exact_mut(4) {
+            blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
+                pixel,
+                color,
+                inverse_alpha,
+            );
+        }
+    }
+
     pub(super) fn blend_span(&mut self, y: usize, start_x: usize, end_x: usize, color: [u8; 4]) {
         if color[3] == 0 {
             return;
@@ -105,6 +137,18 @@ fn blend_translucent_premultiplied_over_opaque_destination(
     source: [u8; 4],
 ) {
     let inverse_alpha = u16::from(u8::MAX - source[3]);
+    blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
+        destination,
+        source,
+        inverse_alpha,
+    );
+}
+
+fn blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
+    destination: &mut [u8],
+    source: [u8; 4],
+    inverse_alpha: u16,
+) {
     destination[0] = blend_premultiplied_channel(source[0], destination[0], inverse_alpha);
     destination[1] = blend_premultiplied_channel(source[1], destination[1], inverse_alpha);
     destination[2] = blend_premultiplied_channel(source[2], destination[2], inverse_alpha);
@@ -250,6 +294,44 @@ mod tests {
         by_blend.blend_pixel(1, 1, color);
 
         assert_eq!(by_offset.pixels, by_blend.pixels);
+    }
+
+    #[test]
+    fn offset_span_skips_transparent_source_like_repeated_pixel_blend() {
+        assert_offset_span_matches_repeated_pixel_blend([100, 25, 0, 0], 2, 3);
+    }
+
+    #[test]
+    fn offset_span_overwrites_opaque_source_like_repeated_pixel_write() {
+        assert_offset_span_matches_repeated_pixel_blend([44, 55, 66, 255], 2, 3);
+    }
+
+    #[test]
+    fn offset_span_blends_translucent_source_like_repeated_pixel_blend() {
+        assert_offset_span_matches_repeated_pixel_blend([100, 25, 0, 128], 2, 3);
+    }
+
+    fn assert_offset_span_matches_repeated_pixel_blend(color: [u8; 4], start_x: usize, len: usize) {
+        let mut by_span = SoftwareSurface::default();
+        by_span.resize(6, 2).expect("surface");
+        by_span.clear([20, 40, 60, 255]);
+        let mut by_pixel = SoftwareSurface::default();
+        by_pixel.resize(6, 2).expect("surface");
+        by_pixel.clear([20, 40, 60, 255]);
+        let offset = by_span.row_offset(1) + start_x * 4;
+
+        by_span.blend_constant_color_span_at_offset(offset, len, color);
+        let mut pixel_offset = offset;
+        for _ in 0..len {
+            match color[3] {
+                0 => {}
+                u8::MAX => by_pixel.write_opaque_pixel_at_offset(pixel_offset, color),
+                _ => by_pixel.blend_translucent_pixel_at_offset(pixel_offset, color),
+            }
+            pixel_offset += 4;
+        }
+
+        assert_eq!(by_span.pixels, by_pixel.pixels);
     }
 
     #[test]
