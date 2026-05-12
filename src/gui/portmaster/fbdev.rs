@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use super::log::{SharedLog, write_log};
@@ -785,16 +786,21 @@ struct Fast32ByteAlignedBlit {
 }
 
 pub(super) fn framebuffer_draw_enabled() -> bool {
-    env::var(DRAW_ENV_VAR).map_or(true, |value| {
-        !matches!(
-            value.as_str(),
-            "0" | "false" | "False" | "FALSE" | "off" | "Off" | "OFF"
-        )
-    })
+    env::var(DRAW_ENV_VAR).map_or(true, |value| parse_env_bool(&value))
 }
 
 fn force_generic_blit_enabled() -> bool {
-    env::var(FORCE_GENERIC_BLIT_ENV_VAR).is_ok_and(|value| value == "1")
+    static FORCE_GENERIC_BLIT: OnceLock<bool> = OnceLock::new();
+    *FORCE_GENERIC_BLIT.get_or_init(|| {
+        env::var(FORCE_GENERIC_BLIT_ENV_VAR).is_ok_and(|value| parse_env_bool(&value))
+    })
+}
+
+fn parse_env_bool(value: &str) -> bool {
+    !matches!(
+        value,
+        "0" | "false" | "False" | "FALSE" | "off" | "Off" | "OFF"
+    )
 }
 
 fn pack_color(var: &FbVarScreeninfo, (red, green, blue): (u8, u8, u8)) -> u32 {
@@ -1153,7 +1159,9 @@ mod tests {
         write_pixel(&mut generic_pixel, 4, pack_color(&var, color));
 
         assert_eq!(fast_pixel, generic_pixel);
-        assert_eq!(mode, Fast32BlitMode::BgrxZero);
+        if cfg!(target_endian = "little") {
+            assert_eq!(mode, Fast32BlitMode::BgrxZero);
+        }
     }
 
     #[test]
@@ -1174,6 +1182,17 @@ mod tests {
             reversed_rgb32_var_with_alpha(),
             Fast32BlitMode::RgbaOpaque,
         );
+    }
+
+    #[test]
+    fn framebuffer_env_bool_treats_only_known_false_values_as_false() {
+        for value in ["0", "false", "False", "FALSE", "off", "Off", "OFF"] {
+            assert!(!parse_env_bool(value), "{value:?} should disable");
+        }
+
+        for value in ["", "1", "true", "on", "yes", "no", "anything"] {
+            assert!(parse_env_bool(value), "{value:?} should enable");
+        }
     }
 
     #[test]
@@ -1353,7 +1372,9 @@ mod tests {
         convert_rgba_row_to_fast32(&mut specialized, &source, mode);
         convert_rgba_row_to_byte_aligned(&mut byte_shuffle, &source, byte_aligned);
 
-        assert_eq!(mode, expected_mode);
+        if cfg!(target_endian = "little") {
+            assert_eq!(mode, expected_mode);
+        }
         assert_eq!(specialized, byte_shuffle);
         for (source, destination) in source.chunks_exact(4).zip(specialized.chunks_exact(4)) {
             let color = (source[0], source[1], source[2]);
