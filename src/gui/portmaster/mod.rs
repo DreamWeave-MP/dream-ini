@@ -95,9 +95,7 @@ fn run_gui(log: Option<&SharedLog>) -> io::Result<()> {
             loop_outcome.exit_reason, loop_outcome.frame_count
         ),
     );
-    let snapshot_restore_result = framebuffer.restore_snapshots(&runtime.snapshots, log);
-    let pan_restore_result = framebuffer.restore_original_yoffset(log);
-    let restore_result = snapshot_restore_result.and(pan_restore_result);
+    let restore_result = framebuffer.restore_snapshots(&runtime.snapshots, log);
     if let Err(error) = &restore_result {
         write_log(log, format!("framebuffer restore failed: {error}"));
     }

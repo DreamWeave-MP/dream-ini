@@ -18,11 +18,9 @@ use super::{GuiFrame, GuiShell};
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
-const FBIOPAN_DISPLAY: libc::c_ulong = 0x4606;
 const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 pub(super) const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
 const FORCE_GENERIC_BLIT_ENV_VAR: &str = "DREAM_INI_PM_FORCE_GENERIC_BLIT";
-const PAN_PRESENT_ENV_VAR: &str = "DREAM_INI_PM_FB_PAN_PRESENT";
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,7 +36,6 @@ pub(super) struct Framebuffer {
     var: FbVarScreeninfo,
     memory: NonNull<u8>,
     memory_len: NonZeroUsize,
-    pan_present: PanPresentState,
 }
 
 impl Framebuffer {
@@ -94,7 +91,6 @@ impl Framebuffer {
             var,
             memory,
             memory_len,
-            pan_present: PanPresentState::new(var.yoffset),
         })
     }
 
@@ -149,8 +145,6 @@ impl Framebuffer {
             ),
         );
         log_derived_page_info(log, &self.var);
-        self.pan_present
-            .log_startup(log, &self.fix, &self.var, self.memory_len.get());
         match visible_viewport(&self.fix, &self.var) {
             Ok(viewport) => log_visible_viewport(log, &viewport),
             Err(error) => write_log(log, format!("framebuffer viewport unavailable: {error}")),
@@ -218,8 +212,7 @@ impl Framebuffer {
         let snapshot_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_timings.then(Instant::now);
-        let present_outcome = self.present_rgba_surface(renderer.surface(), &viewport)?;
-        let blit_format = present_outcome.blit_format;
+        let blit_format = self.blit_rgba_surface(renderer.surface(), &viewport)?;
         let blit_elapsed = elapsed_micros(stage_start);
         let total_elapsed = elapsed_micros(total_start);
         if frame.log_render_stats {
@@ -230,7 +223,6 @@ impl Framebuffer {
                 &viewport,
                 &self.var,
                 blit_format,
-                &present_outcome,
             )?;
         }
         if log_frame {
@@ -239,17 +231,8 @@ impl Framebuffer {
             write_log(
                 frame.log,
                 format!(
-                    "framebuffer draw timings frame={} blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} pan_enabled={} pan_attempted={} pan_accepted={} pan_source_yoffset={} pan_target_page={} pan_target_yoffset={} pan_reported_yoffset={} pan_us={} pan_fallback={} repaint_delay={repaint_delay} total_us={total_elapsed}",
+                    "framebuffer draw timings frame={} blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}",
                     frame.frame_index,
-                    present_outcome.pan.enabled,
-                    present_outcome.pan.attempted,
-                    present_outcome.pan.accepted,
-                    format_optional_u32(present_outcome.pan.source_yoffset),
-                    format_optional_u32(present_outcome.pan.target_page),
-                    format_optional_u32(present_outcome.pan.target_yoffset),
-                    format_optional_u32(present_outcome.pan.reported_yoffset),
-                    present_outcome.pan.pan_elapsed,
-                    present_outcome.pan.fallback_reason,
                 ),
             );
         }
@@ -266,7 +249,6 @@ impl Framebuffer {
                     snapshot_elapsed,
                     var_refresh_elapsed,
                     validate_viewport_elapsed,
-                    pan: present_outcome.pan.clone(),
                     renderer_timings: render_outcome.timings,
                     primitive_count: render_outcome.primitive_count,
                     texture_evidence: render_outcome.texture_evidence,
@@ -275,56 +257,6 @@ impl Framebuffer {
             );
         }
         Ok(FramebufferDrawOutcome { repaint_delay })
-    }
-
-    fn present_rgba_surface(
-        &mut self,
-        surface: &SoftwareSurface,
-        visible: &VisibleViewport,
-    ) -> io::Result<PresentOutcome> {
-        let mut pan = self.pan_present.begin_frame(&self.var);
-        let Some(hidden_viewport) =
-            self.pan_present
-                .hidden_viewport(&self.fix, &self.var, self.memory_len.get(), &mut pan)
-        else {
-            let blit_format = self.blit_rgba_surface(surface, visible)?;
-            return Ok(PresentOutcome { blit_format, pan });
-        };
-
-        let blit_format = self.blit_rgba_surface(surface, &hidden_viewport)?;
-        let stage_start = Instant::now();
-        match pan_display(&self.file, &self.var, hidden_viewport.yoffset) {
-            Ok(reported) if reported.yoffset == hidden_viewport.yoffset => {
-                pan.accepted = true;
-                pan.reported_yoffset = Some(reported.yoffset);
-                pan.pan_elapsed = stage_start.elapsed().as_micros();
-                self.var = reported;
-                self.pan_present.record_reported_yoffset(reported.yoffset);
-                Ok(PresentOutcome { blit_format, pan })
-            }
-            Ok(reported) => {
-                pan.reported_yoffset = Some(reported.yoffset);
-                pan.pan_elapsed = stage_start.elapsed().as_micros();
-                self.pan_present.record_reported_yoffset(reported.yoffset);
-                self.pan_present.disable("reported-yoffset-mismatch");
-                pan.fallback_reason = "reported-yoffset-mismatch";
-                self.var = reported;
-                let fallback_viewport = visible_viewport(&self.fix, &self.var)?;
-                let blit_format = self.blit_rgba_surface(surface, &fallback_viewport)?;
-                Ok(PresentOutcome { blit_format, pan })
-            }
-            Err(_) => {
-                pan.pan_elapsed = stage_start.elapsed().as_micros();
-                self.pan_present.disable("pan-ioctl-failed");
-                pan.fallback_reason = "pan-ioctl-failed";
-                self.var = get_var_info(&self.file)?;
-                pan.reported_yoffset = Some(self.var.yoffset);
-                self.pan_present.record_reported_yoffset(self.var.yoffset);
-                let fallback_viewport = visible_viewport(&self.fix, &self.var)?;
-                let blit_format = self.blit_rgba_surface(surface, &fallback_viewport)?;
-                Ok(PresentOutcome { blit_format, pan })
-            }
-        }
     }
 
     fn blit_rgba_surface(
@@ -493,27 +425,6 @@ impl Framebuffer {
         Ok(())
     }
 
-    pub(super) fn restore_original_yoffset(&mut self, log: Option<&SharedLog>) -> io::Result<()> {
-        if !self.pan_present.needs_restore() {
-            return Ok(());
-        }
-        let original_yoffset = self.pan_present.original_yoffset;
-        write_log(
-            log,
-            format!("restoring framebuffer pan yoffset={original_yoffset}"),
-        );
-        let reported = pan_display(&self.file, &self.var, original_yoffset)?;
-        self.var = reported;
-        if self.var.yoffset != original_yoffset {
-            return Err(io::Error::other(format!(
-                "framebuffer pan restore reported yoffset={} expected={original_yoffset}",
-                self.var.yoffset
-            )));
-        }
-        self.pan_present.restored();
-        Ok(())
-    }
-
     fn restore_snapshot(&mut self, snapshot: &FramebufferSnapshot) -> io::Result<()> {
         // SAFETY: memory points to a live mmap of memory_len bytes owned by self.
         let pixels =
@@ -638,21 +549,6 @@ fn get_var_info(file: &File) -> io::Result<FbVarScreeninfo> {
         return Err(io::Error::last_os_error());
     }
     Ok(var)
-}
-
-fn pan_display(
-    file: &File,
-    current: &FbVarScreeninfo,
-    yoffset: u32,
-) -> io::Result<FbVarScreeninfo> {
-    let mut requested = *current;
-    requested.yoffset = yoffset;
-    // SAFETY: requested points to writable memory matching Linux fb_var_screeninfo.
-    let result = unsafe { libc::ioctl(file.as_raw_fd(), FBIOPAN_DISPLAY, &mut requested) };
-    if result < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    get_var_info(file)
 }
 
 fn framebuffer_memory_len(
@@ -787,14 +683,13 @@ fn log_present_stats(
     viewport: &VisibleViewport,
     var: &FbVarScreeninfo,
     blit_format: BlitFormat,
-    present_outcome: &PresentOutcome,
 ) -> io::Result<()> {
     let source_bytes_read = surface.pixels.len();
     let framebuffer_bytes_written = viewport_snapshot_bytes(viewport)?;
     write_log(
         log,
         format!(
-            "framebuffer present frame={frame_index} mode=full-blit blit_format={} source_format=rgba8888 source_bytes_read={source_bytes_read} framebuffer_bytes_written={framebuffer_bytes_written} surface={}x{} visible_width={} visible_height={} stride={} xoffset={} yoffset={} pan_enabled={} pan_attempted={} pan_accepted={} pan_source_yoffset={} pan_target_page={} pan_target_yoffset={} pan_reported_yoffset={} pan_us={} pan_fallback={} bits_per_pixel={} bytes_per_pixel={} red={} green={} blue={} transp={}",
+            "framebuffer present frame={frame_index} mode=full-blit blit_format={} source_format=rgba8888 source_bytes_read={source_bytes_read} framebuffer_bytes_written={framebuffer_bytes_written} surface={}x{} visible_width={} visible_height={} stride={} xoffset={} yoffset={} bits_per_pixel={} bytes_per_pixel={} red={} green={} blue={} transp={}",
             blit_format.name(),
             surface.width,
             surface.height,
@@ -803,15 +698,6 @@ fn log_present_stats(
             viewport.line_length,
             viewport.xoffset,
             viewport.yoffset,
-            present_outcome.pan.enabled,
-            present_outcome.pan.attempted,
-            present_outcome.pan.accepted,
-            format_optional_u32(present_outcome.pan.source_yoffset),
-            format_optional_u32(present_outcome.pan.target_page),
-            format_optional_u32(present_outcome.pan.target_yoffset),
-            format_optional_u32(present_outcome.pan.reported_yoffset),
-            present_outcome.pan.pan_elapsed,
-            present_outcome.pan.fallback_reason,
             var.bits_per_pixel,
             viewport.bytes_per_pixel,
             bitfield_info(&var.red),
@@ -866,252 +752,6 @@ fn viewport_row_offset(viewport: &VisibleViewport, y: usize) -> io::Result<usize
     y.checked_mul(viewport.line_length)
         .and_then(|offset| viewport.base_offset.checked_add(offset))
         .ok_or_else(|| io::Error::other("framebuffer viewport row offset overflow"))
-}
-
-#[derive(Debug)]
-struct PanPresentState {
-    requested: bool,
-    disabled_reason: Option<&'static str>,
-    original_yoffset: u32,
-    changed_yoffset: bool,
-}
-
-impl PanPresentState {
-    fn new(original_yoffset: u32) -> Self {
-        Self {
-            requested: pan_present_env_enabled(),
-            disabled_reason: None,
-            original_yoffset,
-            changed_yoffset: false,
-        }
-    }
-
-    fn log_startup(
-        &self,
-        log: Option<&SharedLog>,
-        fix: &FbFixScreeninfo,
-        var: &FbVarScreeninfo,
-        mmap_len: usize,
-    ) {
-        let decision = pan_present_decision(fix, var, mmap_len);
-        write_log(
-            log,
-            format!(
-                "framebuffer pan present env_{}={:?} presence_enabled={} supported={} reason={} ypanstep={} original_yoffset={}",
-                PAN_PRESENT_ENV_VAR,
-                env::var_os(PAN_PRESENT_ENV_VAR),
-                self.requested,
-                decision.supported,
-                decision.reason,
-                fix.ypanstep,
-                self.original_yoffset,
-            ),
-        );
-    }
-
-    fn begin_frame(&self, var: &FbVarScreeninfo) -> PanPresentFrame {
-        let fallback_reason = if self.requested {
-            self.disabled_reason.unwrap_or("none")
-        } else {
-            "env-disabled"
-        };
-        PanPresentFrame {
-            enabled: self.requested && self.disabled_reason.is_none(),
-            source_yoffset: Some(var.yoffset),
-            fallback_reason,
-            ..PanPresentFrame::default()
-        }
-    }
-
-    fn hidden_viewport(
-        &mut self,
-        fix: &FbFixScreeninfo,
-        var: &FbVarScreeninfo,
-        mmap_len: usize,
-        frame: &mut PanPresentFrame,
-    ) -> Option<VisibleViewport> {
-        if !frame.enabled {
-            return None;
-        }
-        let decision = pan_present_decision(fix, var, mmap_len);
-        if !decision.supported {
-            self.disable(decision.reason);
-            frame.enabled = false;
-            frame.fallback_reason = decision.reason;
-            return None;
-        }
-        let target_page = decision
-            .target_page
-            .expect("supported pan present has a target page");
-        let target_yoffset = target_page.saturating_mul(var.yres);
-        let target_var = FbVarScreeninfo {
-            yoffset: target_yoffset,
-            ..*var
-        };
-        match visible_viewport(fix, &target_var) {
-            Ok(viewport) if viewport_fits_memory(fix, &viewport, mmap_len) => {
-                frame.attempted = true;
-                frame.target_page = Some(target_page);
-                frame.target_yoffset = Some(target_yoffset);
-                Some(viewport)
-            }
-            Ok(_) => {
-                self.disable("target-viewport-outside-mmap");
-                frame.enabled = false;
-                frame.fallback_reason = "target-viewport-outside-mmap";
-                None
-            }
-            Err(_) => {
-                self.disable("target-viewport-invalid");
-                frame.enabled = false;
-                frame.fallback_reason = "target-viewport-invalid";
-                None
-            }
-        }
-    }
-
-    fn record_reported_yoffset(&mut self, yoffset: u32) {
-        if yoffset != self.original_yoffset {
-            self.changed_yoffset = true;
-        }
-    }
-
-    fn disable(&mut self, reason: &'static str) {
-        self.disabled_reason = Some(reason);
-    }
-
-    const fn needs_restore(&self) -> bool {
-        self.requested && self.changed_yoffset
-    }
-
-    fn restored(&mut self) {
-        self.changed_yoffset = false;
-    }
-}
-
-#[derive(Clone, Debug)]
-struct PanPresentFrame {
-    enabled: bool,
-    attempted: bool,
-    accepted: bool,
-    source_yoffset: Option<u32>,
-    target_page: Option<u32>,
-    target_yoffset: Option<u32>,
-    reported_yoffset: Option<u32>,
-    pan_elapsed: u128,
-    fallback_reason: &'static str,
-}
-
-impl Default for PanPresentFrame {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            attempted: false,
-            accepted: false,
-            source_yoffset: None,
-            target_page: None,
-            target_yoffset: None,
-            reported_yoffset: None,
-            pan_elapsed: 0,
-            fallback_reason: "none",
-        }
-    }
-}
-
-#[derive(Debug)]
-struct PresentOutcome {
-    blit_format: BlitFormat,
-    pan: PanPresentFrame,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PanPresentDecision {
-    supported: bool,
-    reason: &'static str,
-    target_page: Option<u32>,
-}
-
-fn pan_present_decision(
-    fix: &FbFixScreeninfo,
-    var: &FbVarScreeninfo,
-    mmap_len: usize,
-) -> PanPresentDecision {
-    let Some(page_count) = framebuffer_page_count(var) else {
-        return pan_rejected("virtual-height-too-small");
-    };
-    let Some(current_page) = framebuffer_current_page(var, page_count) else {
-        return pan_rejected("current-yoffset-not-page-aligned");
-    };
-    if var.xoffset.saturating_add(var.xres) > var.xres_virtual {
-        return pan_rejected("xoffset-outside-virtual-width");
-    }
-    let target_page = hidden_framebuffer_page(page_count, current_page);
-    let Some(target_yoffset) = target_page.checked_mul(var.yres) else {
-        return pan_rejected("target-yoffset-overflow");
-    };
-    let target_var = FbVarScreeninfo {
-        yoffset: target_yoffset,
-        ..*var
-    };
-    let Ok(viewport) = visible_viewport(fix, &target_var) else {
-        return pan_rejected("target-viewport-invalid");
-    };
-    if !viewport_fits_memory(fix, &viewport, mmap_len) {
-        return pan_rejected("target-viewport-outside-mmap");
-    }
-    PanPresentDecision {
-        supported: true,
-        reason: if fix.ypanstep == 0 {
-            "ypanstep-zero-probing"
-        } else {
-            "ok"
-        },
-        target_page: Some(target_page),
-    }
-}
-
-const fn pan_rejected(reason: &'static str) -> PanPresentDecision {
-    PanPresentDecision {
-        supported: false,
-        reason,
-        target_page: None,
-    }
-}
-
-fn framebuffer_page_count(var: &FbVarScreeninfo) -> Option<u32> {
-    if var.yres == 0 || var.yres_virtual < var.yres.saturating_mul(2) {
-        return None;
-    }
-    Some(var.yres_virtual / var.yres)
-}
-
-fn framebuffer_current_page(var: &FbVarScreeninfo, page_count: u32) -> Option<u32> {
-    if !var.yoffset.is_multiple_of(var.yres) {
-        return None;
-    }
-    let page = var.yoffset / var.yres;
-    (page < page_count).then_some(page)
-}
-
-const fn hidden_framebuffer_page(page_count: u32, current_page: u32) -> u32 {
-    (current_page + 1) % page_count
-}
-
-fn viewport_fits_memory(
-    fix: &FbFixScreeninfo,
-    viewport: &VisibleViewport,
-    mmap_len: usize,
-) -> bool {
-    viewport_memory_end(viewport).is_some_and(|end| {
-        end <= mmap_len && (fix.smem_len == 0 || end <= usize::try_from(fix.smem_len).unwrap_or(0))
-    })
-}
-
-fn viewport_memory_end(viewport: &VisibleViewport) -> Option<usize> {
-    let last_row = viewport.height.checked_sub(1)?;
-    viewport_row_offset(viewport, last_row)
-        .ok()?
-        .checked_add(viewport_row_bytes(viewport).ok()?)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1177,16 +817,6 @@ fn force_generic_blit_enabled() -> bool {
     *FORCE_GENERIC_BLIT.get_or_init(|| {
         env::var(FORCE_GENERIC_BLIT_ENV_VAR).is_ok_and(|value| parse_env_bool(&value))
     })
-}
-
-fn pan_present_env_enabled() -> bool {
-    static PAN_PRESENT: OnceLock<bool> = OnceLock::new();
-    *PAN_PRESENT
-        .get_or_init(|| pan_present_env_value_enabled(env::var_os(PAN_PRESENT_ENV_VAR).as_deref()))
-}
-
-fn pan_present_env_value_enabled(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some()
 }
 
 fn parse_env_bool(value: &str) -> bool {
@@ -1418,10 +1048,6 @@ fn elapsed_micros(start: Option<Instant>) -> u128 {
     start.map_or(0, |start| start.elapsed().as_micros())
 }
 
-fn format_optional_u32(value: Option<u32>) -> String {
-    value.map_or_else(|| "none".to_owned(), |value| value.to_string())
-}
-
 fn should_log_hitch(total_elapsed_us: u128, threshold: Duration) -> bool {
     total_elapsed_us > threshold.as_micros()
 }
@@ -1434,7 +1060,6 @@ struct HitchLogTimingFields {
     snapshot_elapsed: u128,
     var_refresh_elapsed: u128,
     validate_viewport_elapsed: u128,
-    pan: PanPresentFrame,
     renderer_timings: Option<super::renderer::RenderTimings>,
     primitive_count: usize,
     texture_evidence: super::renderer::TextureEvidence,
@@ -1460,7 +1085,7 @@ fn hitch_log_line(frame_index: u64, timings: &HitchLogTimingFields) -> String {
         )
     });
     format!(
-        "portmaster hitch frame={} threshold_ms={} total_us={} render_us={} blit_us={} snapshot_us={} var_refresh_us={} validate_viewport_us={} pan_enabled={} pan_attempted={} pan_accepted={} pan_source_yoffset={} pan_target_page={} pan_target_yoffset={} pan_reported_yoffset={} pan_us={} pan_fallback={}{} primitives={} textures={} texture_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} repaint_delay={}",
+        "portmaster hitch frame={} threshold_ms={} total_us={} render_us={} blit_us={} snapshot_us={} var_refresh_us={} validate_viewport_us={}{} primitives={} textures={} texture_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} repaint_delay={}",
         frame_index,
         timings.threshold.as_millis(),
         timings.total_elapsed,
@@ -1469,15 +1094,6 @@ fn hitch_log_line(frame_index: u64, timings: &HitchLogTimingFields) -> String {
         timings.snapshot_elapsed,
         timings.var_refresh_elapsed,
         timings.validate_viewport_elapsed,
-        timings.pan.enabled,
-        timings.pan.attempted,
-        timings.pan.accepted,
-        format_optional_u32(timings.pan.source_yoffset),
-        format_optional_u32(timings.pan.target_page),
-        format_optional_u32(timings.pan.target_yoffset),
-        format_optional_u32(timings.pan.reported_yoffset),
-        timings.pan.pan_elapsed,
-        timings.pan.fallback_reason,
         renderer_fields,
         timings.primitive_count,
         timings.texture_evidence.count,
@@ -1513,7 +1129,6 @@ mod tests {
             snapshot_elapsed: 0,
             var_refresh_elapsed: 500,
             validate_viewport_elapsed: 600,
-            pan: PanPresentFrame::default(),
             renderer_timings: None,
             primitive_count: 17,
             texture_evidence: super::super::renderer::TextureEvidence {
@@ -1529,141 +1144,8 @@ mod tests {
 
         assert_eq!(
             hitch_log_line(42, &timings),
-            "portmaster hitch frame=42 threshold_ms=16 total_us=20000 render_us=11000 blit_us=4000 snapshot_us=0 var_refresh_us=500 validate_viewport_us=600 pan_enabled=false pan_attempted=false pan_accepted=false pan_source_yoffset=none pan_target_page=none pan_target_yoffset=none pan_reported_yoffset=none pan_us=0 pan_fallback=none primitives=17 textures=3 texture_bytes=4096 texture_sets=2 texture_set_bytes=1024 texture_full_uploads=1 texture_partial_updates=1 repaint_delay=none"
+            "portmaster hitch frame=42 threshold_ms=16 total_us=20000 render_us=11000 blit_us=4000 snapshot_us=0 var_refresh_us=500 validate_viewport_us=600 primitives=17 textures=3 texture_bytes=4096 texture_sets=2 texture_set_bytes=1024 texture_full_uploads=1 texture_partial_updates=1 repaint_delay=none"
         );
-    }
-
-    #[test]
-    fn pan_present_env_is_presence_toggle() {
-        for value in ["", "0", "false", "off", "no", "anything", "1", "true", "on"] {
-            assert!(
-                pan_present_env_value_enabled(Some(std::ffi::OsStr::new(value))),
-                "present value {value:?} should enable"
-            );
-        }
-
-        assert!(!pan_present_env_value_enabled(None));
-    }
-
-    #[test]
-    fn pan_present_selects_page_after_current_page() {
-        assert_eq!(hidden_framebuffer_page(2, 0), 1);
-        assert_eq!(hidden_framebuffer_page(2, 1), 0);
-        assert_eq!(hidden_framebuffer_page(3, 1), 2);
-    }
-
-    #[test]
-    fn pan_present_counts_whole_virtual_pages() {
-        let mut var = pan_test_var(0);
-        var.yres_virtual = 1_400;
-
-        assert_eq!(framebuffer_page_count(&var), Some(2));
-        assert_eq!(framebuffer_current_page(&var, 2), Some(0));
-    }
-
-    #[test]
-    fn pan_present_rejects_virtual_height_with_less_than_two_pages() {
-        let fix = pan_test_fix();
-        let mut var = pan_test_var(0);
-        var.yres_virtual = 959;
-
-        assert_eq!(
-            pan_present_decision(&fix, &var, usize::MAX),
-            pan_rejected("virtual-height-too-small")
-        );
-    }
-
-    #[test]
-    fn pan_present_uses_reported_current_page_not_page_zero() {
-        let fix = pan_test_fix();
-        let var = pan_test_var(480);
-
-        assert_eq!(
-            pan_present_decision(&fix, &var, usize::MAX),
-            PanPresentDecision {
-                supported: true,
-                reason: "ok",
-                target_page: Some(0),
-            }
-        );
-    }
-
-    #[test]
-    fn pan_present_rejects_unaligned_current_yoffset() {
-        let fix = pan_test_fix();
-        let var = pan_test_var(17);
-
-        assert_eq!(
-            pan_present_decision(&fix, &var, usize::MAX),
-            pan_rejected("current-yoffset-not-page-aligned")
-        );
-    }
-
-    #[test]
-    fn pan_present_rejects_target_viewport_outside_mmap() {
-        let fix = pan_test_fix();
-        let var = pan_test_var(0);
-        let one_page_bytes = 480 * 2_560;
-
-        assert_eq!(
-            pan_present_decision(&fix, &var, one_page_bytes),
-            pan_rejected("target-viewport-outside-mmap")
-        );
-    }
-
-    #[test]
-    fn pan_present_accepts_ypanstep_zero_only_as_probe_reason() {
-        let mut fix = pan_test_fix();
-        fix.ypanstep = 0;
-        let var = pan_test_var(0);
-
-        assert_eq!(
-            pan_present_decision(&fix, &var, usize::MAX),
-            PanPresentDecision {
-                supported: true,
-                reason: "ypanstep-zero-probing",
-                target_page: Some(1),
-            }
-        );
-    }
-
-    #[test]
-    fn pan_present_restore_needed_after_accepted_changed_yoffset() {
-        let mut state = test_pan_present_state(0);
-
-        state.record_reported_yoffset(480);
-
-        assert!(state.needs_restore());
-    }
-
-    #[test]
-    fn pan_present_restore_needed_after_mismatched_success_changed_yoffset() {
-        let mut state = test_pan_present_state(0);
-
-        state.record_reported_yoffset(240);
-        state.disable("reported-yoffset-mismatch");
-
-        assert!(state.needs_restore());
-    }
-
-    #[test]
-    fn pan_present_restore_needed_after_ioctl_error_observes_changed_yoffset() {
-        let mut state = test_pan_present_state(0);
-
-        state.disable("pan-ioctl-failed");
-        state.record_reported_yoffset(480);
-
-        assert!(state.needs_restore());
-    }
-
-    #[test]
-    fn pan_present_restore_not_needed_when_reported_yoffset_is_original() {
-        let mut state = test_pan_present_state(480);
-
-        state.record_reported_yoffset(480);
-        state.disable("reported-yoffset-mismatch");
-
-        assert!(!state.needs_restore());
     }
 
     #[test]
@@ -1993,36 +1475,6 @@ mod tests {
                 ..Default::default()
             },
             ..reversed_rgb32_var_without_alpha()
-        }
-    }
-
-    fn pan_test_fix() -> FbFixScreeninfo {
-        FbFixScreeninfo {
-            ypanstep: 1,
-            line_length: 2_560,
-            smem_len: 2_560 * 960,
-            ..Default::default()
-        }
-    }
-
-    fn pan_test_var(yoffset: u32) -> FbVarScreeninfo {
-        FbVarScreeninfo {
-            xres: 640,
-            yres: 480,
-            xres_virtual: 640,
-            yres_virtual: 960,
-            yoffset,
-            bits_per_pixel: 32,
-            ..Default::default()
-        }
-    }
-
-    fn test_pan_present_state(original_yoffset: u32) -> PanPresentState {
-        PanPresentState {
-            requested: true,
-            disabled_reason: None,
-            original_yoffset,
-            changed_yoffset: false,
         }
     }
 
