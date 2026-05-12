@@ -2460,6 +2460,61 @@ mod tests {
     }
 
     #[test]
+    fn textured_rect_sampled_fast_path_matches_generic_for_clipped_mixed_alpha_modulation() {
+        let vertices = textured_quad_vertices(1.0, 1.0, 7.0, 3.0, [128, 255, 128, 255]);
+        let texture = TextureImage {
+            width: 3,
+            height: 1,
+            pixels: vec![255, 0, 0, 0, 64, 0, 0, 128, 0, 0, 255, 255],
+        };
+        let clip = ClipBounds {
+            min_x: 1,
+            min_y: 1,
+            max_x: 6,
+            max_y: 2,
+        };
+        let background = [7, 11, 13, 255];
+        let mut fast = test_surface_with_background(8, 4, background);
+        let mut generic = test_surface_with_background(8, 4, background);
+        let mut stats = RasterStats::default();
+
+        let accepted = rasterize_axis_aligned_textured_quad(
+            &mut fast,
+            quad_triangles(&vertices),
+            &texture,
+            clip,
+            Some(&mut stats),
+        );
+        rasterize_test_textured_triangle(
+            &mut generic,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            clip,
+        );
+        rasterize_test_textured_triangle(
+            &mut generic,
+            &vertices[1],
+            &vertices[3],
+            &vertices[2],
+            &texture,
+            clip,
+        );
+
+        assert!(accepted);
+        assert_eq!(fast.pixels, generic.pixels);
+        assert_eq!(stats.textured_rect_calls, 1);
+        assert_eq!(stats.textured_rect_sampled_calls, 1);
+        assert_eq!(stats.textured_rect_px, 5);
+        assert_eq!(stats.transparent_px, 1);
+        assert_eq!(stats.translucent_px, 3);
+        assert_eq!(stats.opaque_px, 1);
+        assert_eq!(pixel_at(&fast.pixels, 8, 1, 1), background);
+        assert_eq!(pixel_at(&fast.pixels, 8, 5, 1), [0, 0, 128, 255]);
+    }
+
+    #[test]
     fn textured_quad_fast_path_accepts_rounded_affine_uv() {
         let mut vertices = textured_quad_vertices(1.0, 1.0, 5.0, 4.0, [192, 96, 48, 128]);
         vertices[0].uv = egui::pos2(0.02, 0.02);

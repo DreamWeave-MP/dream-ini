@@ -545,9 +545,15 @@ fn rasterize_textured_rect_no_stats_with_color(
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
         for x in range.start_x..range.end_x {
             let color = pixel_color(texture, row.uv_at(x, range.start_x));
-            surface.blend_pixel(x, y, color);
+            match color[3] {
+                0 => {}
+                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+            }
+            pixel_offset += 4;
         }
     }
 }
@@ -595,10 +601,16 @@ fn rasterize_textured_rect_with_stats_and_color(
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
         for x in range.start_x..range.end_x {
             let color = pixel_color(texture, row.uv_at(x, range.start_x));
             stats.record_alpha_px(color[3], 1);
-            surface.blend_pixel(x, y, color);
+            match color[3] {
+                0 => {}
+                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+            }
+            pixel_offset += 4;
         }
     }
 }
