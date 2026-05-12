@@ -114,6 +114,14 @@ impl SoftwareRenderer {
             self.textures.free(id);
         }
         let texture_free_elapsed = elapsed_micros(stage_start);
+        let texture_evidence = TextureEvidence {
+            count: self.textures.len(),
+            bytes: self.textures.bytes_used(),
+            set_count: texture_delta_stats.set_count,
+            set_bytes: texture_delta_stats.set_bytes,
+            full_upload_count: texture_delta_stats.full_upload_count,
+            partial_update_count: texture_delta_stats.partial_update_count,
+        };
         let total_elapsed = elapsed_micros(total_start);
         let timings = log_timings.then_some(RenderTimings {
             resize_clear: resize_clear_elapsed,
@@ -129,6 +137,7 @@ impl SoftwareRenderer {
             repaint_delay,
             timings,
             primitive_count,
+            texture_evidence,
         })
     }
 
@@ -262,6 +271,17 @@ pub(super) struct RenderOutcome {
     pub(super) repaint_delay: Duration,
     pub(super) timings: Option<RenderTimings>,
     pub(super) primitive_count: usize,
+    pub(super) texture_evidence: TextureEvidence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TextureEvidence {
+    pub(super) count: usize,
+    pub(super) bytes: usize,
+    pub(super) set_count: usize,
+    pub(super) set_bytes: usize,
+    pub(super) full_upload_count: usize,
+    pub(super) partial_update_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]

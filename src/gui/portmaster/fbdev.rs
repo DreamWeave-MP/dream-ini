@@ -251,6 +251,7 @@ impl Framebuffer {
                     validate_viewport_elapsed,
                     renderer_timings: render_outcome.timings,
                     primitive_count: render_outcome.primitive_count,
+                    texture_evidence: render_outcome.texture_evidence,
                     repaint_delay,
                 },
             );
@@ -1061,10 +1062,15 @@ struct HitchLogTimingFields {
     validate_viewport_elapsed: u128,
     renderer_timings: Option<super::renderer::RenderTimings>,
     primitive_count: usize,
+    texture_evidence: super::renderer::TextureEvidence,
     repaint_delay: Duration,
 }
 
 fn log_hitch<S: GuiShell>(frame: &GuiFrame<'_, S>, timings: &HitchLogTimingFields) {
+    write_log(frame.log, hitch_log_line(frame.frame_index, timings));
+}
+
+fn hitch_log_line(frame_index: u64, timings: &HitchLogTimingFields) -> String {
     let repaint_delay = format_repaint_delay(timings.repaint_delay);
     let renderer_fields = timings.renderer_timings.map_or_else(String::new, |timings| {
         format!(
@@ -1078,23 +1084,26 @@ fn log_hitch<S: GuiShell>(frame: &GuiFrame<'_, S>, timings: &HitchLogTimingField
             timings.total,
         )
     });
-    write_log(
-        frame.log,
-        format!(
-            "portmaster hitch frame={} threshold_ms={} total_us={} render_us={} blit_us={} snapshot_us={} var_refresh_us={} validate_viewport_us={}{} primitives={} repaint_delay={}",
-            frame.frame_index,
-            timings.threshold.as_millis(),
-            timings.total_elapsed,
-            timings.render_elapsed,
-            timings.blit_elapsed,
-            timings.snapshot_elapsed,
-            timings.var_refresh_elapsed,
-            timings.validate_viewport_elapsed,
-            renderer_fields,
-            timings.primitive_count,
-            repaint_delay,
-        ),
-    );
+    format!(
+        "portmaster hitch frame={} threshold_ms={} total_us={} render_us={} blit_us={} snapshot_us={} var_refresh_us={} validate_viewport_us={}{} primitives={} textures={} texture_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} repaint_delay={}",
+        frame_index,
+        timings.threshold.as_millis(),
+        timings.total_elapsed,
+        timings.render_elapsed,
+        timings.blit_elapsed,
+        timings.snapshot_elapsed,
+        timings.var_refresh_elapsed,
+        timings.validate_viewport_elapsed,
+        renderer_fields,
+        timings.primitive_count,
+        timings.texture_evidence.count,
+        timings.texture_evidence.bytes,
+        timings.texture_evidence.set_count,
+        timings.texture_evidence.set_bytes,
+        timings.texture_evidence.full_upload_count,
+        timings.texture_evidence.partial_update_count,
+        repaint_delay,
+    )
 }
 
 #[cfg(test)]
@@ -1108,6 +1117,35 @@ mod tests {
         assert!(!should_log_hitch(15_999, threshold));
         assert!(!should_log_hitch(16_000, threshold));
         assert!(should_log_hitch(16_001, threshold));
+    }
+
+    #[test]
+    fn hitch_log_line_includes_texture_evidence() {
+        let timings = HitchLogTimingFields {
+            threshold: Duration::from_millis(16),
+            total_elapsed: 20_000,
+            render_elapsed: 11_000,
+            blit_elapsed: 4_000,
+            snapshot_elapsed: 0,
+            var_refresh_elapsed: 500,
+            validate_viewport_elapsed: 600,
+            renderer_timings: None,
+            primitive_count: 17,
+            texture_evidence: super::super::renderer::TextureEvidence {
+                count: 3,
+                bytes: 4_096,
+                set_count: 2,
+                set_bytes: 1_024,
+                full_upload_count: 1,
+                partial_update_count: 1,
+            },
+            repaint_delay: Duration::MAX,
+        };
+
+        assert_eq!(
+            hitch_log_line(42, &timings),
+            "portmaster hitch frame=42 threshold_ms=16 total_us=20000 render_us=11000 blit_us=4000 snapshot_us=0 var_refresh_us=500 validate_viewport_us=600 primitives=17 textures=3 texture_bytes=4096 texture_sets=2 texture_set_bytes=1024 texture_full_uploads=1 texture_partial_updates=1 repaint_delay=none"
+        );
     }
 
     #[test]
