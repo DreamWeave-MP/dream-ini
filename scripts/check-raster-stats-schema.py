@@ -39,6 +39,19 @@ def extract_log_line(source: str) -> str:
     return source[start_match.start() : start_match.start() + end_match.start()]
 
 
+def extract_raster_stats_values(source: str) -> str:
+    start_match = re.search(r"macro_rules!\s+raster_stats_values\s*\{", source)
+    if start_match is None:
+        raise ValueError("could not find raster_stats_values macro")
+
+    start = start_match.end()
+    end_match = re.search(r"^}\s*$", source[start:], re.MULTILINE)
+    if end_match is None:
+        raise ValueError("could not find end of raster_stats_values macro")
+
+    return source[start : start + end_match.start()]
+
+
 def difference(left: list[str], right: list[str]) -> list[str]:
     right_values = set(right)
     return [value for value in left if value not in right_values]
@@ -48,13 +61,14 @@ def main() -> int:
     source = STATS_RS.read_text(encoding="utf-8")
     struct_body = extract_raster_stats_struct(source)
     log_line = extract_log_line(source)
+    value_source = extract_raster_stats_values(source)
 
     fields = re.findall(
         r"pub\(in\s+crate::gui::portmaster\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:",
         struct_body,
     )
     labels = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)=\{\}", log_line)
-    arguments = re.findall(r"\bself\.([A-Za-z_][A-Za-z0-9_]*)\b", log_line)
+    arguments = re.findall(r"\$stats\.([A-Za-z_][A-Za-z0-9_]*)\b", value_source)
 
     errors = []
     if missing := difference(fields, labels):
@@ -64,9 +78,11 @@ def main() -> int:
     if missing := difference(fields, arguments):
         errors.append("fields missing from log arguments: " + ", ".join(missing))
     if extra := difference(arguments, fields):
-        errors.append("log arguments without struct fields: " + ", ".join(extra))
+        errors.append("runtime value sources without struct fields: " + ", ".join(extra))
+    if "raster_stats_values!(self)" not in log_line:
+        errors.append("RasterStats::log_line does not use raster_stats_values!(self)")
     if labels != arguments:
-        errors.append("log label order does not match self.field argument order")
+        errors.append("log label order does not match runtime value order")
 
     if errors:
         print(f"{STATS_RS.relative_to(REPO_ROOT)} RasterStats schema check failed:", file=sys.stderr)

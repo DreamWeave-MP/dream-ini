@@ -730,6 +730,68 @@ fn emit_white_constant_texel_constant_alpha_run_no_stats(
     run: WhiteConstantTexelRun,
     alpha: u8,
 ) {
+    if let Some(color) = white_constant_texel_constant_run_color(row_color, color_step, run, alpha)
+    {
+        emit_white_constant_texel_constant_color_run_no_stats(surface, run, color);
+        return;
+    }
+
+    emit_white_constant_texel_variable_color_constant_alpha_run_no_stats(
+        surface, row_color, color_step, run, alpha,
+    );
+}
+
+fn white_constant_texel_constant_run_color(
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    run: WhiteConstantTexelRun,
+    alpha: u8,
+) -> Option<[u8; 4]> {
+    if run.len == 0
+        || row_color.iter().any(|value| !value.is_finite())
+        || color_step.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let last_dx = run.start_dx.checked_add(run.len - 1)?;
+    let first =
+        white_constant_texel_pixel_color_with_alpha(row_color, color_step, run.start_dx, alpha);
+    let last = white_constant_texel_pixel_color_with_alpha(row_color, color_step, last_dx, alpha);
+    (first == last).then_some(first)
+}
+
+fn emit_white_constant_texel_constant_color_run_no_stats(
+    surface: &mut SoftwareSurface,
+    run: WhiteConstantTexelRun,
+    color: [u8; 4],
+) {
+    match color[3] {
+        0 => {}
+        u8::MAX => {
+            let mut pixel_offset = run.pixel_offset;
+            for _ in 0..run.len {
+                surface.write_opaque_pixel_at_offset(pixel_offset, color);
+                pixel_offset += 4;
+            }
+        }
+        _ => {
+            let mut pixel_offset = run.pixel_offset;
+            for _ in 0..run.len {
+                surface.blend_translucent_pixel_at_offset(pixel_offset, color);
+                pixel_offset += 4;
+            }
+        }
+    }
+}
+
+fn emit_white_constant_texel_variable_color_constant_alpha_run_no_stats(
+    surface: &mut SoftwareSurface,
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    run: WhiteConstantTexelRun,
+    alpha: u8,
+) {
     match alpha {
         0 => {}
         u8::MAX => {
@@ -807,9 +869,19 @@ fn emit_white_constant_texel_run_with_stats(
         stats.constant_texel_textured_triangle_white_constant_alpha_run_px += len;
         stats.record_alpha_px(alpha, len);
         stats.record_constant_texel_alpha_px(alpha, len);
-        emit_white_constant_texel_constant_alpha_run_no_stats(
-            surface, row_color, color_step, run, alpha,
-        );
+        if let Some(color) =
+            white_constant_texel_constant_run_color(row_color, color_step, run, alpha)
+        {
+            stats.constant_texel_textured_triangle_white_constant_color_run_calls += 1;
+            stats.constant_texel_textured_triangle_white_constant_color_run_px += len;
+            emit_white_constant_texel_constant_color_run_no_stats(surface, run, color);
+        } else {
+            stats.constant_texel_textured_triangle_white_variable_color_run_calls += 1;
+            stats.constant_texel_textured_triangle_white_variable_color_run_px += len;
+            emit_white_constant_texel_variable_color_constant_alpha_run_no_stats(
+                surface, row_color, color_step, run, alpha,
+            );
+        }
         return;
     }
 
@@ -1358,12 +1430,12 @@ mod tests {
     fn white_constant_texel_runs_match_reference_for_transparent_alpha() {
         assert_white_constant_texel_run_matches_reference(
             [20.0, 40.0, 60.0, -8.0],
-            [1.25, -0.5, 0.75, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
             2,
             8,
-            2,
-            4,
+            (2, 4),
             AlphaRunKind::Constant(0),
+            ColorRunKind::Constant([20, 40, 60, 0]),
         );
     }
 
@@ -1371,12 +1443,12 @@ mod tests {
     fn white_constant_texel_runs_match_reference_for_opaque_alpha() {
         assert_white_constant_texel_run_matches_reference(
             [20.0, 40.0, 60.0, 260.0],
-            [1.25, -0.5, 0.75, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
             2,
             8,
-            2,
-            4,
+            (2, 4),
             AlphaRunKind::Constant(u8::MAX),
+            ColorRunKind::Constant([20, 40, 60, u8::MAX]),
         );
     }
 
@@ -1384,12 +1456,12 @@ mod tests {
     fn white_constant_texel_runs_match_reference_for_translucent_alpha() {
         assert_white_constant_texel_run_matches_reference(
             [20.0, 40.0, 60.0, 117.4],
-            [1.25, -0.5, 0.75, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
             2,
             8,
-            2,
-            4,
+            (2, 4),
             AlphaRunKind::Constant(117),
+            ColorRunKind::Constant([20, 40, 60, 117]),
         );
     }
 
@@ -1400,9 +1472,9 @@ mod tests {
             [2.5, -3.0, 1.25, 7.5],
             2,
             11,
-            2,
-            3,
+            (2, 3),
             AlphaRunKind::Variable,
+            ColorRunKind::Variable,
         );
     }
 
@@ -1413,9 +1485,9 @@ mod tests {
             [2.5, -3.0, 1.25, -0.03],
             4,
             5,
-            2,
-            3,
+            (2, 3),
             AlphaRunKind::Constant(128),
+            ColorRunKind::Variable,
         );
     }
 
@@ -1426,9 +1498,9 @@ mod tests {
             [2.5, -3.0, 1.25, 0.01],
             7,
             9,
-            2,
-            3,
+            (2, 3),
             AlphaRunKind::Constant(73),
+            ColorRunKind::Variable,
         );
     }
 
@@ -1439,9 +1511,9 @@ mod tests {
             [2.5, -3.0, 1.25, 12.0],
             6,
             1,
-            2,
-            3,
+            (2, 3),
             AlphaRunKind::Constant(113),
+            ColorRunKind::Constant([27, 202, 48, 113]),
         );
     }
 
@@ -1452,18 +1524,18 @@ mod tests {
             [2.5, -3.0, 1.25, 0.2],
             0,
             10,
-            2,
-            3,
+            (2, 3),
             AlphaRunKind::Constant(0),
+            ColorRunKind::Variable,
         );
         assert_white_constant_texel_run_matches_reference(
             [12.0, 220.0, 40.0, 255.6],
             [2.5, -3.0, 1.25, 0.2],
             0,
             10,
-            3,
-            3,
+            (3, 3),
             AlphaRunKind::Constant(u8::MAX),
+            ColorRunKind::Variable,
         );
     }
 
@@ -1483,6 +1555,19 @@ mod tests {
         );
         assert_eq!(
             white_constant_texel_constant_run_alpha([0.0; 4], [0.0; 4], usize::MAX - 1, 3),
+            None
+        );
+        assert_eq!(
+            white_constant_texel_constant_run_color(
+                [0.0; 4],
+                [0.0; 4],
+                WhiteConstantTexelRun {
+                    start_dx: usize::MAX - 1,
+                    len: 3,
+                    pixel_offset: 0,
+                },
+                0,
+            ),
             None
         );
     }
@@ -1527,6 +1612,8 @@ mod tests {
         assert_eq!(optimized.pixels, reference.pixels);
         assert!(stats.constant_texel_textured_triangle_white_constant_alpha_run_calls > 0);
         assert!(stats.constant_texel_textured_triangle_white_constant_alpha_run_px > 0);
+        assert!(stats.constant_texel_textured_triangle_white_variable_color_run_calls > 0);
+        assert!(stats.constant_texel_textured_triangle_white_variable_color_run_px > 0);
         assert!(stats.constant_texel_textured_triangle_white_variable_alpha_run_calls > 0);
         assert!(stats.constant_texel_textured_triangle_white_variable_alpha_run_px > 0);
     }
@@ -1537,20 +1624,26 @@ mod tests {
         Variable,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ColorRunKind {
+        Constant([u8; 4]),
+        Variable,
+    }
+
     fn assert_white_constant_texel_run_matches_reference(
         row_color: [f32; 4],
         color_step: [f32; 4],
         start_dx: usize,
         len: usize,
-        y: usize,
-        x: usize,
+        pos: (usize, usize),
         expected_kind: AlphaRunKind,
+        expected_color_kind: ColorRunKind,
     ) {
         let pixel_offset = test_surface(1, 1).row_offset(0);
         let run = WhiteConstantTexelRun {
             start_dx,
             len,
-            pixel_offset: pixel_offset + (y * 20 + x) * 4,
+            pixel_offset: pixel_offset + (pos.0 * 20 + pos.1) * 4,
         };
         let mut actual = test_surface(20, 7);
         let mut actual_no_stats = test_surface(20, 7);
@@ -1589,7 +1682,21 @@ mod tests {
             white_constant_texel_constant_run_alpha(row_color, color_step, start_dx, len),
             expected_kind.alpha()
         );
-        assert_white_constant_texel_classification_stats(&stats, expected_kind, len);
+        assert_eq!(
+            white_constant_texel_constant_run_color(
+                row_color,
+                color_step,
+                run,
+                expected_kind.alpha().unwrap_or(0)
+            ),
+            expected_color_kind.color()
+        );
+        assert_white_constant_texel_classification_stats(
+            &stats,
+            expected_kind,
+            expected_color_kind,
+            len,
+        );
         assert_white_constant_texel_alpha_stats_match(&stats, &scalar_stats);
     }
 
@@ -1602,9 +1709,19 @@ mod tests {
         }
     }
 
+    impl ColorRunKind {
+        const fn color(self) -> Option<[u8; 4]> {
+            match self {
+                Self::Constant(color) => Some(color),
+                Self::Variable => None,
+            }
+        }
+    }
+
     fn assert_white_constant_texel_classification_stats(
         stats: &RasterStats,
         expected_kind: AlphaRunKind,
+        expected_color_kind: ColorRunKind,
         len: usize,
     ) {
         match expected_kind {
@@ -1625,6 +1742,11 @@ mod tests {
                     stats.constant_texel_textured_triangle_white_variable_alpha_run_px,
                     0
                 );
+                assert_white_constant_texel_color_classification_stats(
+                    stats,
+                    expected_color_kind,
+                    len,
+                );
             }
             AlphaRunKind::Variable => {
                 assert_eq!(
@@ -1641,6 +1763,56 @@ mod tests {
                 );
                 assert_eq!(
                     stats.constant_texel_textured_triangle_white_variable_alpha_run_px,
+                    len
+                );
+                assert_white_constant_texel_color_classification_stats(
+                    stats,
+                    ColorRunKind::Variable,
+                    0,
+                );
+            }
+        }
+    }
+
+    fn assert_white_constant_texel_color_classification_stats(
+        stats: &RasterStats,
+        expected_kind: ColorRunKind,
+        len: usize,
+    ) {
+        match expected_kind {
+            ColorRunKind::Constant(_) => {
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_color_run_calls,
+                    1
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_color_run_px,
+                    len
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_color_run_calls,
+                    0
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_color_run_px,
+                    0
+                );
+            }
+            ColorRunKind::Variable => {
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_color_run_calls,
+                    0
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_constant_color_run_px,
+                    0
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_color_run_calls,
+                    usize::from(len > 0)
+                );
+                assert_eq!(
+                    stats.constant_texel_textured_triangle_white_variable_color_run_px,
                     len
                 );
             }
