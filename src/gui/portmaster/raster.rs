@@ -701,6 +701,140 @@ mod tests {
     }
 
     #[test]
+    fn white_constant_texel_stats_classify_alpha_only_eligible_vertices() {
+        let texture = test_solid_2x2_texture([255, 255, 255, 255]);
+        let mut vertices = [
+            solid_vertex(1.0, 1.0, [255, 255, 255, 0]),
+            solid_vertex(42.0, 2.0, [255, 255, 255, 255]),
+            solid_vertex(3.0, 38.0, [255, 255, 255, 96]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(0.2, 0.1);
+        vertices[2].uv = egui::pos2(0.49, 0.49);
+        let clip = full_clip(48, 42);
+        let bounds = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+            .expect("triangle bounds");
+        let area = edge(vertices[0].pos, vertices[1].pos, vertices[2].pos);
+        let mut constant_surface = test_surface(48, 42);
+        let mut sampled_surface = test_surface(48, 42);
+        let mut constant_stats = RasterStats::default();
+        let mut sampled_stats = RasterStats::default();
+
+        rasterize_triangle(
+            &mut constant_surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            clip,
+            Some(&mut constant_stats),
+        );
+        rasterize_textured_triangle(
+            &mut sampled_surface,
+            TriangleVertices {
+                v0: &vertices[0],
+                v1: &vertices[1],
+                v2: &vertices[2],
+            },
+            &texture,
+            bounds,
+            area,
+            Some(&mut sampled_stats),
+        );
+
+        assert_eq!(constant_surface.pixels, sampled_surface.pixels);
+        assert!(constant_stats.textured_triangle_covered_px > 0);
+        assert_eq!(
+            constant_stats.textured_triangle_covered_px,
+            sampled_stats.textured_triangle_covered_px
+        );
+        assert_eq!(
+            constant_stats.constant_texel_textured_triangle_white_alpha_only_eligible_calls,
+            1
+        );
+        assert_eq!(
+            constant_stats.constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls,
+            0
+        );
+        assert!(
+            constant_stats
+                .constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls
+                > 0
+        );
+    }
+
+    #[test]
+    fn white_constant_texel_stats_classify_alpha_only_rgb_rejection() {
+        let texture = test_solid_2x2_texture([255, 255, 255, 255]);
+        let mut vertices = [
+            solid_vertex(0.0, 0.0, [255, 0, 0, 255]),
+            solid_vertex(4.0, 0.0, [255, 255, 255, 255]),
+            solid_vertex(0.0, 4.0, [255, 255, 255, 255]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(0.2, 0.1);
+        vertices[2].uv = egui::pos2(0.49, 0.49);
+        let clip = full_clip(5, 5);
+        let bounds = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+            .expect("triangle bounds");
+        let area = edge(vertices[0].pos, vertices[1].pos, vertices[2].pos);
+        let mut constant_surface = test_surface(5, 5);
+        let mut sampled_surface = test_surface(5, 5);
+        let mut constant_stats = RasterStats::default();
+        let mut sampled_stats = RasterStats::default();
+
+        rasterize_triangle(
+            &mut constant_surface,
+            &vertices[0],
+            &vertices[1],
+            &vertices[2],
+            &texture,
+            clip,
+            Some(&mut constant_stats),
+        );
+        rasterize_textured_triangle(
+            &mut sampled_surface,
+            TriangleVertices {
+                v0: &vertices[0],
+                v1: &vertices[1],
+                v2: &vertices[2],
+            },
+            &texture,
+            bounds,
+            area,
+            Some(&mut sampled_stats),
+        );
+
+        assert_eq!(constant_surface.pixels, sampled_surface.pixels);
+        assert!(constant_stats.textured_triangle_covered_px > 0);
+        assert_eq!(
+            constant_stats.textured_triangle_covered_px,
+            sampled_stats.textured_triangle_covered_px
+        );
+        assert_eq!(
+            constant_stats.constant_texel_textured_triangle_white_alpha_only_eligible_calls,
+            0
+        );
+        assert_eq!(
+            constant_stats.constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls,
+            1
+        );
+        assert_eq!(
+            constant_stats
+                .constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls,
+            0
+        );
+        assert_eq!(
+            constant_stats
+                .constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls,
+            0
+        );
+        let tinted_pixel = pixel_at(&constant_surface.pixels, 5, 0, 0);
+        assert!(tinted_pixel[0] > tinted_pixel[1]);
+        assert!(tinted_pixel[0] > tinted_pixel[2]);
+    }
+
+    #[test]
     fn constant_texel_textured_triangle_stats_count_skipped_transparent_white_pixels() {
         let texture = test_solid_2x2_texture([255, 255, 255, 255]);
         let mut vertices = [

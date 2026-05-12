@@ -395,12 +395,15 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
     area: f32,
     stats: &mut RasterStats,
 ) {
-    if white_constant_texel_alpha_only_vertices(vertices) {
+    let alpha_only = white_constant_texel_alpha_only_vertices(vertices);
+    if alpha_only {
+        stats.constant_texel_textured_triangle_white_alpha_only_eligible_calls += 1;
         rasterize_white_constant_texel_alpha_only_textured_triangle_with_stats(
             surface, vertices, bounds, area, stats,
         );
         return;
     }
+    stats.constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls += 1;
 
     let TriangleVertices { v0, v1, v2 } = vertices;
     let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
