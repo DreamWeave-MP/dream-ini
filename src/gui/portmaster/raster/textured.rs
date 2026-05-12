@@ -602,13 +602,7 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_with_stats(
             (bounds.min_x, bounds.max_x)
         };
         let candidate_px = end_x - start_x;
-        stats.textured_triangle_candidate_px += candidate_px;
-        stats.constant_texel_textured_triangle_candidate_px += candidate_px;
-        if candidate_px < bounds.max_x - bounds.min_x {
-            stats.textured_triangle_narrowed_rows += 1;
-        } else {
-            stats.textured_triangle_full_scan_rows += 1;
-        }
+        record_constant_texel_textured_triangle_candidate_row(stats, bounds, candidate_px);
         let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
             let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
             (
@@ -627,16 +621,16 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_with_stats(
             (pixel_edge0, pixel_edge1, pixel_edge2),
         );
         let mut run_start = None;
+        let mut scan_runs = 0;
+        let mut scan_span = None;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
             let w2 = pixel_edge2 * raster.inv_area;
-            if edge_covers_pixel(w0, raster.edge0_includes_boundary)
-                && edge_covers_pixel(w1, raster.edge1_includes_boundary)
-                && edge_covers_pixel(w2, raster.edge2_includes_boundary)
-            {
+            if triangle_raster_state_covers_pixel(&raster, w0, w1, w2) {
                 run_start.get_or_insert(x);
             } else if let Some(start) = run_start.take() {
+                record_white_constant_texel_scan_run(start, x, &mut scan_runs, &mut scan_span);
                 emit_white_constant_texel_alpha_only_run_with_stats(
                     surface,
                     row_alpha,
@@ -655,6 +649,7 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_with_stats(
             pixel_edge2 += raster.w2_step_x;
         }
         if let Some(start) = run_start {
+            record_white_constant_texel_scan_run(start, end_x, &mut scan_runs, &mut scan_span);
             emit_white_constant_texel_alpha_only_run_with_stats(
                 surface,
                 row_alpha,
@@ -668,6 +663,14 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_with_stats(
                 stats,
             );
         }
+        record_white_constant_texel_endpoint_row(
+            stats,
+            vertices,
+            &raster,
+            y,
+            (start_x, end_x),
+            (scan_runs, scan_span),
+        );
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
         row_edge2 += raster.w2_step_y;
