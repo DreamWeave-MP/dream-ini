@@ -265,50 +265,133 @@ impl RasterStats {
 mod tests {
     use super::RasterStats;
 
-    fn populated_raster_stats() -> RasterStats {
-        RasterStats {
-            solid_rect_calls: 1,
-            constant_texel_textured_triangle_white_alpha_only_eligible_calls: 90,
-            constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls: 91,
-            constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls: 92,
-            constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls: 93,
-            constant_texel_textured_triangle_candidate_px: 54,
-            constant_texel_textured_triangle_white_constant_alpha_run_calls: 94,
-            constant_texel_textured_triangle_white_constant_alpha_run_px: 95,
-            constant_texel_textured_triangle_white_constant_color_run_calls: 96,
-            constant_texel_textured_triangle_white_constant_color_run_px: 97,
-            constant_texel_textured_triangle_white_variable_color_run_calls: 98,
-            constant_texel_textured_triangle_white_variable_color_run_px: 99,
-            constant_texel_textured_triangle_white_variable_alpha_run_calls: 100,
-            constant_texel_textured_triangle_white_variable_alpha_run_px: 101,
-            ..RasterStats::default()
-        }
+    macro_rules! populated_raster_stats {
+        () => {
+            RasterStats {
+                solid_rect_calls: 1,
+                solid_rect_px: 2,
+                textured_rect_calls: 3,
+                textured_rect_px: 4,
+                textured_rect_constant_texel_calls: 5,
+                textured_rect_constant_texel_px: 6,
+                textured_rect_constant_texel_us: 7,
+                textured_rect_sampled_calls: 8,
+                textured_rect_sampled_px: 9,
+                textured_rect_sampled_us: 10,
+                textured_rect_white_texel_calls: 11,
+                textured_rect_white_texel_px: 12,
+                textured_rect_uniform_color_calls: 13,
+                textured_rect_uniform_color_px: 14,
+                solid_triangle_calls: 15,
+                solid_triangle_bbox_px: 16,
+                solid_triangle_covered_px: 17,
+                solid_triangle_span_rows: 18,
+                solid_triangle_candidate_px: 19,
+                solid_triangle_hint_rows: 20,
+                solid_triangle_hint_fallback_rows: 21,
+                solid_triangle_hint_build_us: 22,
+                solid_triangle_endpoint_search_us: 23,
+                solid_triangle_blend_span_us: 24,
+                solid_triangle_blend_span_calls: 25,
+                solid_triangle_span_px: 26,
+                solid_triangle_endpoint_probe_px: 27,
+                solid_triangle_hint_probe_px: 28,
+                solid_triangle_canary_probe_px: 29,
+                solid_triangle_fallback_probe_px: 30,
+                solid_triangle_direct_probe_px: 31,
+                solid_triangle_hint_candidate_px: 32,
+                solid_triangle_narrowed_rows: 33,
+                solid_triangle_full_scan_rows: 34,
+                solid_fan_calls: 35,
+                solid_fan_triangles: 36,
+                solid_fan_rows: 37,
+                solid_fan_px: 38,
+                solid_fan_edge_intersections: 39,
+                solid_fan_endpoint_probe_px: 40,
+                solid_fan_fallback_rows: 41,
+                solid_fan_edge_precompute_calls: 42,
+                solid_fan_edge_precompute_edges: 43,
+                solid_fan_edge_precompute_used_rows: 44,
+                solid_fan_edge_precompute_fallback_budget: 45,
+                solid_fan_edge_precompute_fallback_non_finite: 46,
+                solid_fan_edge_precompute_old_solver_rows: 47,
+                solid_fan_span_cache_hits: 48,
+                solid_fan_span_cache_misses: 49,
+                solid_fan_span_cache_hit_rows: 50,
+                solid_fan_span_cache_hit_px: 51,
+                solid_fan_span_cache_stored_rows: 52,
+                solid_fan_span_cache_rejected_too_many_rows: 53,
+                solid_fan_span_cache_resident_entries: 54,
+                solid_fan_span_cache_resident_rows: 55,
+                solid_fan_span_cache_total_evictions: 56,
+                solid_fan_span_cache_row_budget_evictions: 57,
+                textured_triangle_calls: 58,
+                textured_triangle_bbox_px: 59,
+                textured_triangle_covered_px: 60,
+                textured_triangle_candidate_px: 61,
+                textured_triangle_narrowed_rows: 62,
+                textured_triangle_full_scan_rows: 63,
+                constant_texel_textured_triangle_calls: 64,
+                constant_texel_textured_triangle_white_texel_calls: 65,
+                constant_texel_textured_triangle_non_white_texel_calls: 66,
+                constant_texel_textured_triangle_white_alpha_only_eligible_calls: 67,
+                constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls: 68,
+                constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls: 69,
+                constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls: 70,
+                constant_texel_textured_triangle_candidate_px: 71,
+                constant_texel_textured_triangle_covered_px: 72,
+                constant_texel_textured_triangle_white_texel_covered_px: 73,
+                constant_texel_textured_triangle_non_white_texel_covered_px: 74,
+                constant_texel_textured_triangle_opaque_px: 75,
+                constant_texel_textured_triangle_translucent_px: 76,
+                constant_texel_textured_triangle_transparent_px: 77,
+                constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls: 78,
+                constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px: 79,
+                constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls: 80,
+                constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px: 81,
+                constant_texel_textured_triangle_white_constant_alpha_run_calls: 82,
+                constant_texel_textured_triangle_white_constant_alpha_run_px: 83,
+                constant_texel_textured_triangle_white_constant_color_run_calls: 84,
+                constant_texel_textured_triangle_white_constant_color_run_px: 85,
+                constant_texel_textured_triangle_white_variable_color_run_calls: 86,
+                constant_texel_textured_triangle_white_variable_color_run_px: 87,
+                constant_texel_textured_triangle_white_variable_alpha_run_calls: 88,
+                constant_texel_textured_triangle_white_variable_alpha_run_px: 89,
+                constant_texel_textured_triangle_us: 90,
+                constant_texel_textured_triangle_white_texel_us: 91,
+                constant_texel_textured_triangle_non_white_texel_us: 92,
+                sampled_textured_triangle_calls: 93,
+                sampled_textured_triangle_candidate_px: 94,
+                sampled_textured_triangle_covered_px: 95,
+                sampled_textured_triangle_us: 96,
+                degenerate_triangle_skips: 97,
+                fully_clipped_triangle_skips: 98,
+                opaque_px: 99,
+                translucent_px: 100,
+                transparent_px: 101,
+            }
+        };
     }
 
     #[test]
     fn raster_stats_log_line_includes_all_counters() {
-        let stats = populated_raster_stats();
+        let stats = populated_raster_stats!();
 
         let line = stats.log_line();
+        let actual_values: Vec<_> = line
+            .split_whitespace()
+            .skip(3)
+            .map(|entry| {
+                entry
+                    .split_once('=')
+                    .expect("stats entry has separator")
+                    .1
+                    .parse::<usize>()
+                    .expect("stats value is numeric")
+            })
+            .collect();
+
         assert!(line.starts_with("software renderer raster_stats solid_rect_calls=1 "));
-        assert!(
-            line.contains("constant_texel_textured_triangle_white_alpha_only_eligible_calls=90")
-        );
-        assert!(line.contains(
-            "constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls=91 \
-             constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls=92 \
-             constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls=93 \
-             constant_texel_textured_triangle_candidate_px=54"
-        ));
-        assert!(line.contains(
-            "constant_texel_textured_triangle_white_constant_alpha_run_calls=94 \
-             constant_texel_textured_triangle_white_constant_alpha_run_px=95 \
-             constant_texel_textured_triangle_white_constant_color_run_calls=96 \
-             constant_texel_textured_triangle_white_constant_color_run_px=97 \
-             constant_texel_textured_triangle_white_variable_color_run_calls=98 \
-             constant_texel_textured_triangle_white_variable_color_run_px=99 \
-             constant_texel_textured_triangle_white_variable_alpha_run_calls=100 \
-             constant_texel_textured_triangle_white_variable_alpha_run_px=101"
-        ));
+        assert_eq!(actual_values, (1..=101).collect::<Vec<_>>());
     }
 }
