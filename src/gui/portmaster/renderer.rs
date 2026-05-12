@@ -88,7 +88,7 @@ impl SoftwareRenderer {
         );
 
         let stage_start = log_frame.then(Instant::now);
-        let collect_stats = log_frame || frame.log_render_stats;
+        let collect_stats = should_collect_deep_stats(log_frame, frame.log_render_stats);
         let mut primitive_stats = collect_stats.then(PrimitiveStats::default);
         let mut raster_stats = collect_stats.then(RasterStats::default);
         let mut raster_timings = collect_stats.then(RasterTimings::default);
@@ -659,6 +659,10 @@ fn elapsed_micros(start: Option<Instant>) -> u128 {
     start.map_or(0, |start| start.elapsed().as_micros())
 }
 
+const fn should_collect_deep_stats(_log_frame: bool, log_render_stats: bool) -> bool {
+    log_render_stats
+}
+
 fn borrow_optional_mut<'a, T>(option: &'a mut Option<&mut T>) -> Option<&'a mut T> {
     option.as_mut().map(|value| &mut **value)
 }
@@ -666,6 +670,14 @@ fn borrow_optional_mut<'a, T>(option: &'a mut Option<&mut T>) -> Option<&'a mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coarse_frame_logging_does_not_enable_deep_stats_collection() {
+        assert!(!should_collect_deep_stats(false, false));
+        assert!(!should_collect_deep_stats(true, false));
+        assert!(should_collect_deep_stats(false, true));
+        assert!(should_collect_deep_stats(true, true));
+    }
 
     #[test]
     fn renderer_stats_count_textured_quad_fast_path_without_generic_triangles() {
