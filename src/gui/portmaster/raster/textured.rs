@@ -2,7 +2,10 @@
 
 use std::time::Instant;
 
-use super::coverage::triangle_scanline_x_range;
+use super::coverage::{
+    TriangleBoundaryIncludes, TriangleCoverage, TriangleRowSearch, triangle_row_endpoints,
+    triangle_scanline_x_range,
+};
 use super::math::{
     edge, edge_covers_pixel, edge_includes_boundary, edge_step_x, edge_step_y,
     f32_to_u8_round_clamped, interpolate_channel_value, interpolate_color, modulate_color,
@@ -426,13 +429,7 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
             (bounds.min_x, bounds.max_x)
         };
         let candidate_px = end_x - start_x;
-        stats.textured_triangle_candidate_px += candidate_px;
-        stats.constant_texel_textured_triangle_candidate_px += candidate_px;
-        if candidate_px < bounds.max_x - bounds.min_x {
-            stats.textured_triangle_narrowed_rows += 1;
-        } else {
-            stats.textured_triangle_full_scan_rows += 1;
-        }
+        record_constant_texel_textured_triangle_candidate_row(stats, bounds, candidate_px);
         let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = if narrow_scanlines {
             let pixel_center = egui::pos2(usize_to_f32(start_x) + 0.5, usize_to_f32(y) + 0.5);
             (
@@ -452,16 +449,16 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
         );
         let row_offset = surface.row_offset(y);
         let mut run_start = None;
+        let mut scan_runs = 0;
+        let mut scan_span = None;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
             let w2 = pixel_edge2 * raster.inv_area;
-            if edge_covers_pixel(w0, raster.edge0_includes_boundary)
-                && edge_covers_pixel(w1, raster.edge1_includes_boundary)
-                && edge_covers_pixel(w2, raster.edge2_includes_boundary)
-            {
+            if triangle_raster_state_covers_pixel(&raster, w0, w1, w2) {
                 run_start.get_or_insert(x);
             } else if let Some(start) = run_start.take() {
+                record_white_constant_texel_scan_run(start, x, &mut scan_runs, &mut scan_span);
                 emit_white_constant_texel_run_with_stats(
                     surface,
                     row_color,
@@ -477,6 +474,7 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
             pixel_edge2 += raster.w2_step_x;
         }
         if let Some(start) = run_start {
+            record_white_constant_texel_scan_run(start, end_x, &mut scan_runs, &mut scan_span);
             emit_white_constant_texel_run_with_stats(
                 surface,
                 row_color,
@@ -487,9 +485,97 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
                 stats,
             );
         }
+        record_white_constant_texel_endpoint_row(
+            stats,
+            vertices,
+            &raster,
+            y,
+            (start_x, end_x),
+            (scan_runs, scan_span),
+        );
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
         row_edge2 += raster.w2_step_y;
+    }
+}
+
+fn record_constant_texel_textured_triangle_candidate_row(
+    stats: &mut RasterStats,
+    bounds: TriangleRasterBounds,
+    candidate_px: usize,
+) {
+    stats.textured_triangle_candidate_px += candidate_px;
+    stats.constant_texel_textured_triangle_candidate_px += candidate_px;
+    if candidate_px < bounds.max_x - bounds.min_x {
+        stats.textured_triangle_narrowed_rows += 1;
+    } else {
+        stats.textured_triangle_full_scan_rows += 1;
+    }
+}
+
+fn record_white_constant_texel_scan_run(
+    start_x: usize,
+    end_x: usize,
+    scan_runs: &mut usize,
+    scan_span: &mut Option<(usize, usize)>,
+) {
+    *scan_runs += 1;
+    if *scan_runs == 1 {
+        *scan_span = Some((start_x, end_x));
+    }
+}
+
+fn record_white_constant_texel_endpoint_row(
+    stats: &mut RasterStats,
+    vertices: TriangleVertices<'_>,
+    raster: &TriangleRasterState,
+    y: usize,
+    x_range: (usize, usize),
+    scan_result: (usize, Option<(usize, usize)>),
+) {
+    let (start_x, end_x) = x_range;
+    let (scan_runs, scan_span) = scan_result;
+    let endpoints = triangle_row_endpoints(TriangleRowSearch {
+        vertices,
+        coverage: TriangleCoverage {
+            inv_area: raster.inv_area,
+            includes_boundary: TriangleBoundaryIncludes {
+                edge0: raster.edge0_includes_boundary,
+                edge1: raster.edge1_includes_boundary,
+                edge2: raster.edge2_includes_boundary,
+            },
+        },
+        y,
+        candidate_start_x: start_x,
+        candidate_end_x: end_x,
+        probe_start_x: start_x,
+        probe_end_x: end_x,
+        hinted: false,
+        collect_stats: true,
+    });
+
+    stats.constant_texel_textured_triangle_white_endpoint_rows += 1;
+    stats.constant_texel_textured_triangle_white_endpoint_probe_px += endpoints.endpoint_probe_px;
+    stats.constant_texel_textured_triangle_white_scan_runs += scan_runs;
+    if let Some((endpoint_start, endpoint_end)) = endpoints.span {
+        stats.constant_texel_textured_triangle_white_endpoint_span_px +=
+            endpoint_end - endpoint_start;
+    } else {
+        stats.constant_texel_textured_triangle_white_endpoint_empty_rows += 1;
+    }
+
+    let matches = match scan_runs {
+        0 => endpoints.span.is_none(),
+        1 => endpoints.span == scan_span,
+        _ => false,
+    };
+    if matches {
+        stats.constant_texel_textured_triangle_white_endpoint_match_rows += 1;
+    } else {
+        stats.constant_texel_textured_triangle_white_endpoint_mismatch_rows += 1;
+    }
+    if scan_runs > 1 {
+        stats.constant_texel_textured_triangle_white_scan_multi_run_rows += 1;
     }
 }
 
@@ -1149,6 +1235,17 @@ impl TriangleRasterState {
             edge2_includes_boundary: edge_includes_boundary(v0.pos, v1.pos, area),
         }
     }
+}
+
+fn triangle_raster_state_covers_pixel(
+    raster: &TriangleRasterState,
+    w0: f32,
+    w1: f32,
+    w2: f32,
+) -> bool {
+    edge_covers_pixel(w0, raster.edge0_includes_boundary)
+        && edge_covers_pixel(w1, raster.edge1_includes_boundary)
+        && edge_covers_pixel(w2, raster.edge2_includes_boundary)
 }
 
 // White constant-texel triangles compute each pixel color from the actual scanline start plus
