@@ -299,12 +299,13 @@ impl Framebuffer {
                 pan.reported_yoffset = Some(reported.yoffset);
                 pan.pan_elapsed = stage_start.elapsed().as_micros();
                 self.var = reported;
-                self.pan_present.record_success(hidden_viewport.yoffset);
+                self.pan_present.record_reported_yoffset(reported.yoffset);
                 Ok(PresentOutcome { blit_format, pan })
             }
             Ok(reported) => {
                 pan.reported_yoffset = Some(reported.yoffset);
                 pan.pan_elapsed = stage_start.elapsed().as_micros();
+                self.pan_present.record_reported_yoffset(reported.yoffset);
                 self.pan_present.disable("reported-yoffset-mismatch");
                 pan.fallback_reason = "reported-yoffset-mismatch";
                 self.var = reported;
@@ -317,6 +318,8 @@ impl Framebuffer {
                 self.pan_present.disable("pan-ioctl-failed");
                 pan.fallback_reason = "pan-ioctl-failed";
                 self.var = get_var_info(&self.file)?;
+                pan.reported_yoffset = Some(self.var.yoffset);
+                self.pan_present.record_reported_yoffset(self.var.yoffset);
                 let fallback_viewport = visible_viewport(&self.fix, &self.var)?;
                 let blit_format = self.blit_rgba_surface(surface, &fallback_viewport)?;
                 Ok(PresentOutcome { blit_format, pan })
@@ -967,7 +970,7 @@ impl PanPresentState {
         }
     }
 
-    fn record_success(&mut self, yoffset: u32) {
+    fn record_reported_yoffset(&mut self, yoffset: u32) {
         if yoffset != self.original_yoffset {
             self.changed_yoffset = true;
         }
@@ -1625,6 +1628,45 @@ mod tests {
     }
 
     #[test]
+    fn pan_present_restore_needed_after_accepted_changed_yoffset() {
+        let mut state = test_pan_present_state(0);
+
+        state.record_reported_yoffset(480);
+
+        assert!(state.needs_restore());
+    }
+
+    #[test]
+    fn pan_present_restore_needed_after_mismatched_success_changed_yoffset() {
+        let mut state = test_pan_present_state(0);
+
+        state.record_reported_yoffset(240);
+        state.disable("reported-yoffset-mismatch");
+
+        assert!(state.needs_restore());
+    }
+
+    #[test]
+    fn pan_present_restore_needed_after_ioctl_error_observes_changed_yoffset() {
+        let mut state = test_pan_present_state(0);
+
+        state.disable("pan-ioctl-failed");
+        state.record_reported_yoffset(480);
+
+        assert!(state.needs_restore());
+    }
+
+    #[test]
+    fn pan_present_restore_not_needed_when_reported_yoffset_is_original() {
+        let mut state = test_pan_present_state(480);
+
+        state.record_reported_yoffset(480);
+        state.disable("reported-yoffset-mismatch");
+
+        assert!(!state.needs_restore());
+    }
+
+    #[test]
     fn visible_viewport_uses_panned_page_base_offset() {
         let fix = FbFixScreeninfo {
             line_length: 2_560,
@@ -1972,6 +2014,15 @@ mod tests {
             yoffset,
             bits_per_pixel: 32,
             ..Default::default()
+        }
+    }
+
+    fn test_pan_present_state(original_yoffset: u32) -> PanPresentState {
+        PanPresentState {
+            requested: true,
+            disabled_reason: None,
+            original_yoffset,
+            changed_yoffset: false,
         }
     }
 
