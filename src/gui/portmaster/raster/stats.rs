@@ -72,6 +72,10 @@ pub(in crate::gui::portmaster) struct RasterStats {
         usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls:
         usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls:
+        usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_candidate_px: usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_covered_px: usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_white_texel_covered_px: usize,
@@ -121,7 +125,7 @@ impl RasterStats {
 
     pub(in crate::gui::portmaster) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} textured_rect_constant_texel_calls={} textured_rect_constant_texel_px={} textured_rect_constant_texel_us={} textured_rect_sampled_calls={} textured_rect_sampled_px={} textured_rect_sampled_us={} textured_rect_white_texel_calls={} textured_rect_white_texel_px={} textured_rect_uniform_color_calls={} textured_rect_uniform_color_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} solid_fan_edge_intersections={} solid_fan_endpoint_probe_px={} solid_fan_fallback_rows={} solid_fan_edge_precompute_calls={} solid_fan_edge_precompute_edges={} solid_fan_edge_precompute_used_rows={} solid_fan_edge_precompute_fallback_budget={} solid_fan_edge_precompute_fallback_non_finite={} solid_fan_edge_precompute_old_solver_rows={} solid_fan_span_cache_hits={} solid_fan_span_cache_misses={} solid_fan_span_cache_hit_rows={} solid_fan_span_cache_hit_px={} solid_fan_span_cache_stored_rows={} solid_fan_span_cache_rejected_too_many_rows={} solid_fan_span_cache_resident_entries={} solid_fan_span_cache_resident_rows={} solid_fan_span_cache_total_evictions={} solid_fan_span_cache_row_budget_evictions={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_white_alpha_only_eligible_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={} sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
+            "software renderer raster_stats solid_rect_calls={} solid_rect_px={} textured_rect_calls={} textured_rect_px={} textured_rect_constant_texel_calls={} textured_rect_constant_texel_px={} textured_rect_constant_texel_us={} textured_rect_sampled_calls={} textured_rect_sampled_px={} textured_rect_sampled_us={} textured_rect_white_texel_calls={} textured_rect_white_texel_px={} textured_rect_uniform_color_calls={} textured_rect_uniform_color_px={} solid_triangle_calls={} solid_triangle_bbox_px={} solid_triangle_covered_px={} solid_triangle_span_rows={} solid_triangle_candidate_px={} solid_triangle_hint_rows={} solid_triangle_hint_fallback_rows={} solid_triangle_hint_build_us={} solid_triangle_endpoint_search_us={} solid_triangle_blend_span_us={} solid_triangle_blend_span_calls={} solid_triangle_span_px={} solid_triangle_endpoint_probe_px={} solid_triangle_hint_probe_px={} solid_triangle_canary_probe_px={} solid_triangle_fallback_probe_px={} solid_triangle_direct_probe_px={} solid_triangle_hint_candidate_px={} solid_triangle_narrowed_rows={} solid_triangle_full_scan_rows={} solid_fan_calls={} solid_fan_triangles={} solid_fan_rows={} solid_fan_px={} solid_fan_edge_intersections={} solid_fan_endpoint_probe_px={} solid_fan_fallback_rows={} solid_fan_edge_precompute_calls={} solid_fan_edge_precompute_edges={} solid_fan_edge_precompute_used_rows={} solid_fan_edge_precompute_fallback_budget={} solid_fan_edge_precompute_fallback_non_finite={} solid_fan_edge_precompute_old_solver_rows={} solid_fan_span_cache_hits={} solid_fan_span_cache_misses={} solid_fan_span_cache_hit_rows={} solid_fan_span_cache_hit_px={} solid_fan_span_cache_stored_rows={} solid_fan_span_cache_rejected_too_many_rows={} solid_fan_span_cache_resident_entries={} solid_fan_span_cache_resident_rows={} solid_fan_span_cache_total_evictions={} solid_fan_span_cache_row_budget_evictions={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={} textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_white_alpha_only_eligible_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={} sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}",
             self.solid_rect_calls,
             self.solid_rect_px,
             self.textured_rect_calls,
@@ -190,6 +194,8 @@ impl RasterStats {
             self.constant_texel_textured_triangle_non_white_texel_calls,
             self.constant_texel_textured_triangle_white_alpha_only_eligible_calls,
             self.constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls,
+            self.constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls,
+            self.constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls,
             self.constant_texel_textured_triangle_candidate_px,
             self.constant_texel_textured_triangle_covered_px,
             self.constant_texel_textured_triangle_white_texel_covered_px,
@@ -221,9 +227,8 @@ impl RasterStats {
 mod tests {
     use super::RasterStats;
 
-    #[test]
-    fn raster_stats_log_line_includes_all_counters() {
-        let stats = RasterStats {
+    fn populated_raster_stats() -> RasterStats {
+        RasterStats {
             solid_rect_calls: 1,
             solid_rect_px: 2,
             textured_rect_calls: 3,
@@ -292,6 +297,8 @@ mod tests {
             constant_texel_textured_triangle_non_white_texel_calls: 62,
             constant_texel_textured_triangle_white_alpha_only_eligible_calls: 90,
             constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls: 91,
+            constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls: 92,
+            constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls: 93,
             constant_texel_textured_triangle_candidate_px: 54,
             constant_texel_textured_triangle_covered_px: 55,
             constant_texel_textured_triangle_white_texel_covered_px: 63,
@@ -315,11 +322,23 @@ mod tests {
             opaque_px: 40,
             translucent_px: 41,
             transparent_px: 42,
-        };
+        }
+    }
 
-        assert_eq!(
-            stats.log_line(),
-            "software renderer raster_stats solid_rect_calls=1 solid_rect_px=2 textured_rect_calls=3 textured_rect_px=4 textured_rect_constant_texel_calls=43 textured_rect_constant_texel_px=44 textured_rect_constant_texel_us=45 textured_rect_sampled_calls=46 textured_rect_sampled_px=47 textured_rect_sampled_us=48 textured_rect_white_texel_calls=49 textured_rect_white_texel_px=50 textured_rect_uniform_color_calls=51 textured_rect_uniform_color_px=52 solid_triangle_calls=5 solid_triangle_bbox_px=6 solid_triangle_covered_px=7 solid_triangle_span_rows=8 solid_triangle_candidate_px=9 solid_triangle_hint_rows=10 solid_triangle_hint_fallback_rows=11 solid_triangle_hint_build_us=12 solid_triangle_endpoint_search_us=13 solid_triangle_blend_span_us=14 solid_triangle_blend_span_calls=15 solid_triangle_span_px=16 solid_triangle_endpoint_probe_px=17 solid_triangle_hint_probe_px=18 solid_triangle_canary_probe_px=19 solid_triangle_fallback_probe_px=20 solid_triangle_direct_probe_px=21 solid_triangle_hint_candidate_px=22 solid_triangle_narrowed_rows=23 solid_triangle_full_scan_rows=24 solid_fan_calls=25 solid_fan_triangles=26 solid_fan_rows=27 solid_fan_px=28 solid_fan_edge_intersections=29 solid_fan_endpoint_probe_px=30 solid_fan_fallback_rows=31 solid_fan_edge_precompute_calls=70 solid_fan_edge_precompute_edges=71 solid_fan_edge_precompute_used_rows=72 solid_fan_edge_precompute_fallback_budget=73 solid_fan_edge_precompute_fallback_non_finite=74 solid_fan_edge_precompute_old_solver_rows=75 solid_fan_span_cache_hits=76 solid_fan_span_cache_misses=77 solid_fan_span_cache_hit_rows=78 solid_fan_span_cache_hit_px=79 solid_fan_span_cache_stored_rows=80 solid_fan_span_cache_rejected_too_many_rows=81 solid_fan_span_cache_resident_entries=82 solid_fan_span_cache_resident_rows=83 solid_fan_span_cache_total_evictions=84 solid_fan_span_cache_row_budget_evictions=85 textured_triangle_calls=32 textured_triangle_bbox_px=33 textured_triangle_covered_px=34 textured_triangle_candidate_px=35 textured_triangle_narrowed_rows=36 textured_triangle_full_scan_rows=37 constant_texel_textured_triangle_calls=53 constant_texel_textured_triangle_white_texel_calls=61 constant_texel_textured_triangle_non_white_texel_calls=62 constant_texel_textured_triangle_white_alpha_only_eligible_calls=90 constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls=91 constant_texel_textured_triangle_candidate_px=54 constant_texel_textured_triangle_covered_px=55 constant_texel_textured_triangle_white_texel_covered_px=63 constant_texel_textured_triangle_non_white_texel_covered_px=64 constant_texel_textured_triangle_opaque_px=65 constant_texel_textured_triangle_translucent_px=66 constant_texel_textured_triangle_transparent_px=67 constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls=86 constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px=87 constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls=88 constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px=89 constant_texel_textured_triangle_us=56 constant_texel_textured_triangle_white_texel_us=68 constant_texel_textured_triangle_non_white_texel_us=69 sampled_textured_triangle_calls=57 sampled_textured_triangle_candidate_px=58 sampled_textured_triangle_covered_px=59 sampled_textured_triangle_us=60 degenerate_triangle_skips=38 fully_clipped_triangle_skips=39 opaque_px=40 translucent_px=41 transparent_px=42"
+    #[test]
+    fn raster_stats_log_line_includes_all_counters() {
+        let stats = populated_raster_stats();
+
+        let line = stats.log_line();
+        assert!(line.starts_with("software renderer raster_stats solid_rect_calls=1 "));
+        assert!(
+            line.contains("constant_texel_textured_triangle_white_alpha_only_eligible_calls=90")
         );
+        assert!(line.contains(
+            "constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls=91 \
+             constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls=92 \
+             constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls=93 \
+             constant_texel_textured_triangle_candidate_px=54"
+        ));
     }
 }
