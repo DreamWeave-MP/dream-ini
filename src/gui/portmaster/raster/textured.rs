@@ -626,8 +626,13 @@ fn emit_white_constant_texel_endpoint_row_with_stats(
     color_step: [f32; 4],
     stats: &mut RasterStats,
 ) {
-    let endpoints =
-        white_constant_texel_endpoint_span(vertices, raster, row.y, (row.start_x, row.end_x), true);
+    let endpoints = white_constant_texel_endpoint_span(
+        vertices,
+        raster,
+        row.y,
+        (row.start_x, row.end_x),
+        false,
+    );
     record_white_constant_texel_endpoint_render_row(stats, &endpoints);
     if let Some((span_start, span_end)) = endpoints.span {
         emit_white_constant_texel_run_with_stats(
@@ -651,8 +656,13 @@ fn emit_white_constant_texel_alpha_only_endpoint_row_with_stats(
     alpha_step: f32,
     stats: &mut RasterStats,
 ) {
-    let endpoints =
-        white_constant_texel_endpoint_span(vertices, raster, row.y, (row.start_x, row.end_x), true);
+    let endpoints = white_constant_texel_endpoint_span(
+        vertices,
+        raster,
+        row.y,
+        (row.start_x, row.end_x),
+        false,
+    );
     record_white_constant_texel_endpoint_render_row(stats, &endpoints);
     if let Some((span_start, span_end)) = endpoints.span {
         emit_white_constant_texel_alpha_only_run_with_stats(
@@ -710,15 +720,10 @@ fn record_white_constant_texel_endpoint_render_row(
     stats: &mut RasterStats,
     endpoints: &super::coverage::TriangleRowEndpoints,
 ) {
-    stats.constant_texel_textured_triangle_white_endpoint_rows += 1;
-    stats.constant_texel_textured_triangle_white_endpoint_probe_px += endpoints.endpoint_probe_px;
     stats.constant_texel_textured_triangle_white_endpoint_render_rows += 1;
     if let Some((endpoint_start, endpoint_end)) = endpoints.span {
-        let len = endpoint_end - endpoint_start;
-        stats.constant_texel_textured_triangle_white_endpoint_span_px += len;
-        stats.constant_texel_textured_triangle_white_endpoint_render_px += len;
-    } else {
-        stats.constant_texel_textured_triangle_white_endpoint_empty_rows += 1;
+        stats.constant_texel_textured_triangle_white_endpoint_render_px +=
+            endpoint_end - endpoint_start;
     }
 }
 
