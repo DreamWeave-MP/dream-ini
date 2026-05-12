@@ -8,6 +8,7 @@ const MAX_TEXTURE_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Debug, Default)]
 pub(super) struct TextureStore {
     textures: HashMap<egui::TextureId, TextureImage>,
+    bytes_used: usize,
 }
 
 impl TextureStore {
@@ -41,14 +42,14 @@ impl TextureStore {
                 partial: true,
             })
         } else {
-            let bytes_used = self.bytes_used();
             let old_len = self
                 .textures
                 .get(&id)
                 .map_or(0, |texture| texture.pixels.len());
-            check_texture_budget(bytes_used, old_len, metadata.byte_len)?;
+            let bytes_used = check_texture_budget(self.bytes_used, old_len, metadata.byte_len)?;
             let image = TextureImage::from_image_data(&delta.image, metadata);
             self.textures.insert(id, image);
+            self.bytes_used = bytes_used;
             Ok(TextureSetStats {
                 byte_len: metadata.byte_len,
                 partial: false,
@@ -57,7 +58,12 @@ impl TextureStore {
     }
 
     pub(super) fn free(&mut self, id: egui::TextureId) {
-        self.textures.remove(&id);
+        if let Some(texture) = self.textures.remove(&id) {
+            self.bytes_used = self
+                .bytes_used
+                .checked_sub(texture.pixels.len())
+                .expect("texture byte accounting underflow");
+        }
     }
 
     pub(super) fn get(&self, id: &egui::TextureId) -> Option<&TextureImage> {
@@ -69,10 +75,7 @@ impl TextureStore {
     }
 
     pub(super) fn bytes_used(&self) -> usize {
-        self.textures
-            .values()
-            .map(|texture| texture.pixels.len())
-            .sum()
+        self.bytes_used
     }
 }
 
@@ -193,7 +196,7 @@ impl TextureImage {
     }
 }
 
-fn check_texture_budget(bytes_used: usize, old_len: usize, new_len: usize) -> io::Result<()> {
+fn check_texture_budget(bytes_used: usize, old_len: usize, new_len: usize) -> io::Result<usize> {
     let used = bytes_used
         .checked_sub(old_len)
         .and_then(|bytes| bytes.checked_add(new_len))
@@ -203,7 +206,7 @@ fn check_texture_budget(bytes_used: usize, old_len: usize, new_len: usize) -> io
             "texture byte budget exceeded: {used} > {MAX_TEXTURE_BYTES}"
         )));
     }
-    Ok(())
+    Ok(used)
 }
 
 #[cfg(test)]
@@ -263,23 +266,67 @@ mod tests {
     #[test]
     fn texture_store_rejects_over_budget_before_storing() {
         let mut store = TextureStore::default();
+        let small_image = egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]);
+        let small_delta =
+            egui::epaint::ImageDelta::full(small_image, egui::TextureOptions::NEAREST);
+        store
+            .set(egui::TextureId::Managed(0), &small_delta)
+            .expect("small texture fits budget");
         let pixel_count = (MAX_TEXTURE_BYTES / 4) + 1;
         let image =
             egui::ColorImage::new([pixel_count, 1], vec![egui::Color32::WHITE; pixel_count]);
         let delta = egui::epaint::ImageDelta::full(image, egui::TextureOptions::NEAREST);
 
         let error = store
-            .set(egui::TextureId::Managed(0), &delta)
+            .set(egui::TextureId::Managed(1), &delta)
             .expect_err("over-budget texture");
 
         assert_eq!(
             error.to_string(),
             format!(
                 "texture byte budget exceeded: {} > {MAX_TEXTURE_BYTES}",
-                MAX_TEXTURE_BYTES + 4
+                MAX_TEXTURE_BYTES + 8
             )
         );
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.bytes_used(), 4);
+    }
+
+    #[test]
+    fn texture_store_tracks_bytes_for_set_replace_partial_update_and_free() {
+        let mut store = TextureStore::default();
+        let id = egui::TextureId::Managed(0);
+        let full_image = egui::ColorImage::new([2, 2], vec![egui::Color32::WHITE; 4]);
+        let full_delta = egui::epaint::ImageDelta::full(full_image, egui::TextureOptions::NEAREST);
+        store.set(id, &full_delta).expect("full texture set");
+
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.bytes_used(), 16);
+
+        let replacement_image = egui::ColorImage::new([3, 1], vec![egui::Color32::BLACK; 3]);
+        let replacement_delta =
+            egui::epaint::ImageDelta::full(replacement_image, egui::TextureOptions::NEAREST);
+        store
+            .set(id, &replacement_delta)
+            .expect("replacement texture set");
+
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.bytes_used(), 12);
+
+        let partial_image = egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]);
+        let partial_delta =
+            egui::epaint::ImageDelta::partial([1, 0], partial_image, egui::TextureOptions::NEAREST);
+        store
+            .set(id, &partial_delta)
+            .expect("partial texture update");
+
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.bytes_used(), 12);
+
+        store.free(id);
+
         assert_eq!(store.len(), 0);
+        assert_eq!(store.bytes_used(), 0);
     }
 
     #[test]
