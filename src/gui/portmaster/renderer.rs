@@ -16,7 +16,7 @@ use super::raster::{
 use super::surface::SoftwareSurface;
 use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
 use super::{GuiFrame, GuiShell};
-use fan::{SolidFanPolygonScratch, SolidFanRun, solid_fan_run};
+use fan::{FanBoundaryKey, SolidFanPolygonScratch, SolidFanRun, solid_fan_run};
 use quad::try_rasterize_quad_window;
 use stats::{
     PrimitiveStats, RasterTimings, SolidFanRasterRecord, SolidFanRasterWork, TriangleSource,
@@ -27,6 +27,7 @@ pub(super) struct SoftwareRenderer {
     surface: SoftwareSurface,
     textures: TextureStore,
     solid_fan_polygon_scratch: Vec<usize>,
+    solid_fan_seen_boundary_scratch: Vec<FanBoundaryKey>,
     solid_fan_span_cache: SolidFanSpanCache,
 }
 
@@ -38,6 +39,7 @@ impl Default for SoftwareRenderer {
             surface: SoftwareSurface::default(),
             textures: TextureStore::default(),
             solid_fan_polygon_scratch: Vec::with_capacity(SOLID_FAN_POLYGON_SCRATCH_CAPACITY),
+            solid_fan_seen_boundary_scratch: Vec::with_capacity(SOLID_FAN_POLYGON_SCRATCH_CAPACITY),
             solid_fan_span_cache: SolidFanSpanCache::default(),
         }
     }
@@ -209,9 +211,11 @@ impl SoftwareRenderer {
             return Ok(());
         }
         self.solid_fan_polygon_scratch.clear();
+        self.solid_fan_seen_boundary_scratch.clear();
         let mut context = MeshRasterContext {
             surface: &mut self.surface,
             fan_polygon_scratch: &mut self.solid_fan_polygon_scratch,
+            fan_seen_boundary_scratch: &mut self.solid_fan_seen_boundary_scratch,
             fan_span_cache: &mut self.solid_fan_span_cache,
             mesh,
             texture,
@@ -258,6 +262,7 @@ fn rasterize_mesh_contents(
 struct MeshRasterContext<'a> {
     surface: &'a mut SoftwareSurface,
     fan_polygon_scratch: &'a mut Vec<usize>,
+    fan_seen_boundary_scratch: &'a mut Vec<FanBoundaryKey>,
     fan_span_cache: &'a mut SolidFanSpanCache,
     mesh: &'a egui::Mesh,
     texture: &'a TextureImage,
@@ -463,6 +468,7 @@ impl MeshRasterContext<'_> {
             index_offset,
             SolidFanPolygonScratch {
                 polygon: &mut *self.fan_polygon_scratch,
+                seen_boundaries: &mut *self.fan_seen_boundary_scratch,
                 budget: self.solid_fan_polygon_scratch_budget,
             },
             stats.as_deref_mut().map(|stats| &mut stats.solid_fan_probe),
@@ -914,6 +920,7 @@ mod tests {
             let mut context = MeshRasterContext {
                 surface: &mut renderer.surface,
                 fan_polygon_scratch: &mut renderer.solid_fan_polygon_scratch,
+                fan_seen_boundary_scratch: &mut renderer.solid_fan_seen_boundary_scratch,
                 fan_span_cache: &mut renderer.solid_fan_span_cache,
                 mesh: &mesh,
                 texture: renderer.textures.get(&texture_id).expect("stored texture"),

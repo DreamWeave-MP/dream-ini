@@ -17,6 +17,7 @@ pub(super) struct SolidFanRun {
 
 pub(super) struct SolidFanPolygonScratch<'a> {
     pub(super) polygon: &'a mut Vec<usize>,
+    pub(super) seen_boundaries: &'a mut Vec<FanBoundaryKey>,
     pub(super) budget: usize,
 }
 
@@ -27,6 +28,18 @@ struct FanCandidate {
     center_pos: egui::Pos2,
     center_vertex_index: usize,
     triangle_count: usize,
+}
+
+impl FanCandidate {
+    fn from_scan(seed: &CheapFanSeed<'_>, center_slot: usize, triangle_count: usize) -> Self {
+        Self {
+            center_slot,
+            center_index: seed.center_index,
+            center_pos: seed.center_pos,
+            center_vertex_index: seed.center_vertex_index,
+            triangle_count,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -43,16 +56,6 @@ struct CheapFanSeed<'a> {
     previous_boundary: FanVertex<'a>,
     current_boundary: FanVertex<'a>,
     expected_area_sign: i8,
-}
-
-#[derive(Clone, Copy)]
-struct FanBoundarySeenContext<'a> {
-    mesh: &'a egui::Mesh,
-    index_offset: usize,
-    triangle_count: usize,
-    center_slot: usize,
-    center_index: u32,
-    center_pos: egui::Pos2,
 }
 
 const SOLID_FAN_MIN_TRIANGLES: usize = 4;
@@ -99,8 +102,14 @@ fn solid_fan_run_for_center(
     polygon_scratch: &mut SolidFanPolygonScratch<'_>,
     mut stats: Option<&mut SolidFanProbeStats>,
 ) -> io::Result<Option<SolidFanRun>> {
-    let Some(candidate) =
-        cheap_solid_fan_candidate(mesh, index_offset, center_slot, stats.as_deref_mut())?
+    let Some(candidate) = cheap_solid_fan_candidate(
+        mesh,
+        index_offset,
+        center_slot,
+        polygon_scratch.seen_boundaries,
+        polygon_scratch.budget,
+        stats.as_deref_mut(),
+    )?
     else {
         return Ok(None);
     };
@@ -140,6 +149,8 @@ fn cheap_solid_fan_candidate(
     mesh: &egui::Mesh,
     index_offset: usize,
     center_slot: usize,
+    seen_boundaries: &mut Vec<FanBoundaryKey>,
+    seen_boundary_budget: usize,
     mut stats: Option<&mut SolidFanProbeStats>,
 ) -> io::Result<Option<FanCandidate>> {
     if let Some(stats) = stats.as_deref_mut() {
@@ -149,14 +160,20 @@ fn cheap_solid_fan_candidate(
     else {
         return Ok(None);
     };
-    let CheapFanSeed {
-        center_index,
-        center_pos,
-        center_vertex_index,
-        mut previous_boundary,
-        mut current_boundary,
-        expected_area_sign,
-    } = seed;
+    let center_index = seed.center_index;
+    let center_pos = seed.center_pos;
+    let expected_area_sign = seed.expected_area_sign;
+    let mut previous_boundary = seed.previous_boundary;
+    let mut current_boundary = seed.current_boundary;
+    if !initialize_seen_boundaries(
+        seen_boundaries,
+        previous_boundary,
+        current_boundary,
+        seen_boundary_budget,
+        stats.as_deref_mut(),
+    ) {
+        return Ok(None);
+    }
     let mut triangle_count = 1;
     let mut offset = index_offset + 3;
     let mut reject_reason = None;
@@ -183,15 +200,7 @@ fn cheap_solid_fan_candidate(
             reject_reason = Some(SolidFanProbeRejectReason::NoCandidate);
             break;
         };
-        let context = FanBoundarySeenContext {
-            mesh,
-            index_offset,
-            triangle_count,
-            center_slot,
-            center_index,
-            center_pos,
-        };
-        if fan_boundary_seen(context, next_boundary, stats.as_deref_mut())? {
+        if fan_boundary_seen(seen_boundaries, next_boundary, stats.as_deref_mut()) {
             reject_reason = Some(SolidFanProbeRejectReason::RepeatedBoundary);
             break;
         }
@@ -203,11 +212,24 @@ fn cheap_solid_fan_candidate(
             reject_reason = Some(SolidFanProbeRejectReason::WindingMismatchOrNonFinite);
             break;
         }
+        if triangle_count + 3 > seen_boundary_budget {
+            reject_reason = Some(SolidFanProbeRejectReason::ScratchOverflow);
+            break;
+        }
 
         previous_boundary = current_boundary;
         current_boundary = next_boundary;
+        seen_boundaries.push(FanBoundaryKey::from(next_boundary));
         triangle_count += 1;
         offset += 3;
+    }
+
+    if matches!(
+        reject_reason,
+        Some(SolidFanProbeRejectReason::ScratchOverflow)
+    ) {
+        record_scratch_overflow(stats.as_deref_mut(), triangle_count);
+        return Ok(None);
     }
 
     if triangle_count < SOLID_FAN_MIN_TRIANGLES
@@ -227,13 +249,35 @@ fn cheap_solid_fan_candidate(
     if let Some(stats) = stats {
         stats.record_candidate_triangles(triangle_count);
     }
-    Ok(Some(FanCandidate {
+    Ok(Some(FanCandidate::from_scan(
+        &seed,
         center_slot,
-        center_index,
-        center_pos,
-        center_vertex_index,
         triangle_count,
-    }))
+    )))
+}
+
+fn initialize_seen_boundaries(
+    seen_boundaries: &mut Vec<FanBoundaryKey>,
+    previous_boundary: FanVertex<'_>,
+    current_boundary: FanVertex<'_>,
+    seen_boundary_budget: usize,
+    stats: Option<&mut SolidFanProbeStats>,
+) -> bool {
+    seen_boundaries.clear();
+    if seen_boundary_budget < 2 {
+        record_scratch_overflow(stats, 1);
+        return false;
+    }
+    seen_boundaries.push(FanBoundaryKey::from(previous_boundary));
+    seen_boundaries.push(FanBoundaryKey::from(current_boundary));
+    true
+}
+
+fn record_scratch_overflow(stats: Option<&mut SolidFanProbeStats>, triangle_count: usize) {
+    if let Some(stats) = stats {
+        stats.record_reject(SolidFanProbeRejectReason::ScratchOverflow);
+        stats.record_candidate_triangles(triangle_count);
+    }
 }
 
 fn cheap_solid_fan_seed<'a>(
@@ -275,48 +319,28 @@ fn cheap_solid_fan_seed<'a>(
 }
 
 fn fan_boundary_seen(
-    context: FanBoundarySeenContext<'_>,
+    seen_boundaries: &[FanBoundaryKey],
     boundary: FanVertex<'_>,
     mut stats: Option<&mut SolidFanProbeStats>,
-) -> io::Result<bool> {
+) -> bool {
     if let Some(stats) = stats.as_deref_mut() {
         stats.repeated_boundary_checks += 1;
-        stats.repeated_boundary_comparisons += 2;
     }
-    let Some(first) = fan_triangle_at(context.mesh, context.index_offset)? else {
-        return Ok(false);
-    };
-    let [first_boundary, mut current_boundary] = fan_boundaries(first, context.center_slot);
-    if same_fan_vertex(first_boundary, boundary) || same_fan_vertex(current_boundary, boundary) {
-        return Ok(true);
-    }
-
-    let mut offset = context.index_offset + 3;
-    for _ in 1..context.triangle_count {
-        let Some(triangle) = fan_triangle_at(context.mesh, offset)? else {
-            return Ok(false);
-        };
-        let Some(candidate_center_slot) =
-            candidate_center_slot(triangle, context.center_index, context.center_pos)
-        else {
-            return Ok(false);
-        };
-        let Some(next_boundary) = next_fan_boundary(
-            fan_boundaries(triangle, candidate_center_slot),
-            current_boundary,
-        ) else {
-            return Ok(false);
-        };
-        if let Some(stats) = stats.as_deref_mut() {
-            stats.repeated_boundary_comparisons += 1;
+    let boundary = FanBoundaryKey::from(boundary);
+    let mut comparisons = 0;
+    for seen_boundary in seen_boundaries {
+        comparisons += 1;
+        if *seen_boundary == boundary {
+            if let Some(stats) = stats {
+                stats.repeated_boundary_comparisons += comparisons;
+            }
+            return true;
         }
-        if same_fan_vertex(next_boundary, boundary) {
-            return Ok(true);
-        }
-        current_boundary = next_boundary;
-        offset += 3;
     }
-    Ok(false)
+    if let Some(stats) = stats {
+        stats.repeated_boundary_comparisons += comparisons;
+    }
+    false
 }
 
 fn solid_fan_polygon(
@@ -531,6 +555,29 @@ fn non_zero_float_direction(value: f32) -> Option<std::cmp::Ordering> {
 fn fan_edge(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
     (c.x - a.x).mul_add(b.y - a.y, -((c.y - a.y) * (b.x - a.x)))
 }
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FanBoundaryKey {
+    index: u32,
+    pos: egui::Pos2,
+}
+
+impl From<FanVertex<'_>> for FanBoundaryKey {
+    fn from(vertex: FanVertex<'_>) -> Self {
+        Self {
+            index: vertex.index,
+            pos: vertex.vertex.pos,
+        }
+    }
+}
+
+impl PartialEq for FanBoundaryKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index && same_fan_pos(self.pos, other.pos)
+    }
+}
+
+impl Eq for FanBoundaryKey {}
 
 #[derive(Clone, Copy)]
 struct FanVertex<'a> {
