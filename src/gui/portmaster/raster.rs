@@ -28,6 +28,7 @@ use math::{color_to_array, modulate_color};
 #[cfg(test)]
 use math::{edge_covers_pixel, edge_includes_boundary};
 pub(super) use quad::{
+    ClearElisionQuadEvidence, ClearElisionQuadRejection, clear_elision_quad_evidence,
     is_axis_aligned_quad, rasterize_axis_aligned_solid_quad, rasterize_axis_aligned_textured_quad,
     textured_quad_fast_path_rejection,
 };

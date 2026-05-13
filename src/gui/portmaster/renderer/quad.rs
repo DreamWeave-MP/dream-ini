@@ -106,7 +106,7 @@ pub(super) fn try_rasterize_quad_window(
     Ok(false)
 }
 
-fn has_four_unique_indices(indices: &[u32]) -> bool {
+pub(super) fn has_four_unique_indices(indices: &[u32]) -> bool {
     let mut unique = [0; 4];
     let mut count = 0;
     for &index in indices {

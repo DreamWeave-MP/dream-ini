@@ -10,14 +10,15 @@ mod stats;
 use super::log::write_log;
 use super::pacing::format_repaint_delay;
 use super::raster::{
-    ClipBounds, RasterStats, SolidFanRasterParams, SolidFanSpanCache, classify_triangle,
-    polygon_raster_bounds, rasterize_solid_fan_with_cache, rasterize_triangle, usize_to_f32,
+    ClearElisionQuadRejection, ClipBounds, RasterStats, SolidFanRasterParams, SolidFanSpanCache,
+    classify_triangle, clear_elision_quad_evidence, polygon_raster_bounds,
+    rasterize_solid_fan_with_cache, rasterize_triangle, usize_to_f32,
 };
 use super::surface::SoftwareSurface;
 use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
 use super::{GuiFrame, GuiShell};
 use fan::{FanBoundaryKey, SolidFanPolygonScratch, SolidFanRun, solid_fan_run};
-use quad::try_rasterize_quad_window;
+use quad::{has_four_unique_indices, try_rasterize_quad_window};
 use stats::{
     PrimitiveStats, RasterTimings, SolidFanRasterRecord, SolidFanRasterWork, TriangleSource,
 };
@@ -95,6 +96,7 @@ impl SoftwareRenderer {
         let mut primitive_stats = collect_stats.then(PrimitiveStats::default);
         let mut raster_stats = collect_stats.then(RasterStats::default);
         let mut raster_timings = collect_stats.then(RasterTimings::default);
+        let clear_elision_stats = collect_stats.then(|| self.probe_clear_elision(&primitives));
         let rasterize_result = self.rasterize(
             &primitives,
             primitive_stats.as_mut(),
@@ -105,6 +107,7 @@ impl SoftwareRenderer {
         log_raster_stats(
             frame,
             &self.surface,
+            clear_elision_stats.as_ref(),
             primitive_stats.as_ref(),
             raster_stats.as_ref(),
             raster_timings.as_ref(),
@@ -145,6 +148,44 @@ impl SoftwareRenderer {
 
     pub(super) const fn surface(&self) -> &SoftwareSurface {
         &self.surface
+    }
+
+    fn probe_clear_elision(&self, primitives: &[egui::ClippedPrimitive]) -> ClearElisionFrameStats {
+        let mut stats = ClearElisionFrameStats {
+            probe_frames: 1,
+            ..Default::default()
+        };
+        for primitive in primitives {
+            let egui::epaint::Primitive::Mesh(mesh) = &primitive.primitive else {
+                stats.reject_first_visible_not_rect = 1;
+                return stats;
+            };
+            let Some(texture) = self.textures.get(&mesh.texture_id) else {
+                continue;
+            };
+            let Ok(clip) =
+                ClipBounds::new(primitive.clip_rect, self.surface.width, self.surface.height)
+            else {
+                stats.reject_first_visible_not_rect = 1;
+                return stats;
+            };
+            if clip.is_empty() {
+                continue;
+            }
+            let Some(evidence) = probe_mesh_clear_elision(
+                mesh,
+                texture,
+                clip,
+                self.surface.width,
+                self.surface.height,
+            ) else {
+                continue;
+            };
+            stats.record_quad_evidence(evidence);
+            return stats;
+        }
+        stats.reject_no_primitives = 1;
+        stats
     }
 
     fn rasterize(
@@ -271,6 +312,52 @@ struct MeshRasterContext<'a> {
     solid_fan_polygon_scratch_budget: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ClearElisionFrameStats {
+    probe_frames: usize,
+    eligible_frames: usize,
+    reject_no_primitives: usize,
+    reject_first_visible_not_rect: usize,
+    reject_clip_not_full_surface: usize,
+    reject_alpha_not_opaque: usize,
+    reject_texture_not_constant_white: usize,
+    reject_not_full_surface_opaque_rect: usize,
+    full_surface_opaque_rect_frames: usize,
+    near_full_surface_opaque_rect_frames: usize,
+    max_opaque_cover_basis_points: usize,
+}
+
+impl ClearElisionFrameStats {
+    fn record_quad_evidence(&mut self, evidence: super::raster::ClearElisionQuadEvidence) {
+        if evidence.opaque_rect {
+            self.max_opaque_cover_basis_points = evidence.cover_basis_points;
+        }
+        if evidence.full_surface_opaque_rect {
+            self.eligible_frames = 1;
+            self.full_surface_opaque_rect_frames = 1;
+        }
+        if evidence.near_full_surface_opaque_rect {
+            self.near_full_surface_opaque_rect_frames = 1;
+        }
+        match evidence.rejection {
+            None => {}
+            Some(ClearElisionQuadRejection::NotRect) => self.reject_first_visible_not_rect = 1,
+            Some(ClearElisionQuadRejection::ClipNotFullSurface) => {
+                self.reject_clip_not_full_surface = 1;
+            }
+            Some(ClearElisionQuadRejection::AlphaNotOpaque) => {
+                self.reject_alpha_not_opaque = 1;
+            }
+            Some(ClearElisionQuadRejection::TextureNotConstantWhite) => {
+                self.reject_texture_not_constant_white = 1;
+            }
+            Some(ClearElisionQuadRejection::NotFullSurfaceOpaqueRect) => {
+                self.reject_not_full_surface_opaque_rect = 1;
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RenderOutcome {
     pub(super) repaint_delay: Duration,
@@ -346,6 +433,7 @@ fn log_surface_stats<S: GuiShell>(
 fn log_raster_stats<S: GuiShell>(
     frame: &GuiFrame<'_, S>,
     surface: &SoftwareSurface,
+    clear_elision_stats: Option<&ClearElisionFrameStats>,
     primitive_stats: Option<&PrimitiveStats>,
     raster_stats: Option<&RasterStats>,
     raster_timings: Option<&RasterTimings>,
@@ -369,7 +457,13 @@ fn log_raster_stats<S: GuiShell>(
         if frame.log_render_stats {
             write_log(
                 frame.log,
-                clear_evidence_log_line(frame.frame_index, surface.width, surface.height, stats),
+                clear_evidence_log_line(
+                    frame.frame_index,
+                    surface.width,
+                    surface.height,
+                    stats,
+                    clear_elision_stats,
+                ),
             );
         }
         write_log(frame.log, stats.log_line());
@@ -412,7 +506,9 @@ fn clear_evidence_log_line(
     width: usize,
     height: usize,
     stats: &RasterStats,
+    clear_elision_stats: Option<&ClearElisionFrameStats>,
 ) -> String {
+    let clear_elision_stats = clear_elision_stats.copied().unwrap_or_default();
     let clear_pixels = width.saturating_mul(height);
     let clear_bytes = clear_pixels.saturating_mul(4);
     let opaque_drawn_pixels = stats.opaque_px;
@@ -421,8 +517,95 @@ fn clear_evidence_log_line(
         .checked_div(clear_pixels)
         .unwrap_or(0);
     format!(
-        "software renderer clear_evidence frame={frame_index} clear_pixels={clear_pixels} clear_bytes={clear_bytes} opaque_drawn_pixels={opaque_drawn_pixels} opaque_drawn_percent_of_surface={opaque_drawn_percent}"
+        "software renderer clear_evidence frame={frame_index} clear_pixels={clear_pixels} clear_bytes={clear_bytes} opaque_drawn_pixels={opaque_drawn_pixels} opaque_drawn_percent_of_surface={opaque_drawn_percent} clear_elision_probe_frames={} clear_elision_eligible_frames={} clear_elision_reject_no_primitives={} clear_elision_reject_first_visible_not_rect={} clear_elision_reject_clip_not_full_surface={} clear_elision_reject_alpha_not_opaque={} clear_elision_reject_texture_not_constant_white={} clear_elision_reject_not_full_surface_opaque_rect={} clear_elision_full_surface_opaque_rect_frames={} clear_elision_near_full_surface_opaque_rect_frames={} clear_elision_max_opaque_cover_basis_points={}",
+        clear_elision_stats.probe_frames,
+        clear_elision_stats.eligible_frames,
+        clear_elision_stats.reject_no_primitives,
+        clear_elision_stats.reject_first_visible_not_rect,
+        clear_elision_stats.reject_clip_not_full_surface,
+        clear_elision_stats.reject_alpha_not_opaque,
+        clear_elision_stats.reject_texture_not_constant_white,
+        clear_elision_stats.reject_not_full_surface_opaque_rect,
+        clear_elision_stats.full_surface_opaque_rect_frames,
+        clear_elision_stats.near_full_surface_opaque_rect_frames,
+        clear_elision_stats.max_opaque_cover_basis_points,
     )
+}
+
+fn probe_mesh_clear_elision(
+    mesh: &egui::Mesh,
+    texture: &TextureImage,
+    clip: ClipBounds,
+    surface_width: usize,
+    surface_height: usize,
+) -> Option<super::raster::ClearElisionQuadEvidence> {
+    let mut index_offset = 0;
+    while index_offset + 2 < mesh.indices.len() {
+        if index_offset + 5 >= mesh.indices.len() {
+            return Some(super::raster::ClearElisionQuadEvidence {
+                visible_px: 0,
+                cover_basis_points: 0,
+                opaque_rect: false,
+                full_surface_opaque_rect: false,
+                near_full_surface_opaque_rect: false,
+                rejection: Some(ClearElisionQuadRejection::NotRect),
+            });
+        }
+        let quad = &mesh.indices[index_offset..index_offset + 6];
+        if !has_four_unique_indices(quad) {
+            return Some(super::raster::ClearElisionQuadEvidence {
+                visible_px: 0,
+                cover_basis_points: 0,
+                opaque_rect: false,
+                full_surface_opaque_rect: false,
+                near_full_surface_opaque_rect: false,
+                rejection: Some(ClearElisionQuadRejection::NotRect),
+            });
+        }
+        let Ok(Some(vertices)) = mesh_quad_vertices(mesh, quad) else {
+            return Some(super::raster::ClearElisionQuadEvidence {
+                visible_px: 0,
+                cover_basis_points: 0,
+                opaque_rect: false,
+                full_surface_opaque_rect: false,
+                near_full_surface_opaque_rect: false,
+                rejection: Some(ClearElisionQuadRejection::NotRect),
+            });
+        };
+        let evidence =
+            clear_elision_quad_evidence(vertices, texture, clip, surface_width, surface_height);
+        if evidence.visible_px == 0
+            && !matches!(evidence.rejection, Some(ClearElisionQuadRejection::NotRect))
+        {
+            index_offset += 6;
+            continue;
+        }
+        return Some(evidence);
+    }
+    None
+}
+
+fn mesh_quad_vertices<'a>(
+    mesh: &'a egui::Mesh,
+    quad: &[u32],
+) -> io::Result<Option<[&'a egui::epaint::Vertex; 6]>> {
+    let i0 = mesh_index_to_usize(quad[0])?;
+    let i1 = mesh_index_to_usize(quad[1])?;
+    let i2 = mesh_index_to_usize(quad[2])?;
+    let i3 = mesh_index_to_usize(quad[3])?;
+    let i4 = mesh_index_to_usize(quad[4])?;
+    let i5 = mesh_index_to_usize(quad[5])?;
+    let (Some(v0), Some(v1), Some(v2), Some(v3), Some(v4), Some(v5)) = (
+        mesh.vertices.get(i0),
+        mesh.vertices.get(i1),
+        mesh.vertices.get(i2),
+        mesh.vertices.get(i3),
+        mesh.vertices.get(i4),
+        mesh.vertices.get(i5),
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some([v0, v1, v2, v3, v4, v5]))
 }
 
 impl MeshRasterContext<'_> {
@@ -781,6 +964,54 @@ mod tests {
     }
 
     #[test]
+    fn clear_elision_probe_counts_full_surface_opaque_white_quad_as_eligible() {
+        let texture_id = egui::TextureId::Managed(1);
+        let renderer = renderer_with_white_texture(texture_id, 8, 8);
+        let primitive =
+            clipped_mesh_primitive(full_surface_quad_mesh(texture_id, 8.0, 8.0), 8.0, 8.0);
+
+        let stats = renderer.probe_clear_elision(&[primitive]);
+
+        assert_eq!(stats.probe_frames, 1);
+        assert_eq!(stats.eligible_frames, 1);
+        assert_eq!(stats.full_surface_opaque_rect_frames, 1);
+        assert_eq!(stats.near_full_surface_opaque_rect_frames, 1);
+        assert_eq!(stats.max_opaque_cover_basis_points, 10_000);
+    }
+
+    #[test]
+    fn clear_elision_probe_counts_near_full_surface_as_evidence_only() {
+        let texture_id = egui::TextureId::Managed(1);
+        let renderer = renderer_with_white_texture(texture_id, 20, 20);
+        let primitive =
+            clipped_mesh_primitive(full_surface_quad_mesh(texture_id, 20.0, 18.5), 20.0, 20.0);
+
+        let stats = renderer.probe_clear_elision(&[primitive]);
+
+        assert_eq!(stats.eligible_frames, 0);
+        assert_eq!(stats.full_surface_opaque_rect_frames, 0);
+        assert_eq!(stats.near_full_surface_opaque_rect_frames, 1);
+        assert_eq!(stats.reject_not_full_surface_opaque_rect, 1);
+        assert_eq!(stats.max_opaque_cover_basis_points, 9_500);
+    }
+
+    #[test]
+    fn clear_elision_probe_rejects_translucent_first_rect() {
+        let texture_id = egui::TextureId::Managed(1);
+        let renderer = renderer_with_white_texture(texture_id, 8, 8);
+        let mut mesh = full_surface_quad_mesh(texture_id, 8.0, 8.0);
+        for vertex in &mut mesh.vertices {
+            vertex.color = egui::Color32::from_rgba_premultiplied(128, 128, 128, 128);
+        }
+        let primitive = clipped_mesh_primitive(mesh, 8.0, 8.0);
+
+        let stats = renderer.probe_clear_elision(&[primitive]);
+
+        assert_eq!(stats.eligible_frames, 0);
+        assert_eq!(stats.reject_alpha_not_opaque, 1);
+    }
+
+    #[test]
     fn renderer_solid_fan_path_matches_per_triangle_reference() {
         let texture_id = egui::TextureId::Managed(1);
         let mut renderer = SoftwareRenderer::default();
@@ -968,6 +1199,45 @@ mod tests {
         }
     }
 
+    fn full_surface_quad_mesh(texture_id: egui::TextureId, width: f32, height: f32) -> egui::Mesh {
+        let mut vertices = [
+            test_vertex(0.0, 0.0),
+            test_vertex(width, 0.0),
+            test_vertex(0.0, height),
+            test_vertex(width, height),
+        ];
+        for vertex in &mut vertices {
+            vertex.uv = egui::Pos2::ZERO;
+        }
+        egui::Mesh {
+            indices: vec![0, 1, 2, 1, 3, 2],
+            vertices: vertices.to_vec(),
+            texture_id,
+        }
+    }
+
+    fn clipped_mesh_primitive(mesh: egui::Mesh, width: f32, height: f32) -> egui::ClippedPrimitive {
+        egui::ClippedPrimitive {
+            clip_rect: egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(width, height)),
+            primitive: egui::epaint::Primitive::Mesh(mesh),
+        }
+    }
+
+    fn renderer_with_white_texture(
+        texture_id: egui::TextureId,
+        width: usize,
+        height: usize,
+    ) -> SoftwareRenderer {
+        let mut renderer = SoftwareRenderer::default();
+        renderer.surface.resize(width, height).expect("surface");
+        renderer.surface.clear([0, 0, 0, 255]);
+        renderer
+            .textures
+            .apply(&solid_texture_delta(texture_id, egui::Color32::WHITE))
+            .expect("texture");
+        renderer
+    }
+
     fn solid_fan_mesh(texture_id: egui::TextureId, color: [u8; 4]) -> egui::Mesh {
         let color = egui::Color32::from_rgba_premultiplied(color[0], color[1], color[2], color[3]);
         let vertices = [
@@ -1017,6 +1287,20 @@ mod tests {
                 egui::Color32::from_rgb(40, 0, 0),
             ],
         );
+        egui::TexturesDelta {
+            set: vec![(
+                texture_id,
+                egui::epaint::ImageDelta::full(image, egui::TextureOptions::NEAREST),
+            )],
+            free: Vec::new(),
+        }
+    }
+
+    fn solid_texture_delta(
+        texture_id: egui::TextureId,
+        color: egui::Color32,
+    ) -> egui::TexturesDelta {
+        let image = egui::ColorImage::new([2, 2], vec![color, color, color, color]);
         egui::TexturesDelta {
             set: vec![(
                 texture_id,

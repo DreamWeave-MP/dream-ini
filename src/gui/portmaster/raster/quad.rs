@@ -12,6 +12,27 @@ use super::types::{ClipBounds, TexturedQuadFastPathRejection};
 use super::{RasterStats, UV_AFFINE_EPSILON, duration_as_us};
 use crate::gui::portmaster::{surface::SoftwareSurface, texture::TextureImage};
 
+const CLEAR_ELISION_NEAR_FULL_SURFACE_BASIS_POINTS: usize = 9_500;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gui::portmaster) enum ClearElisionQuadRejection {
+    NotRect,
+    ClipNotFullSurface,
+    AlphaNotOpaque,
+    TextureNotConstantWhite,
+    NotFullSurfaceOpaqueRect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::gui::portmaster) struct ClearElisionQuadEvidence {
+    pub(in crate::gui::portmaster) visible_px: usize,
+    pub(in crate::gui::portmaster) cover_basis_points: usize,
+    pub(in crate::gui::portmaster) opaque_rect: bool,
+    pub(in crate::gui::portmaster) full_surface_opaque_rect: bool,
+    pub(in crate::gui::portmaster) near_full_surface_opaque_rect: bool,
+    pub(in crate::gui::portmaster) rejection: Option<ClearElisionQuadRejection>,
+}
+
 impl RasterStats {
     fn record_textured_rect_classification(
         &mut self,
@@ -107,6 +128,75 @@ pub(in crate::gui::portmaster) fn textured_quad_fast_path_rejection(
     vertices: [&egui::epaint::Vertex; 6],
 ) -> Option<TexturedQuadFastPathRejection> {
     textured_quad_fast_path_candidate(vertices).err()
+}
+
+pub(in crate::gui::portmaster) fn clear_elision_quad_evidence(
+    vertices: [&egui::epaint::Vertex; 6],
+    texture: &TextureImage,
+    clip: ClipBounds,
+    surface_width: usize,
+    surface_height: usize,
+) -> ClearElisionQuadEvidence {
+    let Ok(candidate) = textured_quad_fast_path_candidate(vertices) else {
+        return ClearElisionQuadEvidence::rejected(ClearElisionQuadRejection::NotRect);
+    };
+    let visible_px = clipped_quad_pixel_area(candidate.bounds, clip);
+    let cover_basis_points = surface_cover_basis_points(visible_px, surface_width, surface_height);
+    let texture_color = textured_rect_constant_texel_color(candidate.corners, texture);
+    let opaque_white_rect =
+        candidate.corners.tl.color.a() == u8::MAX && texture_color == Some([255, 255, 255, 255]);
+    let near_full_surface_opaque_rect =
+        opaque_white_rect && cover_basis_points >= CLEAR_ELISION_NEAR_FULL_SURFACE_BASIS_POINTS;
+
+    if texture_color != Some([255, 255, 255, 255]) {
+        return ClearElisionQuadEvidence {
+            visible_px,
+            cover_basis_points,
+            opaque_rect: opaque_white_rect,
+            full_surface_opaque_rect: false,
+            near_full_surface_opaque_rect,
+            rejection: Some(ClearElisionQuadRejection::TextureNotConstantWhite),
+        };
+    }
+    if candidate.corners.tl.color.a() != u8::MAX {
+        return ClearElisionQuadEvidence {
+            visible_px,
+            cover_basis_points,
+            opaque_rect: opaque_white_rect,
+            full_surface_opaque_rect: false,
+            near_full_surface_opaque_rect,
+            rejection: Some(ClearElisionQuadRejection::AlphaNotOpaque),
+        };
+    }
+    if !clip_covers_surface(clip, surface_width, surface_height) {
+        return ClearElisionQuadEvidence {
+            visible_px,
+            cover_basis_points,
+            opaque_rect: opaque_white_rect,
+            full_surface_opaque_rect: false,
+            near_full_surface_opaque_rect,
+            rejection: Some(ClearElisionQuadRejection::ClipNotFullSurface),
+        };
+    }
+    if visible_px != surface_width.saturating_mul(surface_height) {
+        return ClearElisionQuadEvidence {
+            visible_px,
+            cover_basis_points,
+            opaque_rect: opaque_white_rect,
+            full_surface_opaque_rect: false,
+            near_full_surface_opaque_rect,
+            rejection: Some(ClearElisionQuadRejection::NotFullSurfaceOpaqueRect),
+        };
+    }
+
+    ClearElisionQuadEvidence {
+        visible_px,
+        cover_basis_points,
+        opaque_rect: true,
+        full_surface_opaque_rect: true,
+        near_full_surface_opaque_rect,
+        rejection: None,
+    }
 }
 
 pub(in crate::gui::portmaster) fn is_axis_aligned_quad(
@@ -251,6 +341,52 @@ fn axis_aligned_quad_bounds(vertices: [&egui::epaint::Vertex; 6]) -> Option<Quad
         max_x,
         max_y,
     })
+}
+
+impl ClearElisionQuadEvidence {
+    const fn rejected(rejection: ClearElisionQuadRejection) -> Self {
+        Self {
+            visible_px: 0,
+            cover_basis_points: 0,
+            opaque_rect: false,
+            full_surface_opaque_rect: false,
+            near_full_surface_opaque_rect: false,
+            rejection: Some(rejection),
+        }
+    }
+}
+
+fn clipped_quad_pixel_area(bounds: QuadBounds, clip: ClipBounds) -> usize {
+    let start_x = solid_rect_boundary_index(bounds.min_x, clip.max_x).max(clip.min_x);
+    let end_x = solid_rect_boundary_index(bounds.max_x, clip.max_x).min(clip.max_x);
+    let start_y = solid_rect_boundary_index(bounds.min_y, clip.max_y).max(clip.min_y);
+    let end_y = solid_rect_boundary_index(bounds.max_y, clip.max_y).min(clip.max_y);
+    if start_x >= end_x || start_y >= end_y {
+        return 0;
+    }
+    (end_x - start_x) * (end_y - start_y)
+}
+
+fn surface_cover_basis_points(
+    visible_px: usize,
+    surface_width: usize,
+    surface_height: usize,
+) -> usize {
+    visible_px
+        .saturating_mul(10_000)
+        .checked_div(surface_width.saturating_mul(surface_height))
+        .unwrap_or(0)
+}
+
+const fn clip_covers_surface(
+    clip: ClipBounds,
+    surface_width: usize,
+    surface_height: usize,
+) -> bool {
+    clip.min_x == 0
+        && clip.min_y == 0
+        && clip.max_x == surface_width
+        && clip.max_y == surface_height
 }
 
 #[derive(Clone, Copy)]
