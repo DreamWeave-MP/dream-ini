@@ -136,6 +136,8 @@ pub(super) struct PrimitiveStats {
     pub(super) generic_triangles_rasterized: usize,
     pub(super) generic_solid_triangles: usize,
     pub(super) generic_textured_triangles: usize,
+    pub(super) generic_textured_constant_texel_triangles: usize,
+    pub(super) generic_textured_sampled_triangles: usize,
     pub(super) generic_textured_solid_reject_non_uniform_vertex_color: usize,
     pub(super) generic_textured_solid_reject_non_uniform_texel: usize,
     pub(super) generic_textured_non_uniform_color_constant_texel: usize,
@@ -229,6 +231,7 @@ struct GenericTriangleBboxRecord<'a> {
     vertices: [&'a egui::epaint::Vertex; 3],
     texture: &'a TextureImage,
     classification: TriangleClassification,
+    texel_sample: Option<TriangleTexelSample>,
     clip: ClipBounds,
     source: TriangleSource,
 }
@@ -660,6 +663,21 @@ impl PrimitiveStats {
             }
             TriangleClassification::Textured => {
                 self.generic_textured_triangles += 1;
+                let texel_sample = triangle_nearest_texel_sample(v0, v1, v2, texture);
+                if texel_sample.is_uniform() {
+                    self.generic_textured_constant_texel_triangles += 1;
+                } else {
+                    self.generic_textured_sampled_triangles += 1;
+                }
+                self.record_generic_triangle_bbox(GenericTriangleBboxRecord {
+                    vertices: [v0, v1, v2],
+                    texture,
+                    classification,
+                    texel_sample: Some(texel_sample),
+                    clip,
+                    source,
+                });
+                return;
             }
         }
         if classification == TriangleClassification::Degenerate {
@@ -669,6 +687,7 @@ impl PrimitiveStats {
             vertices: [v0, v1, v2],
             texture,
             classification,
+            texel_sample: None,
             clip,
             source,
         });
@@ -714,7 +733,9 @@ impl PrimitiveStats {
                 });
             }
             TriangleClassification::Textured => {
-                let texel_sample = triangle_nearest_texel_sample(v0, v1, v2, record.texture);
+                let texel_sample = record
+                    .texel_sample
+                    .unwrap_or_else(|| triangle_nearest_texel_sample(v0, v1, v2, record.texture));
                 match solid_triangle_color_decision(v0, v1, v2, record.texture) {
                     SolidTriangleColorDecision::Solid(_) => {}
                     SolidTriangleColorDecision::NonUniformVertexColor => {
@@ -799,7 +820,7 @@ impl PrimitiveStats {
     pub(super) fn log_line(&self, frame_index: u64) -> String {
         let mesh_triangles = self.mesh_indices / 3;
         format!(
-            "software renderer primitive_stats frame={frame_index} mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} mesh_triangles={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_probe_calls={} solid_fan_center_slot_attempts={} solid_fan_cheap_candidate_attempts={} solid_fan_candidate_triangles_scanned={} solid_fan_repeated_boundary_checks={} solid_fan_repeated_boundary_comparisons={} solid_fan_reject_no_candidate={} solid_fan_reject_too_short={} solid_fan_reject_vertex_lookup_failure={} solid_fan_reject_winding_mismatch_or_non_finite={} solid_fan_reject_repeated_boundary={} solid_fan_reject_unsafe_polygon={} solid_fan_reject_color_or_bounds_mismatch={} solid_fan_reject_scratch_overflow={} solid_fan_accepted_runs={} solid_fan_accepted_triangles={} solid_fan_polygon_builds={} solid_fan_max_candidate_triangles={} solid_fan_max_accepted_triangles={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
+            "software renderer primitive_stats frame={frame_index} mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} mesh_triangles={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_probe_calls={} solid_fan_center_slot_attempts={} solid_fan_cheap_candidate_attempts={} solid_fan_candidate_triangles_scanned={} solid_fan_repeated_boundary_checks={} solid_fan_repeated_boundary_comparisons={} solid_fan_reject_no_candidate={} solid_fan_reject_too_short={} solid_fan_reject_vertex_lookup_failure={} solid_fan_reject_winding_mismatch_or_non_finite={} solid_fan_reject_repeated_boundary={} solid_fan_reject_unsafe_polygon={} solid_fan_reject_color_or_bounds_mismatch={} solid_fan_reject_scratch_overflow={} solid_fan_accepted_runs={} solid_fan_accepted_triangles={} solid_fan_polygon_builds={} solid_fan_max_candidate_triangles={} solid_fan_max_accepted_triangles={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_constant_texel_triangles={} generic_textured_sampled_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -844,6 +865,8 @@ impl PrimitiveStats {
             self.generic_triangles_rasterized,
             self.generic_solid_triangles,
             self.generic_textured_triangles,
+            self.generic_textured_constant_texel_triangles,
+            self.generic_textured_sampled_triangles,
             self.generic_textured_solid_reject_non_uniform_vertex_color,
             self.generic_textured_solid_reject_non_uniform_texel,
             self.generic_textured_non_uniform_color_constant_texel,
@@ -1267,6 +1290,8 @@ mod tests {
         assert_eq!(stats.generic_triangles_rasterized, 3);
         assert_eq!(stats.generic_solid_triangles, 1);
         assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(stats.generic_textured_constant_texel_triangles, 1);
+        assert_eq!(stats.generic_textured_sampled_triangles, 0);
         assert_eq!(
             stats.generic_textured_solid_reject_non_uniform_vertex_color,
             1
@@ -1301,6 +1326,8 @@ mod tests {
         assert!(log_line.contains("mesh_triangles=0"));
         assert!(log_line.contains("generic_solid_triangles=1"));
         assert!(log_line.contains("generic_textured_triangles=1"));
+        assert!(log_line.contains("generic_textured_constant_texel_triangles=1"));
+        assert!(log_line.contains("generic_textured_sampled_triangles=0"));
         assert!(log_line.contains("generic_textured_solid_reject_non_uniform_vertex_color=1"));
         assert!(log_line.contains("generic_textured_solid_reject_non_uniform_texel=0"));
         assert!(log_line.contains("generic_textured_non_uniform_color_constant_texel=1"));
@@ -1349,6 +1376,8 @@ mod tests {
         );
 
         assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(stats.generic_textured_constant_texel_triangles, 1);
+        assert_eq!(stats.generic_textured_sampled_triangles, 0);
         assert_eq!(
             stats.generic_textured_solid_reject_non_uniform_vertex_color,
             1
@@ -1384,6 +1413,8 @@ mod tests {
         );
 
         assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(stats.generic_textured_constant_texel_triangles, 0);
+        assert_eq!(stats.generic_textured_sampled_triangles, 1);
         assert_eq!(
             stats.generic_textured_solid_reject_non_uniform_vertex_color,
             1
@@ -1418,6 +1449,8 @@ mod tests {
         );
 
         assert_eq!(stats.generic_textured_triangles, 1);
+        assert_eq!(stats.generic_textured_constant_texel_triangles, 0);
+        assert_eq!(stats.generic_textured_sampled_triangles, 1);
         assert_eq!(
             stats.generic_textured_solid_reject_non_uniform_vertex_color,
             0

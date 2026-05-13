@@ -17,37 +17,7 @@ use super::types::TriangleRasterBounds;
 use super::{duration_as_us, usize_to_f32};
 use crate::gui::portmaster::{surface::SoftwareSurface, texture::TextureImage};
 
-#[derive(Clone, Copy)]
-pub(super) enum TexturedTriangleKind {
-    ConstantTexel { white_texel: bool },
-    Sampled,
-}
-
-pub(super) fn record_textured_triangle_call(
-    stats: &mut Option<&mut RasterStats>,
-    bounds: TriangleRasterBounds,
-    kind: TexturedTriangleKind,
-) {
-    if let Some(stats) = stats.as_deref_mut() {
-        stats.textured_triangle_calls += 1;
-        stats.textured_triangle_bbox_px += bounds.pixel_area();
-        match kind {
-            TexturedTriangleKind::ConstantTexel { white_texel } => {
-                stats.constant_texel_textured_triangle_calls += 1;
-                if white_texel {
-                    stats.constant_texel_textured_triangle_white_texel_calls += 1;
-                } else {
-                    stats.constant_texel_textured_triangle_non_white_texel_calls += 1;
-                }
-            }
-            TexturedTriangleKind::Sampled => {
-                stats.sampled_textured_triangle_calls += 1;
-            }
-        }
-    }
-}
-
-pub(super) const fn is_white_texel(texture_color: [u8; 4]) -> bool {
+const fn is_white_texel(texture_color: [u8; 4]) -> bool {
     matches!(texture_color, [255, 255, 255, 255])
 }
 
@@ -60,6 +30,9 @@ pub(super) fn rasterize_textured_triangle(
     stats: Option<&mut RasterStats>,
 ) {
     if let Some(stats) = stats {
+        stats.textured_triangle_calls += 1;
+        stats.textured_triangle_bbox_px += bounds.pixel_area();
+        stats.sampled_textured_triangle_calls += 1;
         let raster_start = Instant::now();
         rasterize_textured_triangle_with_stats(surface, vertices, texture, bounds, area, stats);
         stats.sampled_textured_triangle_us += duration_as_us(raster_start.elapsed());
@@ -78,6 +51,14 @@ pub(super) fn rasterize_constant_texel_textured_triangle(
 ) {
     if let Some(stats) = stats {
         let white_texel = is_white_texel(texture_color);
+        stats.textured_triangle_calls += 1;
+        stats.textured_triangle_bbox_px += bounds.pixel_area();
+        stats.constant_texel_textured_triangle_calls += 1;
+        if white_texel {
+            stats.constant_texel_textured_triangle_white_texel_calls += 1;
+        } else {
+            stats.constant_texel_textured_triangle_non_white_texel_calls += 1;
+        }
         let raster_start = Instant::now();
         rasterize_constant_texel_textured_triangle_with_stats(
             surface,

@@ -38,10 +38,7 @@ pub(super) use sampling::triangle_nearest_texel_sample;
 pub(super) use solid::solid_triangle_color_decision;
 use solid::{rasterize_solid_triangle, solid_triangle_color};
 pub(super) use stats::RasterStats;
-use textured::{
-    TexturedTriangleKind, is_white_texel, rasterize_constant_texel_textured_triangle,
-    rasterize_textured_triangle, record_textured_triangle_call,
-};
+use textured::{rasterize_constant_texel_textured_triangle, rasterize_textured_triangle};
 #[cfg(test)]
 use textured::{textured_triangle_pixel_color, white_constant_texel_alpha_only_vertices};
 use triangle::{TRIANGLE_SCANLINE_NARROWING_MIN_AREA, TriangleVertices, triangle_positions};
@@ -91,13 +88,6 @@ pub(super) fn rasterize_triangle(
     }
 
     if let Some(texture_color) = triangle_nearest_texel_sample(v0, v1, v2, texture).uniform_color {
-        record_textured_triangle_call(
-            &mut stats,
-            bounds,
-            TexturedTriangleKind::ConstantTexel {
-                white_texel: is_white_texel(texture_color),
-            },
-        );
         rasterize_constant_texel_textured_triangle(
             surface,
             vertices,
@@ -109,7 +99,6 @@ pub(super) fn rasterize_triangle(
         return;
     }
 
-    record_textured_triangle_call(&mut stats, bounds, TexturedTriangleKind::Sampled);
     rasterize_textured_triangle(surface, vertices, texture, bounds, area, stats);
 }
 
@@ -699,6 +688,42 @@ mod tests {
                 + constant_stats.translucent_px
                 + constant_stats.transparent_px
         );
+    }
+
+    #[test]
+    fn sampled_textured_triangle_stats_record_call_subtype() {
+        let texture = test_alpha_texture_2x1();
+        let mut vertices = [
+            solid_vertex(0.0, 0.0, [255, 255, 255, 255]),
+            solid_vertex(4.0, 0.0, [255, 255, 255, 255]),
+            solid_vertex(0.0, 4.0, [255, 255, 255, 255]),
+        ];
+        vertices[0].uv = egui::pos2(0.0, 0.0);
+        vertices[1].uv = egui::pos2(1.0, 0.0);
+        vertices[2].uv = egui::pos2(0.0, 0.0);
+        let clip = full_clip(5, 5);
+        let bounds = triangle_raster_bounds(&vertices[0], &vertices[1], &vertices[2], clip)
+            .expect("triangle bounds");
+        let area = edge(vertices[0].pos, vertices[1].pos, vertices[2].pos);
+        let mut surface = test_surface(5, 5);
+        let mut stats = RasterStats::default();
+
+        rasterize_textured_triangle(
+            &mut surface,
+            TriangleVertices {
+                v0: &vertices[0],
+                v1: &vertices[1],
+                v2: &vertices[2],
+            },
+            &texture,
+            bounds,
+            area,
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_triangle_calls, 1);
+        assert_eq!(stats.constant_texel_textured_triangle_calls, 0);
+        assert_eq!(stats.sampled_textured_triangle_calls, 1);
     }
 
     #[test]
