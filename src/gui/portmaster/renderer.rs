@@ -56,8 +56,9 @@ impl SoftwareRenderer {
         let log_timings = frame.log_frame || frame.hitch_log_threshold.is_some();
         let total_start = log_timings.then(Instant::now);
         let stage_start = log_timings.then(Instant::now);
-        let resized = self.surface.resize(width, height)?;
-        if resized || !frame.clear_mode.skip_clear() {
+        let surface_resized = self.surface.resize(width, height)?;
+        let cleared_this_frame = surface_resized || !frame.clear_mode.skip_clear();
+        if cleared_this_frame {
             self.surface.clear([17, 20, 28, 255]);
         }
         let resize_clear_elapsed = elapsed_micros(stage_start);
@@ -91,6 +92,8 @@ impl SoftwareRenderer {
             &self.textures,
             &texture_delta_stats,
             primitive_count,
+            surface_resized,
+            cleared_this_frame,
         );
 
         let stage_start = log_timings.then(Instant::now);
@@ -395,6 +398,8 @@ fn log_surface_stats<S: GuiShell>(
     textures: &TextureStore,
     texture_delta_stats: &TextureDeltaStats,
     primitive_count: usize,
+    surface_resized: bool,
+    cleared_this_frame: bool,
 ) {
     if frame.log_frame {
         write_log(
@@ -415,7 +420,7 @@ fn log_surface_stats<S: GuiShell>(
         write_log(
             frame.log,
             format!(
-                "software renderer render_stats frame={} surface={}x{} surface_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} clipped_primitives={} repaint_request_due_before_frame={} requested_repaint_after_egui={} skip_clear={}",
+                "software renderer render_stats frame={} surface={}x{} surface_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} clipped_primitives={} repaint_request_due_before_frame={} requested_repaint_after_egui={} skip_clear_enabled={} cleared_this_frame={} surface_resized={}",
                 frame.frame_index,
                 surface.width,
                 surface.height,
@@ -428,6 +433,8 @@ fn log_surface_stats<S: GuiShell>(
                 frame.repaint_request_due_before_frame,
                 frame.context.has_requested_repaint(),
                 frame.clear_mode.skip_clear(),
+                cleared_this_frame,
+                surface_resized,
             ),
         );
     }
