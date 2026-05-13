@@ -165,19 +165,20 @@ pub(super) fn triangle_row_state_endpoints(search: TriangleRowStateSearch) -> Tr
 }
 
 fn triangle_row_state_first_covered_x(search: TriangleRowStateSearch) -> (Option<usize>, usize) {
-    let (mut edge0, mut edge1, mut edge2) = search.row_start_edges;
     let (step0, step1, step2) = search.x_steps;
+    let (row_edge0, row_edge1, row_edge2) = search.row_start_edges;
     let mut probe_px = 0;
     for x in search.candidate_start_x..search.candidate_end_x {
         if search.collect_stats {
             probe_px += 1;
         }
+        let dx = usize_to_f32(x - search.candidate_start_x);
+        let edge0 = row_edge0 + step0 * dx;
+        let edge1 = row_edge1 + step1 * dx;
+        let edge2 = row_edge2 + step2 * dx;
         if triangle_row_state_covers_pixel(search.coverage, edge0, edge1, edge2) {
             return (Some(x), probe_px);
         }
-        edge0 += step0;
-        edge1 += step1;
-        edge2 += step2;
     }
     (None, probe_px)
 }
@@ -190,23 +191,20 @@ fn triangle_row_state_last_covered_x(search: TriangleRowStateSearch) -> (Option<
         return (None, 0);
     }
 
-    let dx = usize_to_f32(last_candidate_x - search.candidate_start_x);
     let (step0, step1, step2) = search.x_steps;
     let (row_edge0, row_edge1, row_edge2) = search.row_start_edges;
-    let mut edge0 = row_edge0 + step0 * dx;
-    let mut edge1 = row_edge1 + step1 * dx;
-    let mut edge2 = row_edge2 + step2 * dx;
     let mut probe_px = 0;
     for x in (search.candidate_start_x..search.candidate_end_x).rev() {
         if search.collect_stats {
             probe_px += 1;
         }
+        let dx = usize_to_f32(x - search.candidate_start_x);
+        let edge0 = row_edge0 + step0 * dx;
+        let edge1 = row_edge1 + step1 * dx;
+        let edge2 = row_edge2 + step2 * dx;
         if triangle_row_state_covers_pixel(search.coverage, edge0, edge1, edge2) {
             return (Some(x), probe_px);
         }
-        edge0 -= step0;
-        edge1 -= step1;
-        edge2 -= step2;
     }
     (None, probe_px)
 }
