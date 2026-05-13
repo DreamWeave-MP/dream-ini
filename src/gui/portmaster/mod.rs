@@ -54,25 +54,6 @@ const HITCH_LOG_ENV_VAR: &str = "DREAM_INI_PM_HITCH_LOG_MS";
 const RENDER_TRACE_ENV_VAR: &str = "DREAM_INI_PM_RENDER_TRACE";
 #[cfg(target_os = "linux")]
 const DEFAULT_RENDER_STATS_EVERY: u64 = 30;
-#[cfg(target_os = "linux")]
-const ENDPOINT_WHITE_CONSTANT_TEXEL_TRIANGLES_ENV_VAR: &str = "DREAM_INI_PM_ENDPOINT_TRIANGLES";
-
-#[cfg(target_os = "linux")]
-pub(in crate::gui::portmaster) fn endpoint_white_constant_texel_triangles_enabled() -> bool {
-    use std::sync::OnceLock;
-
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        env::var(ENDPOINT_WHITE_CONSTANT_TEXEL_TRIANGLES_ENV_VAR)
-            .map_or(true, |value| env_flag_not_disabled(&value))
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn env_flag_not_disabled(value: &str) -> bool {
-    value.trim() != "0"
-}
-
 pub(crate) fn run() -> ExitCode {
     let log = open_log().map(Mutex::new).map(Arc::new);
     install_panic_hook(log.clone());
