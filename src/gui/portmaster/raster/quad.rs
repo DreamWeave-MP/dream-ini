@@ -753,6 +753,10 @@ fn rasterize_textured_rect_with_stats(
 ) {
     let vertex_color = color_to_array(corners.tl.color);
     if classification.is_sampled_separable_uv() {
+        stats.record_textured_rect_separable_vertex_color(
+            vertex_color == [255, 255, 255, 255],
+            (range.end_x - range.start_x) * (range.end_y - range.start_y),
+        );
         rasterize_separable_uv_textured_rect_with_stats(
             surface,
             corners,
@@ -1031,6 +1035,7 @@ fn emit_separable_uv_textured_rect_run_with_stats(
     run: SeparableUvTexturedRectRun,
     stats: &mut RasterStats,
 ) {
+    stats.record_textured_rect_separable_run(run.color[3], run.len);
     stats.record_alpha_px(run.color[3], run.len);
     emit_separable_uv_textured_rect_run_no_stats(surface, run);
 }
@@ -1216,6 +1221,22 @@ mod tests {
         assert_eq!(stats.textured_rect_nonseparable_uv_calls, 1);
         assert_eq!(stats.textured_rect_separable_uv_px, 12);
         assert_eq!(stats.textured_rect_nonseparable_uv_px, 12);
+        assert_eq!(stats.textured_rect_separable_run_calls, 12);
+        assert_eq!(stats.textured_rect_separable_run_px, 12);
+        assert_eq!(stats.textured_rect_separable_opaque_run_calls, 4);
+        assert_eq!(stats.textured_rect_separable_opaque_run_px, 4);
+        assert_eq!(stats.textured_rect_separable_translucent_run_calls, 6);
+        assert_eq!(stats.textured_rect_separable_translucent_run_px, 6);
+        assert_eq!(stats.textured_rect_separable_transparent_run_calls, 2);
+        assert_eq!(stats.textured_rect_separable_transparent_run_px, 2);
+        assert_eq!(stats.textured_rect_separable_white_vertex_calls, 1);
+        assert_eq!(stats.textured_rect_separable_white_vertex_px, 12);
+        assert_eq!(stats.textured_rect_separable_modulated_vertex_calls, 0);
+        assert_eq!(stats.textured_rect_separable_modulated_vertex_px, 0);
+        assert_eq!(
+            stats.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16,
+            [12, 0, 0, 0, 0, 0]
+        );
     }
 
     #[test]

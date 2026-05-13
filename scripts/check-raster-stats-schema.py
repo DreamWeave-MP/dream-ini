@@ -83,7 +83,7 @@ def extract_balanced_call(source: str, start: int) -> str:
     raise ValueError("could not find end of macro call")
 
 
-def extract_write_bindings(log_line: str) -> list[tuple[str, int]]:
+def extract_write_bindings(log_line: str, array_fields: set[str]) -> list[tuple[str, int | None]]:
     bindings = []
     for match in re.finditer(r"\bwrite!\s*\(", log_line):
         call = extract_balanced_call(log_line, match.start())
@@ -92,6 +92,10 @@ def extract_write_bindings(log_line: str) -> list[tuple[str, int]]:
             raise ValueError("could not find write! format string")
         labels = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)=\{\}", format_match.group(1))
         indexes = [int(index) for index in re.findall(r"\bvalues\[(\d+)\]", call)]
+        if labels and labels[0] in array_fields and len(labels) == len(indexes) + 1:
+            bindings.append((labels[0], None))
+            bindings.extend(zip(labels[1:], indexes, strict=True))
+            continue
         if len(labels) != len(indexes):
             raise ValueError("write! label count does not match values[N] argument count")
         bindings.extend(zip(labels, indexes, strict=True))
@@ -104,13 +108,15 @@ def main() -> int:
     log_line = extract_log_line(source)
     value_source = extract_raster_stats_values(source)
 
-    fields = re.findall(
-        r"pub\(in\s+crate::gui::portmaster\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:",
+    field_matches = re.findall(
+        r"pub\(in\s+crate::gui::portmaster\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^,]+)",
         struct_body,
     )
-    bindings = extract_write_bindings(log_line)
+    fields = [name for name, _ in field_matches]
+    array_fields = {name for name, field_type in field_matches if field_type.strip().startswith("[")}
+    bindings = extract_write_bindings(log_line, array_fields)
     labels = [label for label, _ in bindings]
-    indexes = [index for _, index in bindings]
+    indexes = [index for _, index in bindings if index is not None]
     arguments = re.findall(r"\$stats\.([A-Za-z_][A-Za-z0-9_]*)\b", value_source)
 
     errors = []
@@ -118,7 +124,8 @@ def main() -> int:
         errors.append("fields missing from log labels: " + ", ".join(missing))
     if extra := difference(labels, fields):
         errors.append("log labels without struct fields: " + ", ".join(extra))
-    if missing := difference(fields, arguments):
+    scalar_fields = [field for field in fields if field not in array_fields]
+    if missing := difference(scalar_fields, arguments):
         errors.append("fields missing from log arguments: " + ", ".join(missing))
     if extra := difference(arguments, fields):
         errors.append("runtime value sources without struct fields: " + ", ".join(extra))
@@ -127,7 +134,8 @@ def main() -> int:
     expected_indexes = list(range(len(arguments)))
     if indexes != expected_indexes:
         errors.append("log values[N] arguments are duplicated, skipped, out of order, or out of range")
-    resolved = [arguments[index] if 0 <= index < len(arguments) else None for index in indexes]
+    resolved_indexes = iter(arguments[index] if 0 <= index < len(arguments) else None for index in indexes)
+    resolved = [label if index is None else next(resolved_indexes) for label, index in bindings]
     if any(field is None for field in resolved):
         errors.append("log values[N] argument references an out-of-range runtime value")
     if labels != resolved:
