@@ -49,6 +49,14 @@ pub(super) fn install_panic_hook(log: Option<SharedLog>) {
 
 pub(super) fn log_startup(log: Option<&SharedLog>) {
     write_log(log, "startup compile_feature=portmaster-gui");
+    #[cfg(target_os = "linux")]
+    write_log(
+        log,
+        format!(
+            "endpoint_white_constant_texel_triangles={}",
+            super::endpoint_white_constant_texel_triangles_enabled()
+        ),
+    );
     write_log(
         log,
         format!("argv={:?}", env::args_os().collect::<Vec<_>>()),

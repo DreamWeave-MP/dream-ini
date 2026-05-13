@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::{env, sync::OnceLock, time::Instant};
+use std::time::Instant;
 
 use super::coverage::{
-    TriangleBoundaryIncludes, TriangleCoverage, TriangleRowSearch, triangle_row_endpoints,
-    triangle_scanline_x_range,
+    TriangleBoundaryIncludes, TriangleCoverage, TriangleRowStateSearch,
+    triangle_row_state_endpoints, triangle_scanline_x_range,
 };
 use super::math::{
     edge, edge_covers_pixel, edge_includes_boundary, edge_step_x, edge_step_y,
@@ -15,9 +15,8 @@ use super::stats::RasterStats;
 use super::triangle::{TRIANGLE_SCANLINE_NARROWING_MIN_AREA, TriangleVertices, triangle_positions};
 use super::types::TriangleRasterBounds;
 use super::{duration_as_us, usize_to_f32};
+use crate::gui::portmaster::endpoint_white_constant_texel_triangles_enabled;
 use crate::gui::portmaster::{surface::SoftwareSurface, texture::TextureImage};
-
-const ENDPOINT_WHITE_CONSTANT_TEXEL_TRIANGLES_ENV_VAR: &str = "DREAM_INI_PM_ENDPOINT_TRIANGLES";
 
 #[derive(Clone, Copy)]
 pub(super) enum TexturedTriangleKind {
@@ -51,21 +50,6 @@ pub(super) fn record_textured_triangle_call(
 
 pub(super) const fn is_white_texel(texture_color: [u8; 4]) -> bool {
     matches!(texture_color, [255, 255, 255, 255])
-}
-
-fn endpoint_white_constant_texel_triangles_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        env::var(ENDPOINT_WHITE_CONSTANT_TEXEL_TRIANGLES_ENV_VAR)
-            .is_ok_and(|value| env_flag_enabled(&value))
-    })
-}
-
-fn env_flag_enabled(value: &str) -> bool {
-    matches!(
-        value,
-        "1" | "true" | "True" | "TRUE" | "yes" | "Yes" | "YES" | "on" | "On" | "ON"
-    )
 }
 
 pub(super) fn rasterize_textured_triangle(
@@ -184,6 +168,7 @@ fn rasterize_white_constant_texel_textured_triangle_no_stats(
             start_x,
             narrow_scanlines,
         );
+        let row_start_edges = (pixel_edge0, pixel_edge1, pixel_edge2);
         let row_color = white_constant_texel_row_color(
             v0,
             v1,
@@ -193,9 +178,13 @@ fn rasterize_white_constant_texel_textured_triangle_no_stats(
         );
         let row_offset = surface.row_offset(y);
         if endpoint_rows {
-            if let Some((span_start, span_end)) =
-                white_constant_texel_endpoint_span(vertices, &raster, y, (start_x, end_x), false)
-                    .span
+            if let Some((span_start, span_end)) = white_constant_texel_endpoint_span(
+                &raster,
+                row_start_edges,
+                (start_x, end_x),
+                false,
+            )
+            .span
             {
                 emit_white_constant_texel_run_no_stats(
                     surface,
@@ -276,6 +265,7 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_no_stats(
             start_x,
             narrow_scanlines,
         );
+        let row_start_edges = (pixel_edge0, pixel_edge1, pixel_edge2);
         let row_alpha = white_constant_texel_row_alpha(
             v0,
             v1,
@@ -284,9 +274,13 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_no_stats(
             (pixel_edge0, pixel_edge1, pixel_edge2),
         );
         if endpoint_rows {
-            if let Some((span_start, span_end)) =
-                white_constant_texel_endpoint_span(vertices, &raster, y, (start_x, end_x), false)
-                    .span
+            if let Some((span_start, span_end)) = white_constant_texel_endpoint_span(
+                &raster,
+                row_start_edges,
+                (start_x, end_x),
+                false,
+            )
+            .span
             {
                 emit_white_constant_texel_alpha_only_run_no_stats(
                     surface,
@@ -467,13 +461,14 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
         };
         let candidate_px = end_x - start_x;
         record_constant_texel_textured_triangle_candidate_row(stats, bounds, candidate_px);
-        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = triangle_row_start_edges(
+        let (pixel_edge0, pixel_edge1, pixel_edge2) = triangle_row_start_edges(
             vertices,
             (row_edge0, row_edge1, row_edge2),
             y,
             start_x,
             narrow_scanlines,
         );
+        let row_start_edges = (pixel_edge0, pixel_edge1, pixel_edge2);
         let row_color = white_constant_texel_row_color(
             v0,
             v1,
@@ -485,13 +480,13 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
         if endpoint_rows {
             emit_white_constant_texel_endpoint_row_with_stats(
                 surface,
-                vertices,
                 &raster,
                 WhiteEndpointRow {
                     y,
                     start_x,
                     end_x,
                     row_offset,
+                    row_start_edges,
                 },
                 row_color,
                 color_step,
@@ -500,45 +495,27 @@ fn rasterize_white_constant_texel_textured_triangle_with_stats(
             advance_triangle_row_edges(&raster, &mut row_edge0, &mut row_edge1, &mut row_edge2);
             continue;
         }
-        let mut run_start = None;
-        let mut scan_runs = 0;
-        let mut scan_span = None;
-        for x in start_x..end_x {
-            let w0 = pixel_edge0 * raster.inv_area;
-            let w1 = pixel_edge1 * raster.inv_area;
-            let w2 = pixel_edge2 * raster.inv_area;
-            if triangle_raster_state_covers_pixel(&raster, w0, w1, w2) {
-                run_start.get_or_insert(x);
-            } else if let Some(start) = run_start.take() {
-                record_white_constant_texel_scan_run(start, x, &mut scan_runs, &mut scan_span);
-                emit_white_constant_texel_run_with_stats(
-                    surface,
-                    row_color,
-                    color_step,
-                    start - start_x,
-                    x - start,
-                    row_offset + start * 4,
-                    stats,
-                );
-            }
-            pixel_edge0 += raster.w0_step_x;
-            pixel_edge1 += raster.w1_step_x;
-            pixel_edge2 += raster.w2_step_x;
-        }
-        if let Some(start) = run_start {
-            record_white_constant_texel_scan_run(start, end_x, &mut scan_runs, &mut scan_span);
-            emit_white_constant_texel_run_with_stats(
-                surface,
-                row_color,
-                color_step,
-                start - start_x,
-                end_x - start,
-                row_offset + start * 4,
-                stats,
-            );
-        }
-        let scan_result = (scan_runs, scan_span);
-        record_endpoint_row(stats, vertices, &raster, y, (start_x, end_x), scan_result);
+        let scan_result = scan_white_constant_texel_row_with_stats(
+            surface,
+            &raster,
+            WhiteEndpointRow {
+                y,
+                start_x,
+                end_x,
+                row_offset,
+                row_start_edges,
+            },
+            row_color,
+            color_step,
+            stats,
+        );
+        record_endpoint_row(
+            stats,
+            &raster,
+            row_start_edges,
+            (start_x, end_x),
+            scan_result,
+        );
         advance_triangle_row_edges(&raster, &mut row_edge0, &mut row_edge1, &mut row_edge2);
     }
 }
@@ -582,15 +559,13 @@ fn record_white_constant_texel_scan_run(
 }
 
 fn white_constant_texel_endpoint_span(
-    vertices: TriangleVertices<'_>,
     raster: &TriangleRasterState,
-    y: usize,
+    row_start_edges: (f32, f32, f32),
     x_range: (usize, usize),
     collect_stats: bool,
 ) -> super::coverage::TriangleRowEndpoints {
     let (start_x, end_x) = x_range;
-    triangle_row_endpoints(TriangleRowSearch {
-        vertices,
+    triangle_row_state_endpoints(TriangleRowStateSearch {
         coverage: TriangleCoverage {
             inv_area: raster.inv_area,
             includes_boundary: TriangleBoundaryIncludes {
@@ -599,12 +574,10 @@ fn white_constant_texel_endpoint_span(
                 edge2: raster.edge2_includes_boundary,
             },
         },
-        y,
+        row_start_edges,
+        x_steps: (raster.w0_step_x, raster.w1_step_x, raster.w2_step_x),
         candidate_start_x: start_x,
         candidate_end_x: end_x,
-        probe_start_x: start_x,
-        probe_end_x: end_x,
-        hinted: false,
         collect_stats,
     })
 }
@@ -615,11 +588,11 @@ struct WhiteEndpointRow {
     start_x: usize,
     end_x: usize,
     row_offset: usize,
+    row_start_edges: (f32, f32, f32),
 }
 
 fn emit_white_constant_texel_endpoint_row_with_stats(
     surface: &mut SoftwareSurface,
-    vertices: TriangleVertices<'_>,
     raster: &TriangleRasterState,
     row: WhiteEndpointRow,
     row_color: [f32; 4],
@@ -627,9 +600,8 @@ fn emit_white_constant_texel_endpoint_row_with_stats(
     stats: &mut RasterStats,
 ) {
     let endpoints = white_constant_texel_endpoint_span(
-        vertices,
         raster,
-        row.y,
+        row.row_start_edges,
         (row.start_x, row.end_x),
         false,
     );
@@ -647,9 +619,57 @@ fn emit_white_constant_texel_endpoint_row_with_stats(
     }
 }
 
+fn scan_white_constant_texel_row_with_stats(
+    surface: &mut SoftwareSurface,
+    raster: &TriangleRasterState,
+    row: WhiteEndpointRow,
+    row_color: [f32; 4],
+    color_step: [f32; 4],
+    stats: &mut RasterStats,
+) -> (usize, Option<(usize, usize)>) {
+    let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = row.row_start_edges;
+    let mut run_start = None;
+    let mut scan_runs = 0;
+    let mut scan_span = None;
+    for x in row.start_x..row.end_x {
+        let w0 = pixel_edge0 * raster.inv_area;
+        let w1 = pixel_edge1 * raster.inv_area;
+        let w2 = pixel_edge2 * raster.inv_area;
+        if triangle_raster_state_covers_pixel(raster, w0, w1, w2) {
+            run_start.get_or_insert(x);
+        } else if let Some(start) = run_start.take() {
+            record_white_constant_texel_scan_run(start, x, &mut scan_runs, &mut scan_span);
+            emit_white_constant_texel_run_with_stats(
+                surface,
+                row_color,
+                color_step,
+                start - row.start_x,
+                x - start,
+                row.row_offset + start * 4,
+                stats,
+            );
+        }
+        pixel_edge0 += raster.w0_step_x;
+        pixel_edge1 += raster.w1_step_x;
+        pixel_edge2 += raster.w2_step_x;
+    }
+    if let Some(start) = run_start {
+        record_white_constant_texel_scan_run(start, row.end_x, &mut scan_runs, &mut scan_span);
+        emit_white_constant_texel_run_with_stats(
+            surface,
+            row_color,
+            color_step,
+            start - row.start_x,
+            row.end_x - start,
+            row.row_offset + start * 4,
+            stats,
+        );
+    }
+    (scan_runs, scan_span)
+}
+
 fn emit_white_constant_texel_alpha_only_endpoint_row_with_stats(
     surface: &mut SoftwareSurface,
-    vertices: TriangleVertices<'_>,
     raster: &TriangleRasterState,
     row: WhiteEndpointRow,
     row_alpha: f32,
@@ -657,9 +677,8 @@ fn emit_white_constant_texel_alpha_only_endpoint_row_with_stats(
     stats: &mut RasterStats,
 ) {
     let endpoints = white_constant_texel_endpoint_span(
-        vertices,
         raster,
-        row.y,
+        row.row_start_edges,
         (row.start_x, row.end_x),
         false,
     );
@@ -682,14 +701,13 @@ fn emit_white_constant_texel_alpha_only_endpoint_row_with_stats(
 
 fn record_endpoint_row(
     stats: &mut RasterStats,
-    vertices: TriangleVertices<'_>,
     raster: &TriangleRasterState,
-    y: usize,
+    row_start_edges: (f32, f32, f32),
     x_range: (usize, usize),
     scan_result: (usize, Option<(usize, usize)>),
 ) {
     let (scan_runs, scan_span) = scan_result;
-    let endpoints = white_constant_texel_endpoint_span(vertices, raster, y, x_range, true);
+    let endpoints = white_constant_texel_endpoint_span(raster, row_start_edges, x_range, true);
 
     stats.constant_texel_textured_triangle_white_endpoint_rows += 1;
     stats.constant_texel_textured_triangle_white_endpoint_probe_px += endpoints.endpoint_probe_px;
@@ -759,23 +777,18 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_with_stats(
             start_x,
             narrow_scanlines,
         );
-        let row_alpha = white_constant_texel_row_alpha(
-            v0,
-            v1,
-            v2,
-            &raster,
-            (pixel_edge0, pixel_edge1, pixel_edge2),
-        );
+        let row_start_edges = (pixel_edge0, pixel_edge1, pixel_edge2);
+        let row_alpha = white_constant_texel_row_alpha(v0, v1, v2, &raster, row_start_edges);
         if endpoint_rows {
             emit_white_constant_texel_alpha_only_endpoint_row_with_stats(
                 surface,
-                vertices,
                 &raster,
                 WhiteEndpointRow {
                     y,
                     start_x,
                     end_x,
                     row_offset: 0,
+                    row_start_edges,
                 },
                 row_alpha,
                 alpha_step,
@@ -828,7 +841,13 @@ fn rasterize_white_constant_texel_alpha_only_textured_triangle_with_stats(
             );
         }
         let scan_result = (scan_runs, scan_span);
-        record_endpoint_row(stats, vertices, &raster, y, (start_x, end_x), scan_result);
+        record_endpoint_row(
+            stats,
+            &raster,
+            row_start_edges,
+            (start_x, end_x),
+            scan_result,
+        );
         advance_triangle_row_edges(&raster, &mut row_edge0, &mut row_edge1, &mut row_edge2);
     }
 }
@@ -1889,6 +1908,31 @@ mod tests {
         assert!(stats.constant_texel_textured_triangle_white_variable_alpha_run_px > 0);
     }
 
+    #[test]
+    fn white_constant_texel_endpoint_spans_match_row_state_scan_on_boundary_rows() {
+        let triangles = [
+            [
+                test_vertex(egui::pos2(2.0, 2.0), [255, 64, 32, 255]),
+                test_vertex(egui::pos2(18.0, 2.0), [16, 255, 32, 255]),
+                test_vertex(egui::pos2(2.0, 13.0), [16, 64, 255, 255]),
+            ],
+            [
+                test_vertex(egui::pos2(5.5, 1.0), [255, 255, 255, 32]),
+                test_vertex(egui::pos2(21.0, 10.5), [255, 255, 255, 224]),
+                test_vertex(egui::pos2(4.0, 18.0), [255, 255, 255, 128]),
+            ],
+            [
+                test_vertex(egui::pos2(0.25, 7.75), [80, 120, 200, 192]),
+                test_vertex(egui::pos2(27.5, 8.0), [220, 10, 50, 192]),
+                test_vertex(egui::pos2(11.0, 21.25), [40, 220, 90, 192]),
+            ],
+        ];
+
+        for vertices in triangles {
+            assert_endpoint_spans_match_row_state_scan(vertices);
+        }
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum AlphaRunKind {
         Constant(u8),
@@ -2172,6 +2216,85 @@ mod tests {
             stats,
         );
         rasterize_textured_triangle(reference, triangle, texture, bounds, area, None);
+    }
+
+    fn assert_endpoint_spans_match_row_state_scan(vertices: [egui::epaint::Vertex; 3]) {
+        let [v0, v1, v2] = &vertices;
+        let triangle = TriangleVertices { v0, v1, v2 };
+        let bounds = test_triangle_bounds(&vertices);
+        let area = edge(v0.pos, v1.pos, v2.pos);
+        let raster = TriangleRasterState::new(v0, v1, v2, bounds, area);
+        let positions = triangle_positions(triangle);
+        let narrow_scanlines = bounds.pixel_area() > TRIANGLE_SCANLINE_NARROWING_MIN_AREA;
+        let mut row_edge0 = raster.row_edge0;
+        let mut row_edge1 = raster.row_edge1;
+        let mut row_edge2 = raster.row_edge2;
+
+        for y in bounds.min_y..bounds.max_y {
+            let (start_x, end_x) = if narrow_scanlines {
+                triangle_scanline_x_range(positions, bounds, usize_to_f32(y) + 0.5)
+            } else {
+                (bounds.min_x, bounds.max_x)
+            };
+            let row_start_edges = triangle_row_start_edges(
+                triangle,
+                (row_edge0, row_edge1, row_edge2),
+                y,
+                start_x,
+                narrow_scanlines,
+            );
+            let endpoints = white_constant_texel_endpoint_span(
+                &raster,
+                row_start_edges,
+                (start_x, end_x),
+                true,
+            );
+            let (scan_span, expected_endpoint_probe_px) =
+                row_state_scan_span_and_endpoint_probe_px(&raster, row_start_edges, start_x, end_x);
+            assert_eq!(endpoints.span, scan_span, "y={y} vertices={vertices:?}");
+            assert_eq!(
+                endpoints.endpoint_probe_px, expected_endpoint_probe_px,
+                "y={y} vertices={vertices:?}"
+            );
+            advance_triangle_row_edges(&raster, &mut row_edge0, &mut row_edge1, &mut row_edge2);
+        }
+    }
+
+    fn row_state_scan_span_and_endpoint_probe_px(
+        raster: &TriangleRasterState,
+        row_start_edges: (f32, f32, f32),
+        start_x: usize,
+        end_x: usize,
+    ) -> (Option<(usize, usize)>, usize) {
+        let (mut pixel_edge0, mut pixel_edge1, mut pixel_edge2) = row_start_edges;
+        let mut run_start = None;
+        let mut scan_span = None;
+        let mut scan_runs = 0;
+        for x in start_x..end_x {
+            let w0 = pixel_edge0 * raster.inv_area;
+            let w1 = pixel_edge1 * raster.inv_area;
+            let w2 = pixel_edge2 * raster.inv_area;
+            if triangle_raster_state_covers_pixel(raster, w0, w1, w2) {
+                run_start.get_or_insert(x);
+            } else if let Some(start) = run_start.take() {
+                record_white_constant_texel_scan_run(start, x, &mut scan_runs, &mut scan_span);
+            }
+            pixel_edge0 += raster.w0_step_x;
+            pixel_edge1 += raster.w1_step_x;
+            pixel_edge2 += raster.w2_step_x;
+        }
+        if let Some(start) = run_start {
+            record_white_constant_texel_scan_run(start, end_x, &mut scan_runs, &mut scan_span);
+        }
+        assert!(
+            scan_runs <= 1,
+            "test triangle unexpectedly produced {scan_runs} row runs"
+        );
+        let expected_endpoint_probe_px = scan_span
+            .map_or(end_x - start_x, |(span_start, span_end)| {
+                (span_start - start_x + 1) + (end_x - span_end + 1)
+            });
+        (scan_span, expected_endpoint_probe_px)
     }
 
     fn test_triangle_bounds(vertices: &[egui::epaint::Vertex; 3]) -> TriangleRasterBounds {

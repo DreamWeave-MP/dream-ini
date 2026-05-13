@@ -35,6 +35,16 @@ pub(super) struct TriangleRowSearch<'a> {
     pub(super) collect_stats: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct TriangleRowStateSearch {
+    pub(super) coverage: TriangleCoverage,
+    pub(super) row_start_edges: (f32, f32, f32),
+    pub(super) x_steps: (f32, f32, f32),
+    pub(super) candidate_start_x: usize,
+    pub(super) candidate_end_x: usize,
+    pub(super) collect_stats: bool,
+}
+
 pub(super) struct TriangleRowEndpoints {
     pub(super) span: Option<(usize, usize)>,
     pub(super) endpoint_probe_px: usize,
@@ -124,6 +134,92 @@ pub(super) fn triangle_row_endpoints(search: TriangleRowSearch<'_>) -> TriangleR
         direct_probe_px,
         fell_back,
     }
+}
+
+pub(super) fn triangle_row_state_endpoints(search: TriangleRowStateSearch) -> TriangleRowEndpoints {
+    let (span_start, first_probe_px) = triangle_row_state_first_covered_x(search);
+    let Some(span_start) = span_start else {
+        return TriangleRowEndpoints {
+            span: None,
+            endpoint_probe_px: first_probe_px,
+            hint_probe_px: 0,
+            canary_probe_px: 0,
+            fallback_probe_px: 0,
+            direct_probe_px: first_probe_px,
+            fell_back: false,
+        };
+    };
+
+    let (last_x, last_probe_px) = triangle_row_state_last_covered_x(search);
+    let span_end = last_x.map_or(span_start + 1, |last_x| last_x.max(span_start) + 1);
+    let endpoint_probe_px = first_probe_px + last_probe_px;
+    TriangleRowEndpoints {
+        span: Some((span_start, span_end)),
+        endpoint_probe_px,
+        hint_probe_px: 0,
+        canary_probe_px: 0,
+        fallback_probe_px: 0,
+        direct_probe_px: endpoint_probe_px,
+        fell_back: false,
+    }
+}
+
+fn triangle_row_state_first_covered_x(search: TriangleRowStateSearch) -> (Option<usize>, usize) {
+    let (mut edge0, mut edge1, mut edge2) = search.row_start_edges;
+    let (step0, step1, step2) = search.x_steps;
+    let mut probe_px = 0;
+    for x in search.candidate_start_x..search.candidate_end_x {
+        if search.collect_stats {
+            probe_px += 1;
+        }
+        if triangle_row_state_covers_pixel(search.coverage, edge0, edge1, edge2) {
+            return (Some(x), probe_px);
+        }
+        edge0 += step0;
+        edge1 += step1;
+        edge2 += step2;
+    }
+    (None, probe_px)
+}
+
+fn triangle_row_state_last_covered_x(search: TriangleRowStateSearch) -> (Option<usize>, usize) {
+    let Some(last_candidate_x) = search.candidate_end_x.checked_sub(1) else {
+        return (None, 0);
+    };
+    if last_candidate_x < search.candidate_start_x {
+        return (None, 0);
+    }
+
+    let dx = usize_to_f32(last_candidate_x - search.candidate_start_x);
+    let (step0, step1, step2) = search.x_steps;
+    let (row_edge0, row_edge1, row_edge2) = search.row_start_edges;
+    let mut edge0 = row_edge0 + step0 * dx;
+    let mut edge1 = row_edge1 + step1 * dx;
+    let mut edge2 = row_edge2 + step2 * dx;
+    let mut probe_px = 0;
+    for x in (search.candidate_start_x..search.candidate_end_x).rev() {
+        if search.collect_stats {
+            probe_px += 1;
+        }
+        if triangle_row_state_covers_pixel(search.coverage, edge0, edge1, edge2) {
+            return (Some(x), probe_px);
+        }
+        edge0 -= step0;
+        edge1 -= step1;
+        edge2 -= step2;
+    }
+    (None, probe_px)
+}
+
+fn triangle_row_state_covers_pixel(
+    coverage: TriangleCoverage,
+    edge0: f32,
+    edge1: f32,
+    edge2: f32,
+) -> bool {
+    edge_covers_pixel(edge0 * coverage.inv_area, coverage.includes_boundary.edge0)
+        && edge_covers_pixel(edge1 * coverage.inv_area, coverage.includes_boundary.edge1)
+        && edge_covers_pixel(edge2 * coverage.inv_area, coverage.includes_boundary.edge2)
 }
 
 fn triangle_hint_needs_fallback(
