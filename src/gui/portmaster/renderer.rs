@@ -56,8 +56,10 @@ impl SoftwareRenderer {
         let log_timings = frame.log_frame || frame.hitch_log_threshold.is_some();
         let total_start = log_timings.then(Instant::now);
         let stage_start = log_timings.then(Instant::now);
-        self.surface.resize(width, height)?;
-        self.surface.clear([17, 20, 28, 255]);
+        let resized = self.surface.resize(width, height)?;
+        if resized || !frame.clear_mode.skip_clear() {
+            self.surface.clear([17, 20, 28, 255]);
+        }
         let resize_clear_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_timings.then(Instant::now);
@@ -413,7 +415,7 @@ fn log_surface_stats<S: GuiShell>(
         write_log(
             frame.log,
             format!(
-                "software renderer render_stats frame={} surface={}x{} surface_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} clipped_primitives={} repaint_request_due_before_frame={} requested_repaint_after_egui={}",
+                "software renderer render_stats frame={} surface={}x{} surface_bytes={} texture_sets={} texture_set_bytes={} texture_full_uploads={} texture_partial_updates={} clipped_primitives={} repaint_request_due_before_frame={} requested_repaint_after_egui={} skip_clear={}",
                 frame.frame_index,
                 surface.width,
                 surface.height,
@@ -425,6 +427,7 @@ fn log_surface_stats<S: GuiShell>(
                 primitive_count,
                 frame.repaint_request_due_before_frame,
                 frame.context.has_requested_repaint(),
+                frame.clear_mode.skip_clear(),
             ),
         );
     }

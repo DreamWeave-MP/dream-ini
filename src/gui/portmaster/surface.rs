@@ -13,7 +13,7 @@ pub(super) struct SoftwareSurface {
 }
 
 impl SoftwareSurface {
-    pub(super) fn resize(&mut self, width: usize, height: usize) -> io::Result<()> {
+    pub(super) fn resize(&mut self, width: usize, height: usize) -> io::Result<bool> {
         let pixels = width
             .checked_mul(height)
             .ok_or_else(|| io::Error::other("software surface pixel count overflow"))?;
@@ -29,8 +29,9 @@ impl SoftwareSurface {
             self.pixels.resize(bytes, 0);
             self.width = width;
             self.height = height;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     pub(super) fn clear(&mut self, color: [u8; 4]) {

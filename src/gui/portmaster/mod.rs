@@ -53,6 +53,8 @@ const HITCH_LOG_ENV_VAR: &str = "DREAM_INI_PM_HITCH_LOG_MS";
 #[cfg(target_os = "linux")]
 const RENDER_TRACE_ENV_VAR: &str = "DREAM_INI_PM_RENDER_TRACE";
 #[cfg(target_os = "linux")]
+const SKIP_CLEAR_ENV_VAR: &str = "DREAM_INI_PM_SKIP_CLEAR";
+#[cfg(target_os = "linux")]
 const DEFAULT_RENDER_STATS_EVERY: u64 = 30;
 pub(crate) fn run() -> ExitCode {
     let log = open_log().map(Mutex::new).map(Arc::new);
@@ -156,6 +158,7 @@ struct FramebufferGuiRuntime<'a> {
     log: Option<&'a SharedLog>,
     frame_interval: Duration,
     render_log_config: RenderLogConfig,
+    clear_mode: ClearMode,
 }
 
 #[cfg(target_os = "linux")]
@@ -168,6 +171,8 @@ impl<'a> FramebufferGuiRuntime<'a> {
         let shell = PortMasterGuiShell::new(log);
         let render_log_config = RenderLogConfig::from_env();
         render_log_config.log(log);
+        let clear_mode = clear_mode_from_env();
+        log_skip_clear_mode(log, clear_mode.skip_clear());
         Self {
             egui_context,
             pending_repaint_delay,
@@ -178,6 +183,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
             log,
             frame_interval,
             render_log_config,
+            clear_mode,
         }
     }
 
@@ -307,6 +313,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
             hitch_log_threshold: self.render_log_config.hitch_log_threshold,
             frame_index: frame_count,
             repaint_request_due_before_frame: requested_repaint_now,
+            clear_mode: self.clear_mode,
         };
         framebuffer.draw_egui_gui(&mut self.renderer, &mut frame)
     }
@@ -446,6 +453,47 @@ fn env_flag_enabled(value: Option<&str>) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClearMode {
+    PerFrame,
+    SkipSteadyState,
+}
+
+#[cfg(target_os = "linux")]
+impl ClearMode {
+    const fn skip_clear(self) -> bool {
+        matches!(self, Self::SkipSteadyState)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn clear_mode_from_env() -> ClearMode {
+    clear_mode_from_value(env::var(SKIP_CLEAR_ENV_VAR).ok().as_deref())
+}
+
+#[cfg(target_os = "linux")]
+fn clear_mode_from_value(value: Option<&str>) -> ClearMode {
+    if env_flag_enabled(value) {
+        ClearMode::SkipSteadyState
+    } else {
+        ClearMode::PerFrame
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn log_skip_clear_mode(log: Option<&SharedLog>, skip_clear: bool) {
+    write_log(
+        log,
+        format!(
+            "portmaster software renderer skip_clear={} env_{}={:?}",
+            skip_clear,
+            SKIP_CLEAR_ENV_VAR,
+            env::var_os(SKIP_CLEAR_ENV_VAR),
+        ),
+    );
+}
+
+#[cfg(target_os = "linux")]
 fn parse_hitch_log_threshold(value: Option<&str>) -> Option<Duration> {
     value
         .and_then(|value| value.parse::<u64>().ok())
@@ -531,6 +579,7 @@ struct GuiFrame<'a, S: GuiShell> {
     hitch_log_threshold: Option<Duration>,
     frame_index: u64,
     repaint_request_due_before_frame: bool,
+    clear_mode: ClearMode,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -581,6 +630,22 @@ mod tests {
         assert_eq!(config.stats_every, DEFAULT_RENDER_STATS_EVERY);
         assert_eq!(config.hitch_log_threshold, None);
         assert!(!should_log_render_stats(0, config));
+    }
+
+    #[test]
+    fn skip_clear_flag_defaults_to_disabled_and_accepts_enabled_values() {
+        assert_eq!(clear_mode_from_value(None), ClearMode::PerFrame);
+        assert_eq!(clear_mode_from_value(Some("0")), ClearMode::PerFrame);
+        assert_eq!(clear_mode_from_value(Some("false")), ClearMode::PerFrame);
+        assert_eq!(clear_mode_from_value(Some("1")), ClearMode::SkipSteadyState);
+        assert_eq!(
+            clear_mode_from_value(Some("true")),
+            ClearMode::SkipSteadyState
+        );
+        assert_eq!(
+            clear_mode_from_value(Some("ON")),
+            ClearMode::SkipSteadyState
+        );
     }
 
     #[test]
