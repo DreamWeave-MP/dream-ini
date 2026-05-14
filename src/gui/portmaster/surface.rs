@@ -4,6 +4,48 @@ use std::io;
 
 // Covers 640x480 and 1280x720 handheld fbdev targets, while still rejecting surprise desktop-sized framebuffers.
 const MAX_RENDER_PIXELS: usize = 1280 * 720;
+const MAX_BLEND_PRODUCT: u16 = 255 * 255;
+const BLEND_LOOKUP_TABLE_SIDE: usize = 256;
+const BLEND_LOOKUP_TABLE_SIDE_U16: u16 = 256;
+const BLEND_LOOKUP_TABLE_LEN: usize = BLEND_LOOKUP_TABLE_SIDE * BLEND_LOOKUP_TABLE_SIDE;
+
+macro_rules! blend_lookup_table {
+    ($($inverse_alpha:literal),* $(,)?) => {
+        [$(build_blend_lookup_row($inverse_alpha)),*]
+    };
+}
+
+static BLEND_PRODUCT_BY_255_ROUNDED: [[u8; BLEND_LOOKUP_TABLE_SIDE]; BLEND_LOOKUP_TABLE_SIDE] = blend_lookup_table!(
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+    50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
+    74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97,
+    98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,
+    117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135,
+    136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154,
+    155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173,
+    174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192,
+    193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211,
+    212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230,
+    231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249,
+    250, 251, 252, 253, 254, 255
+);
+
+const fn build_blend_lookup_row(inverse_alpha: u16) -> [u8; BLEND_LOOKUP_TABLE_SIDE] {
+    let mut row = [0; BLEND_LOOKUP_TABLE_SIDE];
+    let mut index = 0;
+    let mut destination = 0;
+    while destination < BLEND_LOOKUP_TABLE_SIDE_U16 {
+        row[index] = divide_blend_product_by_255_rounded(destination * inverse_alpha);
+        index += 1;
+        destination += 1;
+    }
+    row
+}
+
+fn blend_lookup_entry(destination: u8, inverse_alpha: u8) -> u8 {
+    BLEND_PRODUCT_BY_255_ROUNDED[usize::from(inverse_alpha)][usize::from(destination)]
+}
 
 #[derive(Debug, Default)]
 pub(super) struct SoftwareSurface {
@@ -81,7 +123,7 @@ impl SoftwareSurface {
     }
 
     fn blend_translucent_span_at_offset(&mut self, offset: usize, len: usize, color: [u8; 4]) {
-        let inverse_alpha = u16::from(u8::MAX - color[3]);
+        let inverse_alpha = u8::MAX - color[3];
         let end = offset + len * 4;
         for pixel in self.pixels[offset..end].chunks_exact_mut(4) {
             blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
@@ -123,7 +165,7 @@ fn alpha_blend(destination: &mut [u8], source: [u8; 4]) {
         _ => {}
     }
 
-    let inverse_alpha = u16::from(u8::MAX - source[3]);
+    let inverse_alpha = u8::MAX - source[3];
     // egui::Color32 stores premultiplied-alpha sRGBA. Do not multiply the
     // source channels by alpha again here unless darker fringes around every
     // translucent primitive sound like entertainment.
@@ -137,7 +179,7 @@ fn blend_translucent_premultiplied_over_opaque_destination(
     destination: &mut [u8],
     source: [u8; 4],
 ) {
-    let inverse_alpha = u16::from(u8::MAX - source[3]);
+    let inverse_alpha = u8::MAX - source[3];
     blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
         destination,
         source,
@@ -148,7 +190,7 @@ fn blend_translucent_premultiplied_over_opaque_destination(
 fn blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
     destination: &mut [u8],
     source: [u8; 4],
-    inverse_alpha: u16,
+    inverse_alpha: u8,
 ) {
     destination[0] = blend_premultiplied_channel(source[0], destination[0], inverse_alpha);
     destination[1] = blend_premultiplied_channel(source[1], destination[1], inverse_alpha);
@@ -156,18 +198,17 @@ fn blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
     destination[3] = u8::MAX;
 }
 
-fn blend_premultiplied_channel(source: u8, destination: u8, inverse_alpha: u16) -> u8 {
-    u8::try_from(
-        u16::from(source)
-            + divide_blend_product_by_255_rounded(u16::from(destination) * inverse_alpha),
-    )
-    .unwrap_or(u8::MAX)
+fn blend_premultiplied_channel(source: u8, destination: u8, inverse_alpha: u8) -> u8 {
+    let blend = blend_lookup_entry(destination, inverse_alpha);
+    u8::try_from(u16::from(source) + u16::from(blend)).unwrap_or(u8::MAX)
 }
 
-fn divide_blend_product_by_255_rounded(product: u16) -> u16 {
-    debug_assert!(product <= u16::from(u8::MAX) * u16::from(u8::MAX));
+const fn divide_blend_product_by_255_rounded(product: u16) -> u8 {
+    debug_assert!(product <= MAX_BLEND_PRODUCT);
     let biased = product + 128;
-    (biased + (biased >> 8)) >> 8
+    let quotient = (biased + (biased >> 8)) >> 8;
+    debug_assert!(quotient <= 255);
+    quotient.to_le_bytes()[0]
 }
 
 #[cfg(test)]
@@ -181,7 +222,29 @@ mod tests {
                 let product = u16::from(destination) * u16::from(inverse_alpha);
                 let reference = (product + 127) / 255;
 
-                assert_eq!(divide_blend_product_by_255_rounded(product), reference);
+                assert_eq!(
+                    u16::from(divide_blend_product_by_255_rounded(product)),
+                    reference
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blend_lookup_table_matches_reference_for_all_entries() {
+        assert_eq!(BLEND_PRODUCT_BY_255_ROUNDED.len(), 256);
+        assert_eq!(BLEND_PRODUCT_BY_255_ROUNDED[0].len(), 256);
+        assert_eq!(
+            BLEND_PRODUCT_BY_255_ROUNDED.len() * BLEND_PRODUCT_BY_255_ROUNDED[0].len(),
+            BLEND_LOOKUP_TABLE_LEN
+        );
+
+        for inverse_alpha in u8::MIN..=u8::MAX {
+            for destination in u8::MIN..=u8::MAX {
+                let product = u16::from(destination) * u16::from(inverse_alpha);
+                let reference = u8::try_from((product + 127) / 255).expect("blend product");
+
+                assert_eq!(blend_lookup_entry(destination, inverse_alpha), reference);
             }
         }
     }
