@@ -182,8 +182,13 @@ fn show_numbered_cfg(
     cache: &GeneratedCfgPreviewCache,
     viewport: egui::Rect,
 ) {
-    let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
-    let char_width = row_height;
+    let monospace_font = egui::TextStyle::Monospace.resolve(ui.style());
+    let (row_height, char_width) = ui.fonts_mut(|fonts| {
+        (
+            fonts.row_height(&monospace_font),
+            fonts.glyph_width(&monospace_font, 'm'),
+        )
+    });
     let gutter_width = usize_to_f32(cache.number_width) * char_width;
     let body_width = usize_to_f32(cache.max_line_chars) * char_width;
     let content_size = egui::vec2(
@@ -192,39 +197,51 @@ fn show_numbered_cfg(
     );
     let (_content_id, content_rect) = ui.allocate_space(content_size);
 
-    let content_top = content_rect.top();
-    let visible_top = (viewport.top() - content_top).max(0.0);
-    let visible_bottom = (viewport.bottom() - content_top).max(visible_top);
     let visible_rows = visible_row_range(
-        visible_top..visible_bottom,
+        viewport.top()..viewport.bottom(),
         row_height,
         cache.line_count(),
         GENERATED_CFG_ROW_OVERSCAN,
     );
+    let content_top = content_rect.top();
     let content_left = content_rect.left();
     let body_left = content_left + gutter_width + GENERATED_CFG_COLUMN_GAP;
-    let text_color = ui.visuals().text_color();
 
-    for row in visible_rows {
-        let y = content_top + usize_to_f32(row) * row_height;
-        let line = &cfg_text[cache.line_ranges[row].clone()];
-        let number_pos = egui::pos2(content_left + gutter_width, y);
-        let body_pos = egui::pos2(body_left, y);
-        ui.painter().text(
-            number_pos,
-            egui::Align2::RIGHT_TOP,
-            cache.line_numbers[row].as_str(),
-            egui::FontId::monospace(row_height),
-            text_color,
-        );
-        ui.painter().text(
-            body_pos,
-            egui::Align2::LEFT_TOP,
-            line,
-            egui::FontId::monospace(row_height),
-            text_color,
-        );
-    }
+    ui.scope(|ui| {
+        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+        for row in visible_rows {
+            let y = content_top + usize_to_f32(row) * row_height;
+            let line = &cfg_text[cache.line_ranges[row].clone()];
+            let number_rect = egui::Rect::from_min_size(
+                egui::pos2(content_left, y),
+                egui::vec2(gutter_width, row_height),
+            );
+            let body_rect = egui::Rect::from_min_size(
+                egui::pos2(body_left, y),
+                egui::vec2(body_width, row_height),
+            );
+            place_cfg_label(
+                ui,
+                number_rect,
+                &cache.line_numbers[row],
+                egui::Align::RIGHT,
+            );
+            place_cfg_label(ui, body_rect, line, egui::Align::LEFT);
+        }
+    });
+}
+
+fn place_cfg_label(ui: &mut egui::Ui, rect: egui::Rect, text: &str, align: egui::Align) {
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(align)),
+    );
+    child.add(
+        egui::Label::new(text)
+            .selectable(false)
+            .wrap_mode(egui::TextWrapMode::Extend),
+    );
 }
 
 fn cfg_line_ranges(cfg_text: &str) -> Vec<Range<usize>> {
@@ -365,6 +382,11 @@ mod tests {
         assert_eq!(visible_row_range(95.0..100.0, 10.0, 10, 0), 9..10);
         assert_eq!(visible_row_range(25.0..45.0, 10.0, 10, 2), 0..7);
         assert_eq!(visible_row_range(85.0..105.0, 10.0, 10, 2), 6..10);
+    }
+
+    #[test]
+    fn visible_row_range_uses_content_relative_viewport() {
+        assert_eq!(visible_row_range(30.0..50.0, 10.0, 10, 0), 3..5);
     }
 
     #[test]
