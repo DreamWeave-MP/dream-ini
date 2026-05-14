@@ -826,62 +826,72 @@ fn rasterize_separable_uv_textured_rect_no_stats(
     vertex_color: [u8; 4],
 ) {
     if vertex_color == [255, 255, 255, 255] {
-        rasterize_separable_uv_textured_rect_no_stats_with_color(
-            surface,
-            corners,
-            texture,
-            range,
-            uv_basis,
-            |texel| texel,
+        rasterize_separable_uv_textured_rect_no_stats_white(
+            surface, corners, texture, range, uv_basis,
         );
-    } else {
-        rasterize_separable_uv_textured_rect_no_stats_with_color(
-            surface,
-            corners,
-            texture,
-            range,
-            uv_basis,
-            |texel| modulate_color(vertex_color, texel),
-        );
+        return;
     }
+
+    rasterize_separable_uv_textured_rect_no_stats_modulated(
+        surface,
+        corners,
+        texture,
+        range,
+        uv_basis,
+        vertex_color,
+    );
 }
 
-fn rasterize_separable_uv_textured_rect_no_stats_with_color(
+fn rasterize_separable_uv_textured_rect_no_stats_white(
     surface: &mut SoftwareSurface,
     corners: TexturedQuadCorners,
     texture: &TextureImage,
     range: RectRasterRange,
     uv_basis: RectUvBasis,
-    pixel_color: impl Fn([u8; 4]) -> [u8; 4],
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
-        let row_runs =
-            SeparableUvTexturedRectRow::new(surface, texture, range, row, texture_row_offset, y);
-        emit_separable_uv_textured_rect_row_runs_no_stats(surface, row_runs, &pixel_color);
+        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
+        for x in range.start_x..range.end_x {
+            let color =
+                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+            match color[3] {
+                0 => {}
+                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+            }
+            pixel_offset += 4;
+        }
     }
 }
 
-fn emit_separable_uv_textured_rect_row_runs_no_stats(
+fn rasterize_separable_uv_textured_rect_no_stats_modulated(
     surface: &mut SoftwareSurface,
-    row: SeparableUvTexturedRectRow<'_>,
-    pixel_color: &impl Fn([u8; 4]) -> [u8; 4],
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    vertex_color: [u8; 4],
 ) {
-    let Some(mut run) = row.first_run(pixel_color) else {
-        return;
-    };
-
-    for x in row.range.start_x + 1..row.range.end_x {
-        let color = row.pixel_color(x, pixel_color);
-        if color == run.color {
-            run.len += 1;
-        } else {
-            emit_separable_uv_textured_rect_run_no_stats(surface, run);
-            run = run.next(color);
+    for y in range.start_y..range.end_y {
+        let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
+        for x in range.start_x..range.end_x {
+            let texel =
+                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+            if texel[3] != 0 {
+                let color = modulate_color(vertex_color, texel);
+                match color[3] {
+                    0 => {}
+                    u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                    _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+                }
+            }
+            pixel_offset += 4;
         }
     }
-    emit_separable_uv_textured_rect_run_no_stats(surface, run);
 }
 
 fn rasterize_separable_uv_textured_rect_with_stats(
@@ -893,151 +903,87 @@ fn rasterize_separable_uv_textured_rect_with_stats(
     vertex_color: [u8; 4],
     stats: &mut RasterStats,
 ) {
+    stats.textured_rect_separable_direct_calls += 1;
+    stats.textured_rect_separable_direct_px +=
+        (range.end_x - range.start_x) * (range.end_y - range.start_y);
+
     if vertex_color == [255, 255, 255, 255] {
-        rasterize_separable_uv_textured_rect_with_stats_and_color(
-            surface,
-            corners,
-            texture,
-            range,
-            uv_basis,
-            stats,
-            |texel| texel,
+        rasterize_separable_uv_textured_rect_with_stats_white(
+            surface, corners, texture, range, uv_basis, stats,
         );
-    } else {
-        rasterize_separable_uv_textured_rect_with_stats_and_color(
-            surface,
-            corners,
-            texture,
-            range,
-            uv_basis,
-            stats,
-            |texel| modulate_color(vertex_color, texel),
-        );
+        return;
     }
+
+    rasterize_separable_uv_textured_rect_with_stats_modulated(
+        surface,
+        corners,
+        texture,
+        range,
+        uv_basis,
+        vertex_color,
+        stats,
+    );
 }
 
-fn rasterize_separable_uv_textured_rect_with_stats_and_color(
+fn rasterize_separable_uv_textured_rect_with_stats_white(
     surface: &mut SoftwareSurface,
     corners: TexturedQuadCorners,
     texture: &TextureImage,
     range: RectRasterRange,
     uv_basis: RectUvBasis,
     stats: &mut RasterStats,
-    pixel_color: impl Fn([u8; 4]) -> [u8; 4],
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
-        let row_runs =
-            SeparableUvTexturedRectRow::new(surface, texture, range, row, texture_row_offset, y);
-        emit_separable_uv_textured_rect_row_runs_with_stats(surface, row_runs, stats, &pixel_color);
-    }
-}
-
-fn emit_separable_uv_textured_rect_row_runs_with_stats(
-    surface: &mut SoftwareSurface,
-    row: SeparableUvTexturedRectRow<'_>,
-    stats: &mut RasterStats,
-    pixel_color: &impl Fn([u8; 4]) -> [u8; 4],
-) {
-    let Some(mut run) = row.first_run(pixel_color) else {
-        return;
-    };
-
-    for x in row.range.start_x + 1..row.range.end_x {
-        let color = row.pixel_color(x, pixel_color);
-        if color == run.color {
-            run.len += 1;
-        } else {
-            emit_separable_uv_textured_rect_run_with_stats(surface, run, stats);
-            run = run.next(color);
+        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
+        for x in range.start_x..range.end_x {
+            let color =
+                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+            stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
+            stats.record_alpha_px(color[3], 1);
+            match color[3] {
+                0 => {}
+                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+            }
+            pixel_offset += 4;
         }
     }
-    emit_separable_uv_textured_rect_run_with_stats(surface, run, stats);
 }
 
-#[derive(Clone, Copy)]
-struct SeparableUvTexturedRectRow<'a> {
-    texture: &'a TextureImage,
+fn rasterize_separable_uv_textured_rect_with_stats_modulated(
+    surface: &mut SoftwareSurface,
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
     range: RectRasterRange,
-    row: RectUvRow,
-    texture_row_offset: usize,
-    pixel_offset: usize,
-}
-
-impl<'a> SeparableUvTexturedRectRow<'a> {
-    fn new(
-        surface: &SoftwareSurface,
-        texture: &'a TextureImage,
-        range: RectRasterRange,
-        row: RectUvRow,
-        texture_row_offset: usize,
-        y: usize,
-    ) -> Self {
-        Self {
-            texture,
-            range,
-            row,
-            texture_row_offset,
-            pixel_offset: surface.row_offset(y) + range.start_x * 4,
-        }
-    }
-
-    fn first_run(
-        self,
-        pixel_color: &impl Fn([u8; 4]) -> [u8; 4],
-    ) -> Option<SeparableUvTexturedRectRun> {
-        (self.range.start_x < self.range.end_x).then(|| SeparableUvTexturedRectRun {
-            color: self.pixel_color(self.range.start_x, pixel_color),
-            len: 1,
-            pixel_offset: self.pixel_offset,
-        })
-    }
-
-    fn pixel_color(self, x: usize, pixel_color: &impl Fn([u8; 4]) -> [u8; 4]) -> [u8; 4] {
-        let texel = separable_uv_texel_color(
-            self.texture,
-            self.texture_row_offset,
-            self.row,
-            x,
-            self.range.start_x,
-        );
-        pixel_color(texel)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct SeparableUvTexturedRectRun {
-    color: [u8; 4],
-    len: usize,
-    pixel_offset: usize,
-}
-
-impl SeparableUvTexturedRectRun {
-    fn next(self, color: [u8; 4]) -> Self {
-        Self {
-            color,
-            len: 1,
-            pixel_offset: self.pixel_offset + self.len * 4,
-        }
-    }
-}
-
-fn emit_separable_uv_textured_rect_run_no_stats(
-    surface: &mut SoftwareSurface,
-    run: SeparableUvTexturedRectRun,
-) {
-    surface.blend_constant_color_span_at_offset(run.pixel_offset, run.len, run.color);
-}
-
-fn emit_separable_uv_textured_rect_run_with_stats(
-    surface: &mut SoftwareSurface,
-    run: SeparableUvTexturedRectRun,
+    uv_basis: RectUvBasis,
+    vertex_color: [u8; 4],
     stats: &mut RasterStats,
 ) {
-    stats.record_textured_rect_separable_run(run.color[3], run.len);
-    stats.record_alpha_px(run.color[3], run.len);
-    emit_separable_uv_textured_rect_run_no_stats(surface, run);
+    for y in range.start_y..range.end_y {
+        let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
+        for x in range.start_x..range.end_x {
+            let texel =
+                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+            if texel[3] == 0 {
+                stats.record_textured_rect_separable_direct_alpha_px(0, 1);
+                stats.record_alpha_px(0, 1);
+            } else {
+                let color = modulate_color(vertex_color, texel);
+                stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
+                stats.record_alpha_px(color[3], 1);
+                match color[3] {
+                    0 => {}
+                    u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                    _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+                }
+            }
+            pixel_offset += 4;
+        }
+    }
 }
 
 fn separable_uv_texture_row_offset(texture: &TextureImage, v: f32) -> usize {
@@ -1166,6 +1112,114 @@ mod tests {
     }
 
     #[test]
+    fn separable_direct_textured_rect_matches_generic_for_alternating_alpha_row() {
+        let corners = textured_rect_corners(
+            egui::pos2(0.0, 2.0),
+            egui::pos2(8.0, 3.0),
+            [255, 255, 255, 255],
+            [
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+            ],
+        );
+        let texture = alternating_alpha_row_texture();
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 2.0,
+            max_x: 8.0,
+            max_y: 3.0,
+        };
+
+        assert_separable_uv_matches_generic(corners, bounds, &texture, full_clip(8, 6), [255; 4]);
+    }
+
+    #[test]
+    fn separable_direct_textured_rect_treats_transparent_texel_rgb_as_no_op() {
+        let corners = textured_rect_corners(
+            egui::pos2(1.0, 1.0),
+            egui::pos2(5.0, 2.0),
+            [255, 255, 255, 255],
+            [
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+            ],
+        );
+        let texture = transparent_varying_rgb_texture();
+        let bounds = QuadBounds {
+            min_x: 1.0,
+            min_y: 1.0,
+            max_x: 5.0,
+            max_y: 2.0,
+        };
+
+        assert_separable_uv_matches_generic(corners, bounds, &texture, full_clip(8, 6), [255; 4]);
+    }
+
+    #[test]
+    fn separable_direct_textured_rect_matches_generic_for_modulated_vertex_color() {
+        let corners = textured_rect_corners(
+            egui::pos2(1.0, 1.0),
+            egui::pos2(5.0, 4.0),
+            [64, 128, 192, 160],
+            [
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+                egui::pos2(0.0, 1.0),
+                egui::pos2(1.0, 1.0),
+            ],
+        );
+        let texture = mixed_alpha_texture();
+        let bounds = QuadBounds {
+            min_x: 1.0,
+            min_y: 1.0,
+            max_x: 5.0,
+            max_y: 4.0,
+        };
+
+        assert_separable_uv_matches_generic(
+            corners,
+            bounds,
+            &texture,
+            full_clip(8, 6),
+            [64, 128, 192, 160],
+        );
+    }
+
+    #[test]
+    fn separable_direct_textured_rect_matches_generic_for_clipped_rect() {
+        let corners = textured_rect_corners(
+            egui::pos2(0.0, 0.0),
+            egui::pos2(8.0, 5.0),
+            [255, 255, 255, 255],
+            [
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+                egui::pos2(0.0, 1.0),
+                egui::pos2(1.0, 1.0),
+            ],
+        );
+        let texture = mixed_alpha_texture();
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 8.0,
+            max_y: 5.0,
+        };
+        let clip = ClipBounds {
+            min_x: 2,
+            min_y: 1,
+            max_x: 6,
+            max_y: 4,
+        };
+
+        assert_separable_uv_matches_generic(corners, bounds, &texture, clip, [255; 4]);
+    }
+
+    #[test]
     fn sampled_textured_rect_stats_split_separable_and_nonseparable_uvs() {
         let texture = mixed_alpha_texture();
         let mut surface = test_surface(8, 6);
@@ -1221,21 +1275,20 @@ mod tests {
         assert_eq!(stats.textured_rect_nonseparable_uv_calls, 1);
         assert_eq!(stats.textured_rect_separable_uv_px, 12);
         assert_eq!(stats.textured_rect_nonseparable_uv_px, 12);
-        assert_eq!(stats.textured_rect_separable_run_calls, 12);
-        assert_eq!(stats.textured_rect_separable_run_px, 12);
-        assert_eq!(stats.textured_rect_separable_opaque_run_calls, 4);
-        assert_eq!(stats.textured_rect_separable_opaque_run_px, 4);
-        assert_eq!(stats.textured_rect_separable_translucent_run_calls, 6);
-        assert_eq!(stats.textured_rect_separable_translucent_run_px, 6);
-        assert_eq!(stats.textured_rect_separable_transparent_run_calls, 2);
-        assert_eq!(stats.textured_rect_separable_transparent_run_px, 2);
+        assert_eq!(stats.textured_rect_separable_run_calls, 0);
+        assert_eq!(stats.textured_rect_separable_run_px, 0);
+        assert_eq!(stats.textured_rect_separable_direct_calls, 1);
+        assert_eq!(stats.textured_rect_separable_direct_px, 12);
+        assert_eq!(stats.textured_rect_separable_direct_opaque_px, 4);
+        assert_eq!(stats.textured_rect_separable_direct_translucent_px, 6);
+        assert_eq!(stats.textured_rect_separable_direct_transparent_px, 2);
         assert_eq!(stats.textured_rect_separable_white_vertex_calls, 1);
         assert_eq!(stats.textured_rect_separable_white_vertex_px, 12);
         assert_eq!(stats.textured_rect_separable_modulated_vertex_calls, 0);
         assert_eq!(stats.textured_rect_separable_modulated_vertex_px, 0);
         assert_eq!(
             stats.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16,
-            [12, 0, 0, 0, 0, 0]
+            [0, 0, 0, 0, 0, 0]
         );
     }
 
@@ -1441,6 +1494,25 @@ mod tests {
                 255, 255, 128, 128, 0, 0, 255, 255, 255, 255, 12, 24, 48, 96, 48, 24, 12, 160, 90,
                 120, 150, 224, 200, 20, 100, 255,
             ],
+        }
+    }
+
+    fn alternating_alpha_row_texture() -> TextureImage {
+        TextureImage {
+            width: 8,
+            height: 1,
+            pixels: vec![
+                0, 0, 0, 0, 32, 32, 32, 96, 64, 64, 64, 255, 96, 96, 96, 0, 128, 128, 128, 160,
+                160, 160, 160, 255, 192, 192, 192, 0, 224, 224, 224, 224,
+            ],
+        }
+    }
+
+    fn transparent_varying_rgb_texture() -> TextureImage {
+        TextureImage {
+            width: 4,
+            height: 1,
+            pixels: vec![255, 0, 0, 0, 0, 255, 0, 0, 0, 0, 255, 0, 128, 64, 32, 0],
         }
     }
 

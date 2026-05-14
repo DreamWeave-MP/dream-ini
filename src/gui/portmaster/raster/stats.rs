@@ -146,6 +146,11 @@ pub(in crate::gui::portmaster) struct RasterStats {
     pub(in crate::gui::portmaster) textured_rect_separable_white_vertex_px: usize,
     pub(in crate::gui::portmaster) textured_rect_separable_modulated_vertex_calls: usize,
     pub(in crate::gui::portmaster) textured_rect_separable_modulated_vertex_px: usize,
+    pub(in crate::gui::portmaster) textured_rect_separable_direct_calls: usize,
+    pub(in crate::gui::portmaster) textured_rect_separable_direct_px: usize,
+    pub(in crate::gui::portmaster) textured_rect_separable_direct_opaque_px: usize,
+    pub(in crate::gui::portmaster) textured_rect_separable_direct_translucent_px: usize,
+    pub(in crate::gui::portmaster) textured_rect_separable_direct_transparent_px: usize,
     pub(in crate::gui::portmaster) textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16:
         [usize; 6],
     pub(in crate::gui::portmaster) degenerate_triangle_skips: usize,
@@ -280,6 +285,11 @@ macro_rules! raster_stats_values {
             $stats.textured_rect_separable_white_vertex_px,
             $stats.textured_rect_separable_modulated_vertex_calls,
             $stats.textured_rect_separable_modulated_vertex_px,
+            $stats.textured_rect_separable_direct_calls,
+            $stats.textured_rect_separable_direct_px,
+            $stats.textured_rect_separable_direct_opaque_px,
+            $stats.textured_rect_separable_direct_translucent_px,
+            $stats.textured_rect_separable_direct_transparent_px,
             $stats.degenerate_triangle_skips,
             $stats.fully_clipped_triangle_skips,
             $stats.opaque_px,
@@ -316,32 +326,16 @@ impl RasterStats {
         }
     }
 
-    pub(super) fn record_textured_rect_separable_run(&mut self, alpha: u8, len: usize) {
-        self.textured_rect_separable_run_calls += 1;
-        self.textured_rect_separable_run_px += len;
+    pub(super) fn record_textured_rect_separable_direct_alpha_px(
+        &mut self,
+        alpha: u8,
+        count: usize,
+    ) {
         match alpha {
-            0 => {
-                self.textured_rect_separable_transparent_run_calls += 1;
-                self.textured_rect_separable_transparent_run_px += len;
-            }
-            u8::MAX => {
-                self.textured_rect_separable_opaque_run_calls += 1;
-                self.textured_rect_separable_opaque_run_px += len;
-            }
-            _ => {
-                self.textured_rect_separable_translucent_run_calls += 1;
-                self.textured_rect_separable_translucent_run_px += len;
-            }
+            0 => self.textured_rect_separable_direct_transparent_px += count,
+            u8::MAX => self.textured_rect_separable_direct_opaque_px += count,
+            _ => self.textured_rect_separable_direct_translucent_px += count,
         }
-        let bucket = match len {
-            0 | 1 => 0,
-            2 => 1,
-            3 | 4 => 2,
-            5..=8 => 3,
-            9..=16 => 4,
-            _ => 5,
-        };
-        self.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16[bucket] += len;
     }
 
     pub(in crate::gui::portmaster) fn log_line(&self) -> String {
@@ -354,9 +348,9 @@ impl RasterStats {
         write!(&mut line, " solid_fan_fallback_rows={} solid_fan_edge_precompute_calls={} solid_fan_edge_precompute_edges={} solid_fan_edge_precompute_used_rows={} solid_fan_edge_precompute_fallback_budget={} solid_fan_edge_precompute_fallback_non_finite={} solid_fan_edge_precompute_old_solver_rows={} solid_fan_span_cache_hits={} solid_fan_span_cache_misses={} solid_fan_span_cache_hit_rows={} solid_fan_span_cache_hit_px={} solid_fan_span_cache_stored_rows={} solid_fan_span_cache_rejected_too_many_rows={} solid_fan_span_cache_resident_entries={} solid_fan_span_cache_resident_rows={} solid_fan_span_cache_total_evictions={} solid_fan_span_cache_row_budget_evictions={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={}", values[44], values[45], values[46], values[47], values[48], values[49], values[50], values[51], values[52], values[53], values[54], values[55], values[56], values[57], values[58], values[59], values[60], values[61], values[62], values[63]).expect("writing to a String cannot fail");
         write!(&mut line, " textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_white_alpha_only_eligible_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_white_endpoint_rows={} constant_texel_textured_triangle_white_endpoint_match_rows={} constant_texel_textured_triangle_white_endpoint_mismatch_rows={} constant_texel_textured_triangle_white_endpoint_empty_rows={} constant_texel_textured_triangle_white_endpoint_span_px={} constant_texel_textured_triangle_white_endpoint_probe_px={} constant_texel_textured_triangle_white_endpoint_render_rows={} constant_texel_textured_triangle_white_endpoint_render_px={} constant_texel_textured_triangle_white_scan_runs={}", values[64], values[65], values[66], values[67], values[68], values[69], values[70], values[71], values[72], values[73], values[74], values[75], values[76], values[77], values[78], values[79], values[80], values[81], values[82], values[83], values[84], values[85]).expect("writing to a String cannot fail");
         write!(&mut line, " constant_texel_textured_triangle_white_scan_multi_run_rows={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px={} constant_texel_textured_triangle_white_constant_alpha_run_calls={} constant_texel_textured_triangle_white_constant_alpha_run_px={} constant_texel_textured_triangle_white_constant_color_run_calls={} constant_texel_textured_triangle_white_constant_color_run_px={} constant_texel_textured_triangle_white_variable_color_run_calls={} constant_texel_textured_triangle_white_variable_color_run_px={} constant_texel_textured_triangle_white_variable_alpha_run_calls={} constant_texel_textured_triangle_white_variable_alpha_run_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={}", values[86], values[87], values[88], values[89], values[90], values[91], values[92], values[93], values[94], values[95], values[96], values[97], values[98], values[99], values[100], values[101], values[102], values[103], values[104], values[105]).expect("writing to a String cannot fail");
-        write!(&mut line, " sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} textured_rect_separable_run_calls={} textured_rect_separable_run_px={} textured_rect_separable_opaque_run_calls={} textured_rect_separable_opaque_run_px={} textured_rect_separable_translucent_run_calls={} textured_rect_separable_translucent_run_px={} textured_rect_separable_transparent_run_calls={} textured_rect_separable_transparent_run_px={} textured_rect_separable_white_vertex_calls={} textured_rect_separable_white_vertex_px={} textured_rect_separable_modulated_vertex_calls={} textured_rect_separable_modulated_vertex_px={}", values[106], values[107], values[108], values[109], values[110], values[111], values[112], values[113], values[114], values[115], values[116], values[117], values[118], values[119], values[120], values[121]).expect("writing to a String cannot fail");
+        write!(&mut line, " sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} textured_rect_separable_run_calls={} textured_rect_separable_run_px={} textured_rect_separable_opaque_run_calls={} textured_rect_separable_opaque_run_px={} textured_rect_separable_translucent_run_calls={} textured_rect_separable_translucent_run_px={} textured_rect_separable_transparent_run_calls={} textured_rect_separable_transparent_run_px={} textured_rect_separable_white_vertex_calls={} textured_rect_separable_white_vertex_px={} textured_rect_separable_modulated_vertex_calls={} textured_rect_separable_modulated_vertex_px={} textured_rect_separable_direct_calls={} textured_rect_separable_direct_px={} textured_rect_separable_direct_opaque_px={} textured_rect_separable_direct_translucent_px={} textured_rect_separable_direct_transparent_px={}", values[106], values[107], values[108], values[109], values[110], values[111], values[112], values[113], values[114], values[115], values[116], values[117], values[118], values[119], values[120], values[121], values[122], values[123], values[124], values[125], values[126]).expect("writing to a String cannot fail");
         let buckets = self.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16;
-        write!(&mut line, " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16={},{},{},{},{},{} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}", buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], values[122], values[123], values[124], values[125], values[126]).expect("writing to a String cannot fail");
+        write!(&mut line, " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16={},{},{},{},{},{} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}", buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], values[127], values[128], values[129], values[130], values[131]).expect("writing to a String cannot fail");
         line
     }
 }
@@ -490,14 +484,19 @@ mod tests {
                 textured_rect_separable_white_vertex_px: 120,
                 textured_rect_separable_modulated_vertex_calls: 121,
                 textured_rect_separable_modulated_vertex_px: 122,
+                textured_rect_separable_direct_calls: 123,
+                textured_rect_separable_direct_px: 124,
+                textured_rect_separable_direct_opaque_px: 125,
+                textured_rect_separable_direct_translucent_px: 126,
+                textured_rect_separable_direct_transparent_px: 127,
                 textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16: [
-                    123, 124, 125, 126, 127, 128,
+                    128, 129, 130, 131, 132, 133,
                 ],
-                degenerate_triangle_skips: 129,
-                fully_clipped_triangle_skips: 130,
-                opaque_px: 131,
-                translucent_px: 132,
-                transparent_px: 133,
+                degenerate_triangle_skips: 134,
+                fully_clipped_triangle_skips: 135,
+                opaque_px: 136,
+                translucent_px: 137,
+                transparent_px: 138,
             }
         };
     }
@@ -524,11 +523,11 @@ mod tests {
         assert!(line.contains(" textured_rect_separable_uv_calls=11 "));
         assert!(line.contains(" textured_rect_nonseparable_uv_px=14 "));
         assert!(line.contains(
-            " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16=123,124,125,126,127,128 "
+            " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16=128,129,130,131,132,133 "
         ));
         assert_eq!(
             actual_values,
-            (1..=122).chain(129..=133).collect::<Vec<_>>()
+            (1..=127).chain(134..=138).collect::<Vec<_>>()
         );
     }
 }
