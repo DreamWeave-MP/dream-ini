@@ -25,8 +25,8 @@ use self::path_widgets::{
     controller_marker_width, path_file_row, path_folder_row, path_label_width, path_save_file_row,
 };
 use self::result_panels::{
-    ResultPanel, cycled_result_panel, default_result_panel, result_tab, show_error_panel,
-    show_event_panel, show_generated_cfg_panel, show_warning_panel,
+    GeneratedCfgPreviewCache, ResultPanel, cycled_result_panel, default_result_panel, result_tab,
+    show_error_panel, show_event_panel, show_generated_cfg_panel, show_warning_panel,
 };
 #[cfg(test)]
 use self::scroll::{CONTROLLER_PREVIEW_PAGE_SCROLL_PIXELS, CONTROLLER_PREVIEW_SCROLL_PIXELS};
@@ -114,6 +114,7 @@ struct GuiApp {
     pending_form_scroll: Option<FormControl>,
     controller_navigation_visible: bool,
     generated_cfg_scroll_delta: egui::Vec2,
+    generated_cfg_preview_cache: GeneratedCfgPreviewCache,
     mode: GuiMode,
 }
 
@@ -135,6 +136,7 @@ impl GuiApp {
             pending_form_scroll: None,
             controller_navigation_visible: false,
             generated_cfg_scroll_delta: egui::Vec2::ZERO,
+            generated_cfg_preview_cache: GeneratedCfgPreviewCache::default(),
             mode: GuiMode::ImportForm,
         }
     }
@@ -150,6 +152,7 @@ impl GuiApp {
             pending_form_scroll: None,
             controller_navigation_visible: false,
             generated_cfg_scroll_delta: egui::Vec2::ZERO,
+            generated_cfg_preview_cache: GeneratedCfgPreviewCache::default(),
             mode: GuiMode::ImportForm,
         }
     }
@@ -451,7 +454,7 @@ impl GuiApp {
             FormControl::Import => self.run_import_if_enabled(),
             FormControl::ResultTabs => self.cycle_result_panel(FormAdjustment::Next),
             FormControl::CopyResult => self.copy_result_to_clipboard(shell, context),
-            FormControl::ClearResult => self.result = None,
+            FormControl::ClearResult => self.clear_result(),
         }
     }
 
@@ -645,6 +648,11 @@ impl GuiApp {
         }
     }
 
+    fn clear_result(&mut self) {
+        self.result = None;
+        self.generated_cfg_preview_cache.clear();
+    }
+
     fn show_current_mode(
         &mut self,
         ui: &mut egui::Ui,
@@ -772,6 +780,7 @@ impl GuiApp {
     fn run_import(&mut self) {
         let result = self.state.run_import();
         self.selected_result_panel = default_result_panel(&result);
+        self.generated_cfg_preview_cache.clear();
         self.result = Some(result);
     }
 
@@ -1067,7 +1076,7 @@ impl GuiApp {
         self.scroll_selected_form_control_into_view(ui, FormControl::CopyResult);
         self.scroll_selected_form_control_into_view(ui, FormControl::ClearResult);
         if clear_results {
-            self.result = None;
+            self.clear_result();
             return;
         }
         ui.separator();
@@ -1086,7 +1095,13 @@ impl GuiApp {
             ResultPanel::Warnings => show_warning_panel(ui, self.localizer, result),
             ResultPanel::Events => show_event_panel(ui, self.localizer, result),
             ResultPanel::GeneratedCfg => {
-                show_generated_cfg_panel(ui, self.localizer, result, generated_cfg_scroll_delta);
+                show_generated_cfg_panel(
+                    ui,
+                    self.localizer,
+                    result,
+                    &mut self.generated_cfg_preview_cache,
+                    generated_cfg_scroll_delta,
+                );
             }
         }
     }
