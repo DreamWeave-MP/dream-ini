@@ -1010,10 +1010,7 @@ impl GuiApp {
                 ),
             );
         }
-        let copy_text = match &self.result {
-            Some(GuiImportResult::Success { cfg_text, .. }) => Some(cfg_text.clone()),
-            Some(GuiImportResult::Error { .. }) | None => None,
-        };
+        let can_copy_result = matches!(&self.result, Some(GuiImportResult::Success { .. }));
         let errors_label =
             self.result_tab_label(ResultPanel::Errors, self.localizer.text(UiText::Errors));
         let warnings_label =
@@ -1056,11 +1053,10 @@ impl GuiApp {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(copy_text.is_some(), egui::Button::new(copy_label.as_str()))
+                    .add_enabled(can_copy_result, egui::Button::new(copy_label.as_str()))
                     .clicked()
-                    && let Some(text) = &copy_text
                 {
-                    shell.copy_text(ui.ctx(), text.clone());
+                    self.copy_result_to_clipboard(shell, ui.ctx());
                 }
                 if ui.button(clear_label.as_str()).clicked() {
                     clear_results = true;
