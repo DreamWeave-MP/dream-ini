@@ -71,6 +71,9 @@ pub(super) fn solid_fan_run<'a>(
     if let Some(stats) = stats.as_deref_mut() {
         stats.probe_calls += 1;
     }
+    let candidate_triangles_scanned_before = stats
+        .as_deref()
+        .map_or(0, |stats| stats.candidate_triangles_scanned);
     for center_slot in 0..3 {
         if let Some(stats) = stats.as_deref_mut() {
             stats.center_slot_attempts += 1;
@@ -86,9 +89,14 @@ pub(super) fn solid_fan_run<'a>(
         )? {
             if let Some(stats) = stats.as_deref_mut() {
                 stats.record_accepted(run.triangle_count);
+                stats.record_probe_candidate_triangles(true, candidate_triangles_scanned_before);
             }
             return Ok(Some(run));
         }
+    }
+    if let Some(stats) = stats {
+        stats.rejected_probe_calls += 1;
+        stats.record_probe_candidate_triangles(false, candidate_triangles_scanned_before);
     }
     Ok(None)
 }

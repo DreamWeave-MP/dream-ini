@@ -20,6 +20,8 @@ pub(super) struct RasterTimings {
     pub(super) textured_quad: u128,
     pub(super) textured_quad_reject: u128,
     pub(super) solid_fan_probe: u128,
+    pub(super) solid_fan_accepted_probe: u128,
+    pub(super) solid_fan_rejected_probe: u128,
     pub(super) solid_fan_raster: u128,
     pub(super) generic_solid_triangle: u128,
     pub(super) generic_textured_triangle: u128,
@@ -47,15 +49,26 @@ impl RasterTimings {
         }
     }
 
+    pub(super) fn record_solid_fan_probe(&mut self, accepted: bool, elapsed_us: u128) {
+        self.solid_fan_probe += elapsed_us;
+        if accepted {
+            self.solid_fan_accepted_probe += elapsed_us;
+        } else {
+            self.solid_fan_rejected_probe += elapsed_us;
+        }
+    }
+
     pub(super) fn log_line(&self) -> String {
         format!(
-            "software renderer raster_timings quad_window_probe_us={} solid_quad_us={} solid_quad_reject_us={} textured_quad_us={} textured_quad_reject_us={} solid_fan_probe_us={} solid_fan_raster_us={} generic_solid_triangle_us={} generic_textured_triangle_us={} generic_degenerate_triangle_us={}",
+            "software renderer raster_timings quad_window_probe_us={} solid_quad_us={} solid_quad_reject_us={} textured_quad_us={} textured_quad_reject_us={} solid_fan_probe_us={} solid_fan_accepted_probe_us={} solid_fan_rejected_probe_us={} solid_fan_raster_us={} generic_solid_triangle_us={} generic_textured_triangle_us={} generic_degenerate_triangle_us={}",
             self.quad_window_probe,
             self.solid_quad,
             self.solid_quad_reject,
             self.textured_quad,
             self.textured_quad_reject,
             self.solid_fan_probe,
+            self.solid_fan_accepted_probe,
+            self.solid_fan_rejected_probe,
             self.solid_fan_raster,
             self.generic_solid_triangle,
             self.generic_textured_triangle,
@@ -157,9 +170,12 @@ pub(super) struct PrimitiveStats {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct SolidFanProbeStats {
     pub(super) probe_calls: usize,
+    pub(super) rejected_probe_calls: usize,
     pub(super) center_slot_attempts: usize,
     pub(super) cheap_candidate_attempts: usize,
     pub(super) candidate_triangles_scanned: usize,
+    pub(super) accepted_candidate_triangles_scanned: usize,
+    pub(super) rejected_candidate_triangles_scanned: usize,
     pub(super) repeated_boundary_checks: usize,
     pub(super) repeated_boundary_comparisons: usize,
     pub(super) reject_no_candidate: usize,
@@ -199,6 +215,21 @@ impl SolidFanProbeStats {
 
     pub(super) fn record_candidate_triangles(&mut self, triangle_count: usize) {
         self.max_candidate_triangles = self.max_candidate_triangles.max(triangle_count);
+    }
+
+    pub(super) fn record_probe_candidate_triangles(
+        &mut self,
+        accepted: bool,
+        candidate_triangles_scanned_before: usize,
+    ) {
+        let scanned = self
+            .candidate_triangles_scanned
+            .saturating_sub(candidate_triangles_scanned_before);
+        if accepted {
+            self.accepted_candidate_triangles_scanned += scanned;
+        } else {
+            self.rejected_candidate_triangles_scanned += scanned;
+        }
     }
 
     pub(super) fn record_accepted(&mut self, triangle_count: usize) {
@@ -820,7 +851,7 @@ impl PrimitiveStats {
     pub(super) fn log_line(&self, frame_index: u64) -> String {
         let mesh_triangles = self.mesh_indices / 3;
         format!(
-            "software renderer primitive_stats frame={frame_index} mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} mesh_triangles={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_probe_calls={} solid_fan_center_slot_attempts={} solid_fan_cheap_candidate_attempts={} solid_fan_candidate_triangles_scanned={} solid_fan_repeated_boundary_checks={} solid_fan_repeated_boundary_comparisons={} solid_fan_reject_no_candidate={} solid_fan_reject_too_short={} solid_fan_reject_vertex_lookup_failure={} solid_fan_reject_winding_mismatch_or_non_finite={} solid_fan_reject_repeated_boundary={} solid_fan_reject_unsafe_polygon={} solid_fan_reject_color_or_bounds_mismatch={} solid_fan_reject_scratch_overflow={} solid_fan_accepted_runs={} solid_fan_accepted_triangles={} solid_fan_polygon_builds={} solid_fan_max_candidate_triangles={} solid_fan_max_accepted_triangles={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_constant_texel_triangles={} generic_textured_sampled_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
+            "software renderer primitive_stats frame={frame_index} mesh_primitives={} callback_primitives={} missing_texture_meshes={} empty_clip_meshes={} mesh_indices={} mesh_triangles={} quad_windows={} four_unique_quad_windows={} quad_windows_not_four_unique_indices={} quad_window_vertex_lookup_failures={} axis_aligned_quad_windows={} solid_axis_aligned_quad_windows={} textured_axis_aligned_quad_windows={} solid_quad_fast_path_hits={} textured_quad_fast_path_hits={} textured_quad_reject_not_rectangle_diagonal={} textured_quad_reject_not_axis_aligned_rectangle={} textured_quad_reject_corner_attribute_mismatch={} textured_quad_reject_non_uniform_color={} textured_quad_reject_non_affine_uv={} solid_fan_probe_calls={} solid_fan_rejected_probe_calls={} solid_fan_center_slot_attempts={} solid_fan_cheap_candidate_attempts={} solid_fan_candidate_triangles_scanned={} solid_fan_accepted_candidate_triangles_scanned={} solid_fan_rejected_candidate_triangles_scanned={} solid_fan_repeated_boundary_checks={} solid_fan_repeated_boundary_comparisons={} solid_fan_reject_no_candidate={} solid_fan_reject_too_short={} solid_fan_reject_vertex_lookup_failure={} solid_fan_reject_winding_mismatch_or_non_finite={} solid_fan_reject_repeated_boundary={} solid_fan_reject_unsafe_polygon={} solid_fan_reject_color_or_bounds_mismatch={} solid_fan_reject_scratch_overflow={} solid_fan_accepted_runs={} solid_fan_accepted_triangles={} solid_fan_polygon_builds={} solid_fan_max_candidate_triangles={} solid_fan_max_accepted_triangles={} solid_fan_runs={} solid_fan_triangles={} generic_triangles_rasterized={} generic_solid_triangles={} generic_textured_triangles={} generic_textured_constant_texel_triangles={} generic_textured_sampled_triangles={} generic_textured_solid_reject_non_uniform_vertex_color={} generic_textured_solid_reject_non_uniform_texel={} generic_textured_non_uniform_color_constant_texel={} generic_textured_non_uniform_color_varying_texel={} degenerate_triangles={} generic_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_solid_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_textured_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_degenerate_triangle_bbox_px_buckets_le4_le16_le64_le256_le1024_gt1024={} generic_triangle_bbox_non_finite={}",
             self.mesh_primitives,
             self.callback_primitives,
             self.missing_texture_meshes,
@@ -842,9 +873,12 @@ impl PrimitiveStats {
             self.textured_quad_reject_non_uniform_color,
             self.textured_quad_reject_non_affine_uv,
             self.solid_fan_probe.probe_calls,
+            self.solid_fan_probe.rejected_probe_calls,
             self.solid_fan_probe.center_slot_attempts,
             self.solid_fan_probe.cheap_candidate_attempts,
             self.solid_fan_probe.candidate_triangles_scanned,
+            self.solid_fan_probe.accepted_candidate_triangles_scanned,
+            self.solid_fan_probe.rejected_candidate_triangles_scanned,
             self.solid_fan_probe.repeated_boundary_checks,
             self.solid_fan_probe.repeated_boundary_comparisons,
             self.solid_fan_probe.reject_no_candidate,
@@ -1319,6 +1353,10 @@ mod tests {
         stats.textured_quad_fast_path_hits = 2;
         stats.textured_quad_reject_non_affine_uv = 1;
         stats.solid_fan_probe.probe_calls = 3;
+        stats.solid_fan_probe.rejected_probe_calls = 2;
+        stats.solid_fan_probe.candidate_triangles_scanned = 9;
+        stats.solid_fan_probe.accepted_candidate_triangles_scanned = 4;
+        stats.solid_fan_probe.rejected_candidate_triangles_scanned = 5;
         stats.solid_fan_probe.accepted_runs = 1;
         stats.solid_fan_probe.max_candidate_triangles = 4;
         let log_line = stats.log_line(7);
@@ -1335,6 +1373,10 @@ mod tests {
         assert!(log_line.contains("textured_quad_fast_path_hits=2"));
         assert!(log_line.contains("textured_quad_reject_non_affine_uv=1"));
         assert!(log_line.contains("solid_fan_probe_calls=3"));
+        assert!(log_line.contains("solid_fan_rejected_probe_calls=2"));
+        assert!(log_line.contains("solid_fan_candidate_triangles_scanned=9"));
+        assert!(log_line.contains("solid_fan_accepted_candidate_triangles_scanned=4"));
+        assert!(log_line.contains("solid_fan_rejected_candidate_triangles_scanned=5"));
         assert!(log_line.contains("solid_fan_accepted_runs=1"));
         assert!(log_line.contains("solid_fan_max_candidate_triangles=4"));
         assert!(log_line.contains("degenerate_triangles=1"));
@@ -1994,15 +2036,17 @@ mod tests {
             textured_quad: 4,
             textured_quad_reject: 5,
             solid_fan_probe: 6,
-            solid_fan_raster: 7,
-            generic_solid_triangle: 8,
-            generic_textured_triangle: 9,
-            generic_degenerate_triangle: 10,
+            solid_fan_accepted_probe: 7,
+            solid_fan_rejected_probe: 8,
+            solid_fan_raster: 9,
+            generic_solid_triangle: 10,
+            generic_textured_triangle: 11,
+            generic_degenerate_triangle: 12,
         };
 
         assert_eq!(
             timings.log_line(),
-            "software renderer raster_timings quad_window_probe_us=1 solid_quad_us=2 solid_quad_reject_us=3 textured_quad_us=4 textured_quad_reject_us=5 solid_fan_probe_us=6 solid_fan_raster_us=7 generic_solid_triangle_us=8 generic_textured_triangle_us=9 generic_degenerate_triangle_us=10"
+            "software renderer raster_timings quad_window_probe_us=1 solid_quad_us=2 solid_quad_reject_us=3 textured_quad_us=4 textured_quad_reject_us=5 solid_fan_probe_us=6 solid_fan_accepted_probe_us=7 solid_fan_rejected_probe_us=8 solid_fan_raster_us=9 generic_solid_triangle_us=10 generic_textured_triangle_us=11 generic_degenerate_triangle_us=12"
         );
     }
 
@@ -2012,6 +2056,8 @@ mod tests {
 
         timings.record_solid_quad_reject(2);
         timings.record_textured_quad_reject(3);
+        timings.record_solid_fan_probe(true, 13);
+        timings.record_solid_fan_probe(false, 17);
         timings.record_generic_triangle(TriangleClassification::Solid, 5);
         timings.record_generic_triangle(TriangleClassification::Textured, 7);
         timings.record_generic_triangle(TriangleClassification::Degenerate, 11);
@@ -2021,7 +2067,9 @@ mod tests {
         assert_eq!(timings.solid_quad_reject, 2);
         assert_eq!(timings.textured_quad, 0);
         assert_eq!(timings.textured_quad_reject, 3);
-        assert_eq!(timings.solid_fan_probe, 0);
+        assert_eq!(timings.solid_fan_probe, 30);
+        assert_eq!(timings.solid_fan_accepted_probe, 13);
+        assert_eq!(timings.solid_fan_rejected_probe, 17);
         assert_eq!(timings.solid_fan_raster, 0);
         assert_eq!(timings.generic_solid_triangle, 5);
         assert_eq!(timings.generic_textured_triangle, 7);
