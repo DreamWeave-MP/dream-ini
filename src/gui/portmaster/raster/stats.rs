@@ -8,7 +8,7 @@ pub(in crate::gui::portmaster) const TEXTURED_RECT_SAMPLED_VECTOR_BACKEND_AVAILA
         0
     };
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gui::portmaster) struct RasterStats {
     pub(in crate::gui::portmaster) solid_rect_calls: usize,
     pub(in crate::gui::portmaster) solid_rect_px: usize,
@@ -190,6 +190,18 @@ pub(in crate::gui::portmaster) struct RasterStats {
     pub(in crate::gui::portmaster) transparent_px: usize,
 }
 
+impl Default for RasterStats {
+    fn default() -> Self {
+        // SAFETY: RasterStats contains only usize fields and fixed-size usize arrays, so an
+        // all-zero bit pattern is valid for every field. The backend availability marker is the
+        // only counter that intentionally starts with a target-specific non-zero value.
+        let mut stats: Self = unsafe { std::mem::zeroed() };
+        stats.textured_rect_sampled_vector_backend_available =
+            TEXTURED_RECT_SAMPLED_VECTOR_BACKEND_AVAILABLE;
+        stats
+    }
+}
+
 macro_rules! raster_stats_values {
     ($stats:expr) => {
         [
@@ -352,14 +364,6 @@ macro_rules! raster_stats_values {
 }
 
 impl RasterStats {
-    pub(in crate::gui::portmaster) fn default() -> Self {
-        Self {
-            textured_rect_sampled_vector_backend_available:
-                TEXTURED_RECT_SAMPLED_VECTOR_BACKEND_AVAILABLE,
-            ..<Self as Default>::default()
-        }
-    }
-
     pub(super) fn record_textured_rect_sampled_vector_candidate(&mut self, white: bool, px: usize) {
         self.textured_rect_sampled_vector_candidate_px += px;
         if white {
@@ -684,11 +688,28 @@ mod tests {
     #[test]
     fn raster_stats_default_records_sampled_rect_vector_backend_marker() {
         let stats = RasterStats::default();
+        let trait_stats = <RasterStats as Default>::default();
 
         assert_eq!(
             stats.textured_rect_sampled_vector_backend_available,
             TEXTURED_RECT_SAMPLED_VECTOR_BACKEND_AVAILABLE
         );
+        assert_eq!(
+            trait_stats.textured_rect_sampled_vector_backend_available,
+            TEXTURED_RECT_SAMPLED_VECTOR_BACKEND_AVAILABLE
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_vector_backend_available,
+            trait_stats.textured_rect_sampled_vector_backend_available
+        );
         assert!(stats.textured_rect_sampled_vector_backend_available <= 1);
+
+        let mut expected = stats;
+        expected.textured_rect_sampled_vector_backend_available = 0;
+        assert_eq!(raster_stats_values!(&expected), [0; 154]);
+        assert_eq!(
+            stats.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16,
+            [0; 6]
+        );
     }
 }
