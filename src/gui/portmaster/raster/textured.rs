@@ -604,6 +604,7 @@ fn emit_white_constant_texel_alpha_only_run_with_stats(
     if alpha_step == 0.0 {
         stats.constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls += 1;
         stats.constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px += run.len;
+        stats.record_constant_texel_textured_triangle_repeated_color_opportunity(run.len);
     } else {
         stats.constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls += 1;
         stats.constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px += run.len;
@@ -936,8 +937,8 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
             (row_edge0, row_edge1, row_edge2)
         };
         let mut span_len = 0;
-        let mut span_first_color = [0; 4];
-        let mut span_repeated_color = true;
+        let mut repeated_color_len = 0;
+        let mut previous_color = [0; 4];
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
@@ -948,10 +949,16 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
             {
                 let color = pixel_color(v0, v1, v2, w0, w1, w2);
                 if span_len == 0 {
-                    span_first_color = color;
-                    span_repeated_color = true;
-                } else if color != span_first_color {
-                    span_repeated_color = false;
+                    previous_color = color;
+                    repeated_color_len = 1;
+                } else if color == previous_color {
+                    repeated_color_len += 1;
+                } else {
+                    stats.record_constant_texel_textured_triangle_repeated_color_opportunity(
+                        repeated_color_len,
+                    );
+                    previous_color = color;
+                    repeated_color_len = 1;
                 }
                 span_len += 1;
                 surface.blend_pixel(x, y, color);
@@ -966,12 +973,11 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
                 stats.record_constant_texel_alpha_px(color[3], 1);
             } else if span_len != 0 {
                 stats.record_constant_texel_textured_triangle_span_run(span_len);
-                if span_repeated_color {
-                    stats.record_constant_texel_textured_triangle_repeated_color_opportunity(
-                        span_len,
-                    );
-                }
+                stats.record_constant_texel_textured_triangle_repeated_color_opportunity(
+                    repeated_color_len,
+                );
                 span_len = 0;
+                repeated_color_len = 0;
             }
             pixel_edge0 += raster.w0_step_x;
             pixel_edge1 += raster.w1_step_x;
@@ -979,9 +985,9 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
         }
         if span_len != 0 {
             stats.record_constant_texel_textured_triangle_span_run(span_len);
-            if span_repeated_color {
-                stats.record_constant_texel_textured_triangle_repeated_color_opportunity(span_len);
-            }
+            stats.record_constant_texel_textured_triangle_repeated_color_opportunity(
+                repeated_color_len,
+            );
         }
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
@@ -1696,6 +1702,60 @@ mod tests {
     }
 
     #[test]
+    fn generic_constant_texel_repeated_color_subruns_record_each_plateau() {
+        let vertices = [
+            test_vertex(egui::pos2(0.0, 0.0), [255, 255, 255, 255]),
+            test_vertex(egui::pos2(32.0, 0.0), [255, 255, 255, 255]),
+            test_vertex(egui::pos2(0.0, 1000.0), [255, 255, 255, 255]),
+        ];
+        let [v0, v1, v2] = &vertices;
+        let mut surface = test_surface(32, 1);
+        let mut stats = RasterStats::default();
+        let bounds = TriangleRasterBounds {
+            min_x: 0,
+            min_y: 0,
+            max_x: 32,
+            max_y: 1,
+        };
+        let area = edge(v0.pos, v1.pos, v2.pos);
+
+        rasterize_constant_texel_textured_triangle_with_stats_and_color(
+            &mut surface,
+            TriangleVertices { v0, v1, v2 },
+            bounds,
+            area,
+            false,
+            &mut stats,
+            |_, _, _, _, w1, _| {
+                if w1 < 0.5 {
+                    [24, 12, 6, 128]
+                } else {
+                    [48, 24, 12, 128]
+                }
+            },
+        );
+
+        assert_eq!(stats.constant_texel_textured_triangle_span_runs, 1);
+        assert_eq!(stats.constant_texel_textured_triangle_covered_px, 32);
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opportunity_blocks_16,
+            2
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opportunity_px_16,
+            32
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_true_tail_px_16,
+            0
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_span_helper_px,
+            0
+        );
+    }
+
+    #[test]
     fn white_constant_texel_threshold_and_clamp_edges_match_reference() {
         assert_white_constant_texel_run_matches_reference(
             [12.0, 220.0, 40.0, -3.0],
@@ -2223,6 +2283,8 @@ mod tests {
         y: usize,
         x: usize,
     ) {
+        const REPEATED_COLOR_BLOCK_PX: usize = 16;
+
         let run = AlphaOnlyRun {
             alpha_offset,
             len,
@@ -2273,6 +2335,22 @@ mod tests {
             0
         );
         assert_eq!(stats.textured_triangle_covered_px, len);
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opportunity_blocks_16,
+            len / REPEATED_COLOR_BLOCK_PX
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opportunity_px_16,
+            len / REPEATED_COLOR_BLOCK_PX * REPEATED_COLOR_BLOCK_PX
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_true_tail_px_16,
+            len % REPEATED_COLOR_BLOCK_PX
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_span_helper_px,
+            0
+        );
         assert_alpha_stats_match_run(&stats, row_alpha, alpha_step, alpha_offset, len);
     }
 

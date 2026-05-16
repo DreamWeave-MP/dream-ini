@@ -380,7 +380,6 @@ def constant_texel_summary_rows(section: SectionStats) -> list[tuple[str, str, s
         section, "constant_texel_textured_triangle_repeated_color_span_helper_px"
     )
     append_share_row(rows, "helper-use px share of repeated-color span px", helper_px, repeated_color_px)
-    append_share_row(rows, "helper-use px share of 16-wide opportunity px", helper_px, opportunity_px)
 
     opaque_px = counter_total(section, "constant_texel_textured_triangle_opaque_px")
     translucent_px = counter_total(section, "constant_texel_textured_triangle_translucent_px")
