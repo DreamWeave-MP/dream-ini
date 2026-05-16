@@ -600,6 +600,7 @@ fn emit_white_constant_texel_alpha_only_run_with_stats(
     stats.textured_triangle_covered_px += run.len;
     stats.constant_texel_textured_triangle_covered_px += run.len;
     stats.constant_texel_textured_triangle_white_texel_covered_px += run.len;
+    stats.record_constant_texel_textured_triangle_span_run(run.len);
     if alpha_step == 0.0 {
         stats.constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls += 1;
         stats.constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px += run.len;
@@ -812,6 +813,7 @@ fn emit_white_constant_texel_run_with_stats(
     stats.textured_triangle_covered_px += len;
     stats.constant_texel_textured_triangle_covered_px += len;
     stats.constant_texel_textured_triangle_white_texel_covered_px += len;
+    stats.record_constant_texel_textured_triangle_span_run(len);
 
     let run = WhiteConstantTexelRun {
         start_dx,
@@ -931,6 +933,7 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
         } else {
             (row_edge0, row_edge1, row_edge2)
         };
+        let mut span_len = 0;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
@@ -939,6 +942,7 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
                 && edge_covers_pixel(w1, raster.edge1_includes_boundary)
                 && edge_covers_pixel(w2, raster.edge2_includes_boundary)
             {
+                span_len += 1;
                 let color = pixel_color(v0, v1, v2, w0, w1, w2);
                 surface.blend_pixel(x, y, color);
                 stats.textured_triangle_covered_px += 1;
@@ -950,10 +954,16 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
                 }
                 stats.record_alpha_px(color[3], 1);
                 stats.record_constant_texel_alpha_px(color[3], 1);
+            } else if span_len != 0 {
+                stats.record_constant_texel_textured_triangle_span_run(span_len);
+                span_len = 0;
             }
             pixel_edge0 += raster.w0_step_x;
             pixel_edge1 += raster.w1_step_x;
             pixel_edge2 += raster.w2_step_x;
+        }
+        if span_len != 0 {
+            stats.record_constant_texel_textured_triangle_span_run(span_len);
         }
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
@@ -1543,6 +1553,44 @@ mod tests {
             AlphaRunKind::Constant(113),
             ColorRunKind::Constant([27, 202, 48, 113]),
         );
+    }
+
+    #[test]
+    fn constant_texel_span_buckets_and_alpha_counts_use_emitted_runs() {
+        let mut surface = test_surface(80, 5);
+        let mut stats = RasterStats::default();
+        let runs = [
+            (0, 3, [255.0, 255.0, 255.0, 0.0]),
+            (8, 4, [255.0, 255.0, 255.0, 255.0]),
+            (16, 8, [255.0, 255.0, 255.0, 128.0]),
+            (32, 16, [255.0, 255.0, 255.0, 128.0]),
+            (48, 32, [255.0, 255.0, 255.0, 128.0]),
+        ];
+
+        for (x, len, row_color) in runs {
+            emit_white_constant_texel_run_with_stats(
+                &mut surface,
+                row_color,
+                [0.0; 4],
+                0,
+                len,
+                x * 4,
+                &mut stats,
+            );
+        }
+
+        assert_eq!(stats.constant_texel_textured_triangle_span_runs, 5);
+        assert_eq!(stats.constant_texel_textured_triangle_span_px_lt4, 3);
+        assert_eq!(stats.constant_texel_textured_triangle_span_px_4_7, 4);
+        assert_eq!(stats.constant_texel_textured_triangle_span_px_8_15, 8);
+        assert_eq!(stats.constant_texel_textured_triangle_span_px_16_31, 16);
+        assert_eq!(stats.constant_texel_textured_triangle_span_px_32_plus, 32);
+        assert_eq!(stats.constant_texel_textured_triangle_transparent_px, 3);
+        assert_eq!(stats.constant_texel_textured_triangle_opaque_px, 4);
+        assert_eq!(stats.constant_texel_textured_triangle_translucent_px, 56);
+        assert_eq!(stats.transparent_px, 3);
+        assert_eq!(stats.opaque_px, 4);
+        assert_eq!(stats.translucent_px, 56);
     }
 
     #[test]
