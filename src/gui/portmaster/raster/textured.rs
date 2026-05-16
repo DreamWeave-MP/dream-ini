@@ -832,6 +832,8 @@ fn emit_white_constant_texel_run_with_stats(
         {
             stats.constant_texel_textured_triangle_white_constant_color_run_calls += 1;
             stats.constant_texel_textured_triangle_white_constant_color_run_px += len;
+            stats.record_constant_texel_textured_triangle_repeated_color_opportunity(len);
+            stats.record_constant_texel_textured_triangle_repeated_color_helper_use(len, alpha);
             emit_white_constant_texel_constant_color_run_no_stats(surface, run, color);
         } else {
             stats.constant_texel_textured_triangle_white_variable_color_run_calls += 1;
@@ -934,6 +936,8 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
             (row_edge0, row_edge1, row_edge2)
         };
         let mut span_len = 0;
+        let mut span_first_color = [0; 4];
+        let mut span_repeated_color = true;
         for x in start_x..end_x {
             let w0 = pixel_edge0 * raster.inv_area;
             let w1 = pixel_edge1 * raster.inv_area;
@@ -942,8 +946,14 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
                 && edge_covers_pixel(w1, raster.edge1_includes_boundary)
                 && edge_covers_pixel(w2, raster.edge2_includes_boundary)
             {
-                span_len += 1;
                 let color = pixel_color(v0, v1, v2, w0, w1, w2);
+                if span_len == 0 {
+                    span_first_color = color;
+                    span_repeated_color = true;
+                } else if color != span_first_color {
+                    span_repeated_color = false;
+                }
+                span_len += 1;
                 surface.blend_pixel(x, y, color);
                 stats.textured_triangle_covered_px += 1;
                 stats.constant_texel_textured_triangle_covered_px += 1;
@@ -956,6 +966,11 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
                 stats.record_constant_texel_alpha_px(color[3], 1);
             } else if span_len != 0 {
                 stats.record_constant_texel_textured_triangle_span_run(span_len);
+                if span_repeated_color {
+                    stats.record_constant_texel_textured_triangle_repeated_color_opportunity(
+                        span_len,
+                    );
+                }
                 span_len = 0;
             }
             pixel_edge0 += raster.w0_step_x;
@@ -964,6 +979,9 @@ fn rasterize_constant_texel_textured_triangle_with_stats_and_color(
         }
         if span_len != 0 {
             stats.record_constant_texel_textured_triangle_span_run(span_len);
+            if span_repeated_color {
+                stats.record_constant_texel_textured_triangle_repeated_color_opportunity(span_len);
+            }
         }
         row_edge0 += raster.w0_step_y;
         row_edge1 += raster.w1_step_y;
@@ -1591,6 +1609,90 @@ mod tests {
         assert_eq!(stats.transparent_px, 3);
         assert_eq!(stats.opaque_px, 4);
         assert_eq!(stats.translucent_px, 56);
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opportunity_blocks_16,
+            3
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opportunity_px_16,
+            48
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_true_tail_px_16,
+            15
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_span_helper_calls,
+            5
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_span_helper_px,
+            63
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls,
+            1
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opaque_write_helper_px,
+            4
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls,
+            3
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px,
+            56
+        );
+    }
+
+    #[test]
+    fn generic_constant_texel_repeated_color_spans_record_opportunities_without_helper_use() {
+        let vertices = [
+            test_vertex(egui::pos2(2.0, 2.0), [255, 255, 255, 255]),
+            test_vertex(egui::pos2(30.0, 3.0), [255, 255, 255, 255]),
+            test_vertex(egui::pos2(4.0, 16.0), [255, 255, 255, 255]),
+        ];
+        let [v0, v1, v2] = &vertices;
+        let mut surface = test_surface(40, 24);
+        let mut stats = RasterStats::default();
+        let bounds = test_triangle_bounds(&vertices);
+        let area = edge(v0.pos, v1.pos, v2.pos);
+
+        rasterize_constant_texel_textured_triangle_with_stats_and_color(
+            &mut surface,
+            TriangleVertices { v0, v1, v2 },
+            bounds,
+            area,
+            false,
+            &mut stats,
+            |_, _, _, _, _, _| [24, 12, 6, 128],
+        );
+
+        assert!(stats.constant_texel_textured_triangle_span_runs > 0);
+        assert!(stats.constant_texel_textured_triangle_repeated_color_opportunity_blocks_16 > 0);
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opportunity_px_16
+                + stats.constant_texel_textured_triangle_repeated_color_true_tail_px_16,
+            stats.constant_texel_textured_triangle_covered_px
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_span_helper_calls,
+            0
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_span_helper_px,
+            0
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls,
+            0
+        );
+        assert_eq!(
+            stats.constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls,
+            0
+        );
     }
 
     #[test]

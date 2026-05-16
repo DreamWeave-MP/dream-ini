@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 const TEXTURED_RECT_VECTOR_BLOCK_PX: usize = 16;
+const CONSTANT_TEXEL_TEXTURED_TRIANGLE_REPEATED_COLOR_BLOCK_PX: usize = 16;
 pub(in crate::gui::portmaster) const TEXTURED_RECT_SAMPLED_VECTOR_BACKEND_AVAILABLE: usize =
     if cfg!(all(target_arch = "aarch64", target_endian = "little")) {
         1
@@ -200,6 +201,24 @@ pub(in crate::gui::portmaster) struct RasterStats {
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_span_px_8_15: usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_span_px_16_31: usize,
     pub(in crate::gui::portmaster) constant_texel_textured_triangle_span_px_32_plus: usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_opportunity_blocks_16:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_opportunity_px_16:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_true_tail_px_16:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_span_helper_calls:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_span_helper_px:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_opaque_write_helper_px:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls:
+        usize,
+    pub(in crate::gui::portmaster) constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px:
+        usize,
 }
 
 impl Default for RasterStats {
@@ -383,6 +402,15 @@ macro_rules! raster_stats_values {
             $stats.constant_texel_textured_triangle_span_px_8_15,
             $stats.constant_texel_textured_triangle_span_px_16_31,
             $stats.constant_texel_textured_triangle_span_px_32_plus,
+            $stats.constant_texel_textured_triangle_repeated_color_opportunity_blocks_16,
+            $stats.constant_texel_textured_triangle_repeated_color_opportunity_px_16,
+            $stats.constant_texel_textured_triangle_repeated_color_true_tail_px_16,
+            $stats.constant_texel_textured_triangle_repeated_color_span_helper_calls,
+            $stats.constant_texel_textured_triangle_repeated_color_span_helper_px,
+            $stats.constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls,
+            $stats.constant_texel_textured_triangle_repeated_color_opaque_write_helper_px,
+            $stats.constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls,
+            $stats.constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px,
         ]
     };
 }
@@ -499,6 +527,47 @@ impl RasterStats {
         }
     }
 
+    pub(super) fn record_constant_texel_textured_triangle_repeated_color_opportunity(
+        &mut self,
+        px: usize,
+    ) {
+        if px == 0 {
+            return;
+        }
+
+        let blocks = px / CONSTANT_TEXEL_TEXTURED_TRIANGLE_REPEATED_COLOR_BLOCK_PX;
+        let opportunity_px = blocks * CONSTANT_TEXEL_TEXTURED_TRIANGLE_REPEATED_COLOR_BLOCK_PX;
+        self.constant_texel_textured_triangle_repeated_color_opportunity_blocks_16 += blocks;
+        self.constant_texel_textured_triangle_repeated_color_opportunity_px_16 += opportunity_px;
+        self.constant_texel_textured_triangle_repeated_color_true_tail_px_16 += px - opportunity_px;
+    }
+
+    pub(super) fn record_constant_texel_textured_triangle_repeated_color_helper_use(
+        &mut self,
+        px: usize,
+        alpha: u8,
+    ) {
+        if px == 0 {
+            return;
+        }
+
+        self.constant_texel_textured_triangle_repeated_color_span_helper_calls += 1;
+        self.constant_texel_textured_triangle_repeated_color_span_helper_px += px;
+
+        match alpha {
+            0 => {}
+            u8::MAX => {
+                self.constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls += 1;
+                self.constant_texel_textured_triangle_repeated_color_opaque_write_helper_px += px;
+            }
+            _ => {
+                self.constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls += 1;
+                self.constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px +=
+                    px;
+            }
+        }
+    }
+
     pub(super) fn record_textured_rect_separable_vertex_color(&mut self, white: bool, px: usize) {
         if white {
             self.textured_rect_separable_white_vertex_calls += 1;
@@ -533,7 +602,7 @@ impl RasterStats {
         write!(&mut line, " constant_texel_textured_triangle_white_scan_multi_run_rows={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px={} constant_texel_textured_triangle_white_constant_alpha_run_calls={} constant_texel_textured_triangle_white_constant_alpha_run_px={} constant_texel_textured_triangle_white_constant_color_run_calls={} constant_texel_textured_triangle_white_constant_color_run_px={} constant_texel_textured_triangle_white_variable_color_run_calls={} constant_texel_textured_triangle_white_variable_color_run_px={} constant_texel_textured_triangle_white_variable_alpha_run_calls={} constant_texel_textured_triangle_white_variable_alpha_run_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={}", values[86], values[87], values[88], values[89], values[90], values[91], values[92], values[93], values[94], values[95], values[96], values[97], values[98], values[99], values[100], values[101], values[102], values[103], values[104], values[105]).expect("writing to a String cannot fail");
         write!(&mut line, " sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} textured_rect_separable_run_calls={} textured_rect_separable_run_px={} textured_rect_separable_opaque_run_calls={} textured_rect_separable_opaque_run_px={} textured_rect_separable_translucent_run_calls={} textured_rect_separable_translucent_run_px={} textured_rect_separable_transparent_run_calls={} textured_rect_separable_transparent_run_px={} textured_rect_separable_white_vertex_calls={} textured_rect_separable_white_vertex_px={} textured_rect_separable_modulated_vertex_calls={} textured_rect_separable_modulated_vertex_px={} textured_rect_separable_direct_calls={} textured_rect_separable_direct_px={} textured_rect_separable_direct_opaque_px={} textured_rect_separable_direct_translucent_px={} textured_rect_separable_direct_transparent_px={} textured_rect_sampled_vector_candidate_px={} textured_rect_sampled_white_vertex_contiguous_px={} textured_rect_sampled_modulated_vertex_contiguous_px={} textured_rect_sampled_modulated_contiguous_runs={} textured_rect_sampled_modulated_contiguous_px_lt4={} textured_rect_sampled_modulated_contiguous_px_4_7={} textured_rect_sampled_modulated_contiguous_px_8_15={} textured_rect_sampled_modulated_contiguous_px_16_31={} textured_rect_sampled_modulated_contiguous_px_32_63={} textured_rect_sampled_modulated_contiguous_px_64_plus={} textured_rect_sampled_modulated_opportunity_blocks_16={} textured_rect_sampled_modulated_opportunity_px_16={} textured_rect_sampled_modulated_true_tail_px_16={} textured_rect_sampled_modulated_opportunity_blocks_4={} textured_rect_sampled_modulated_opportunity_px_4={} textured_rect_sampled_modulated_true_tail_px_4={} textured_rect_sampled_vector_backend_available={} textured_rect_sampled_modulated_vector_attempt_blocks_16={} textured_rect_sampled_modulated_vector_success_blocks_16={} textured_rect_sampled_modulated_vector_fallback_blocks_16={} textured_rect_sampled_modulated_vector_attempt_blocks_4={} textured_rect_sampled_modulated_vector_success_blocks_4={} textured_rect_sampled_modulated_vector_fallback_blocks_4={} textured_rect_sampled_vector_blocks={} textured_rect_sampled_vector_opaque_blocks={} textured_rect_sampled_vector_transparent_blocks={} textured_rect_sampled_vector_mixed_blocks={} textured_rect_sampled_vector_tail_px={}", values[106], values[107], values[108], values[109], values[110], values[111], values[112], values[113], values[114], values[115], values[116], values[117], values[118], values[119], values[120], values[121], values[122], values[123], values[124], values[125], values[126], values[127], values[128], values[129], values[130], values[131], values[132], values[133], values[134], values[135], values[136], values[137], values[138], values[139], values[140], values[141], values[142], values[143], values[144], values[145], values[146], values[147], values[148], values[149], values[150], values[151], values[152], values[153], values[154]).expect("writing to a String cannot fail");
         let buckets = self.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16;
-        write!(&mut line, " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16={},{},{},{},{},{} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={} constant_texel_textured_triangle_span_runs={} constant_texel_textured_triangle_span_px_lt4={} constant_texel_textured_triangle_span_px_4_7={} constant_texel_textured_triangle_span_px_8_15={} constant_texel_textured_triangle_span_px_16_31={} constant_texel_textured_triangle_span_px_32_plus={}", buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], values[155], values[156], values[157], values[158], values[159], values[160], values[161], values[162], values[163], values[164], values[165]).expect("writing to a String cannot fail");
+        write!(&mut line, " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16={},{},{},{},{},{} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={} constant_texel_textured_triangle_span_runs={} constant_texel_textured_triangle_span_px_lt4={} constant_texel_textured_triangle_span_px_4_7={} constant_texel_textured_triangle_span_px_8_15={} constant_texel_textured_triangle_span_px_16_31={} constant_texel_textured_triangle_span_px_32_plus={} constant_texel_textured_triangle_repeated_color_opportunity_blocks_16={} constant_texel_textured_triangle_repeated_color_opportunity_px_16={} constant_texel_textured_triangle_repeated_color_true_tail_px_16={} constant_texel_textured_triangle_repeated_color_span_helper_calls={} constant_texel_textured_triangle_repeated_color_span_helper_px={} constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls={} constant_texel_textured_triangle_repeated_color_opaque_write_helper_px={} constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls={} constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px={}", buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], values[155], values[156], values[157], values[158], values[159], values[160], values[161], values[162], values[163], values[164], values[165], values[166], values[167], values[168], values[169], values[170], values[171], values[172], values[173], values[174]).expect("writing to a String cannot fail");
         line
     }
 }
@@ -714,6 +783,15 @@ mod tests {
                 constant_texel_textured_triangle_span_px_8_15: 170,
                 constant_texel_textured_triangle_span_px_16_31: 171,
                 constant_texel_textured_triangle_span_px_32_plus: 172,
+                constant_texel_textured_triangle_repeated_color_opportunity_blocks_16: 173,
+                constant_texel_textured_triangle_repeated_color_opportunity_px_16: 174,
+                constant_texel_textured_triangle_repeated_color_true_tail_px_16: 175,
+                constant_texel_textured_triangle_repeated_color_span_helper_calls: 176,
+                constant_texel_textured_triangle_repeated_color_span_helper_px: 177,
+                constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls: 178,
+                constant_texel_textured_triangle_repeated_color_opaque_write_helper_px: 179,
+                constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls: 180,
+                constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px: 181,
             }
         };
     }
@@ -759,9 +837,40 @@ mod tests {
         assert!(line.contains(" textured_rect_sampled_modulated_vector_success_blocks_4=149 "));
         assert!(line.contains(" textured_rect_sampled_modulated_vector_fallback_blocks_4=150 "));
         assert!(line.contains(" textured_rect_sampled_vector_tail_px=155 "));
+        assert!(line.contains(
+            " constant_texel_textured_triangle_repeated_color_opportunity_blocks_16=173 "
+        ));
+        assert!(
+            line.contains(
+                " constant_texel_textured_triangle_repeated_color_opportunity_px_16=174 "
+            )
+        );
+        assert!(
+            line.contains(" constant_texel_textured_triangle_repeated_color_true_tail_px_16=175 ")
+        );
+        assert!(
+            line.contains(
+                " constant_texel_textured_triangle_repeated_color_span_helper_calls=176 "
+            )
+        );
+        assert!(
+            line.contains(" constant_texel_textured_triangle_repeated_color_span_helper_px=177 ")
+        );
+        assert!(line.contains(
+            " constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls=178 "
+        ));
+        assert!(line.contains(
+            " constant_texel_textured_triangle_repeated_color_opaque_write_helper_px=179 "
+        ));
+        assert!(line.contains(
+            " constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls=180 "
+        ));
+        assert!(line.contains(
+            " constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px=181"
+        ));
         assert_eq!(
             actual_values,
-            (1..=155).chain(162..=172).collect::<Vec<_>>()
+            (1..=155).chain(162..=181).collect::<Vec<_>>()
         );
     }
 
@@ -786,7 +895,7 @@ mod tests {
 
         let mut expected = stats;
         expected.textured_rect_sampled_vector_backend_available = 0;
-        assert_eq!(raster_stats_values!(&expected), [0; 166]);
+        assert_eq!(raster_stats_values!(&expected), [0; 175]);
         assert_eq!(
             stats.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16,
             [0; 6]
