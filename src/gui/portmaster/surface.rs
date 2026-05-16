@@ -123,15 +123,8 @@ impl SoftwareSurface {
     }
 
     fn blend_translucent_span_at_offset(&mut self, offset: usize, len: usize, color: [u8; 4]) {
-        let inverse_alpha = u8::MAX - color[3];
         let end = offset + len * 4;
-        for pixel in self.pixels[offset..end].chunks_exact_mut(4) {
-            blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
-                pixel,
-                color,
-                inverse_alpha,
-            );
-        }
+        blend_constant_premultiplied_span_rgba_scalar(&mut self.pixels[offset..end], color);
     }
 
     pub(super) fn blend_span(&mut self, y: usize, start_x: usize, end_x: usize, color: [u8; 4]) {
@@ -149,9 +142,18 @@ impl SoftwareSurface {
             return;
         }
 
-        for pixel in self.pixels[start..end].chunks_exact_mut(4) {
-            alpha_blend(pixel, color);
-        }
+        blend_constant_premultiplied_span_rgba_scalar(&mut self.pixels[start..end], color);
+    }
+}
+
+fn blend_constant_premultiplied_span_rgba_scalar(span: &mut [u8], source: [u8; 4]) {
+    let inverse_alpha = u8::MAX - source[3];
+    for pixel in span.chunks_exact_mut(4) {
+        blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
+            pixel,
+            source,
+            inverse_alpha,
+        );
     }
 }
 
@@ -329,6 +331,28 @@ mod tests {
     }
 
     #[test]
+    fn scalar_constant_premultiplied_span_matches_repeated_pixel_blend() {
+        for width in [0, 1, 3, 15, 16, 17, 31, 32, 33] {
+            for alpha in [1, 2, 63, 127, 128, 191, 254] {
+                for source_rgb in [[0, 0, 0], [alpha, 0, alpha], [alpha, alpha, alpha]] {
+                    for pattern_seed in [0, 17, 251] {
+                        let source = [source_rgb[0], source_rgb[1], source_rgb[2], alpha];
+                        let mut by_span = patterned_pixels(width, pattern_seed);
+                        let mut by_pixel = by_span.clone();
+
+                        blend_constant_premultiplied_span_rgba_scalar(&mut by_span, source);
+                        for pixel in by_pixel.chunks_exact_mut(4) {
+                            blend_translucent_premultiplied_over_opaque_destination(pixel, source);
+                        }
+
+                        assert_eq!(by_span, by_pixel, "width {width}, source {source:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn offset_opaque_write_matches_blend_pixel_for_opaque_source() {
         let color = [44, 55, 66, 255];
         let mut by_offset = SoftwareSurface::default();
@@ -396,6 +420,20 @@ mod tests {
         }
 
         assert_eq!(by_span.pixels, by_pixel.pixels);
+    }
+
+    fn patterned_pixels(width: usize, seed: u8) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(width * 4);
+        for index in 0..width {
+            let offset = u8::try_from(index).expect("test width fits in u8");
+            pixels.extend_from_slice(&[
+                seed.wrapping_add(offset.wrapping_mul(3)),
+                seed.wrapping_add(offset.wrapping_mul(5)),
+                seed.wrapping_add(offset.wrapping_mul(7)),
+                u8::MAX,
+            ]);
+        }
+        pixels
     }
 
     #[test]
