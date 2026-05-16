@@ -245,8 +245,9 @@ impl<'a> FramebufferGuiRuntime<'a> {
                         write_log(
                             self.log,
                             format!(
-                                "portmaster render benchmark complete name={} rendered_frames={} frame_limit={}",
+                                "portmaster render benchmark complete name={} workload={:?} rendered_frames={} frame_limit={}",
                                 benchmark.name(),
+                                benchmark.description(),
                                 benchmark.rendered_frames(),
                                 benchmark.frame_limit()
                             ),
@@ -473,21 +474,27 @@ impl RenderLogConfig {
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RenderBenchmarkKind {
-    SampledRectModulated,
+    NormalGui,
 }
 
 #[cfg(target_os = "linux")]
 impl RenderBenchmarkKind {
     fn from_name(name: &str) -> Option<Self> {
         match name {
-            "sampled-rect-modulated" => Some(Self::SampledRectModulated),
+            "normal-gui" => Some(Self::NormalGui),
             _ => None,
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
-            Self::SampledRectModulated => "sampled-rect-modulated",
+            Self::NormalGui => "normal-gui",
+        }
+    }
+
+    const fn description(self) -> &'static str {
+        match self {
+            Self::NormalGui => "normal GUI render-loop frame counting",
         }
     }
 }
@@ -552,8 +559,9 @@ impl RenderBenchmarkEnvConfig {
             Self::Enabled(config) => write_log(
                 log,
                 format!(
-                    "portmaster render benchmark enabled name={} frames={} env_{}={:?} env_{}={:?}",
+                    "portmaster render benchmark enabled name={} workload={:?} frames={} env_{}={:?} env_{}={:?}",
                     config.kind.as_str(),
+                    config.kind.description(),
                     config.frame_limit,
                     RENDER_BENCH_ENV_VAR,
                     env::var_os(RENDER_BENCH_ENV_VAR),
@@ -614,6 +622,10 @@ impl RenderBenchmarkState {
 
     const fn name(self) -> &'static str {
         self.config.kind.as_str()
+    }
+
+    const fn description(self) -> &'static str {
+        self.config.kind.description()
     }
 
     const fn rendered_frames(self) -> u64 {
@@ -826,12 +838,12 @@ mod tests {
 
     #[test]
     fn render_benchmark_uses_default_frame_count_when_enabled() {
-        let config = RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), None);
+        let config = RenderBenchmarkEnvConfig::from_values(Some("normal-gui"), None);
 
         assert_eq!(
             config,
             RenderBenchmarkEnvConfig::Enabled(RenderBenchmarkConfig {
-                kind: RenderBenchmarkKind::SampledRectModulated,
+                kind: RenderBenchmarkKind::NormalGui,
                 frame_limit: DEFAULT_RENDER_BENCH_FRAMES,
             })
         );
@@ -839,13 +851,12 @@ mod tests {
 
     #[test]
     fn render_benchmark_accepts_positive_frame_count() {
-        let config =
-            RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("17"));
+        let config = RenderBenchmarkEnvConfig::from_values(Some("normal-gui"), Some("17"));
 
         assert_eq!(
             config,
             RenderBenchmarkEnvConfig::Enabled(RenderBenchmarkConfig {
-                kind: RenderBenchmarkKind::SampledRectModulated,
+                kind: RenderBenchmarkKind::NormalGui,
                 frame_limit: 17,
             })
         );
@@ -863,13 +874,25 @@ mod tests {
     }
 
     #[test]
+    fn render_benchmark_rejects_sampled_rect_until_workload_exists() {
+        let config =
+            RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("17"));
+
+        assert_eq!(
+            config,
+            RenderBenchmarkEnvConfig::Rejected(RenderBenchmarkRejectReason::UnsupportedName)
+        );
+        assert_eq!(config.into_state(), None);
+    }
+
+    #[test]
     fn render_benchmark_rejects_invalid_frame_count() {
         assert_eq!(
-            RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("0")),
+            RenderBenchmarkEnvConfig::from_values(Some("normal-gui"), Some("0")),
             RenderBenchmarkEnvConfig::Rejected(RenderBenchmarkRejectReason::InvalidFrameLimit)
         );
         assert_eq!(
-            RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("nope")),
+            RenderBenchmarkEnvConfig::from_values(Some("normal-gui"), Some("nope")),
             RenderBenchmarkEnvConfig::Rejected(RenderBenchmarkRejectReason::InvalidFrameLimit)
         );
     }
@@ -877,14 +900,15 @@ mod tests {
     #[test]
     fn render_benchmark_state_completes_after_frame_limit() {
         let mut state = RenderBenchmarkState::new(RenderBenchmarkConfig {
-            kind: RenderBenchmarkKind::SampledRectModulated,
+            kind: RenderBenchmarkKind::NormalGui,
             frame_limit: 2,
         });
 
         assert!(!state.record_rendered_frame());
         assert_eq!(state.rendered_frames(), 1);
         assert!(state.record_rendered_frame());
-        assert_eq!(state.name(), "sampled-rect-modulated");
+        assert_eq!(state.name(), "normal-gui");
+        assert_eq!(state.description(), "normal GUI render-loop frame counting");
         assert_eq!(state.rendered_frames(), 2);
         assert_eq!(state.frame_limit(), 2);
     }
