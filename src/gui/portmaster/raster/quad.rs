@@ -1051,14 +1051,15 @@ fn rasterize_separable_uv_textured_rect_with_stats_modulated(
                 let texture_offset = texture_row_offset + (first_texel_x + x - range.start_x) * 4;
                 let source = &texture.pixels
                     [texture_offset..texture_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4];
-                if let Some(alpha) =
+                let vector_alpha =
                     rasterize_sampled_textured_rect_modulated_vector_block_neon_with_alpha(
                         surface,
                         pixel_offset,
                         source,
                         vertex_color,
-                    )
-                {
+                    );
+                stats.record_textured_rect_sampled_modulated_vector_attempt(vector_alpha.is_some());
+                if let Some(alpha) = vector_alpha {
                     record_sampled_textured_rect_modulated_vector_block_alpha_stats(
                         stats,
                         alpha,
@@ -1961,6 +1962,20 @@ mod tests {
         );
         assert_eq!(stats.textured_rect_sampled_modulated_opportunity_px_16, 16);
         assert_eq!(stats.textured_rect_sampled_modulated_true_tail_px_16, 1);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_attempt_blocks_16,
+            1
+        );
+        let expected_success =
+            usize::from(cfg!(all(target_arch = "aarch64", target_endian = "little")));
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_success_blocks_16,
+            expected_success
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_fallback_blocks_16,
+            1 - expected_success
+        );
     }
 
     #[test]
@@ -2175,6 +2190,20 @@ mod tests {
         );
         assert_eq!(stats.textured_rect_sampled_modulated_opportunity_px_16, 32);
         assert_eq!(stats.textured_rect_sampled_modulated_true_tail_px_16, 5);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_attempt_blocks_16,
+            2
+        );
+        let expected_success =
+            2 * usize::from(cfg!(all(target_arch = "aarch64", target_endian = "little")));
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_success_blocks_16,
+            expected_success
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_fallback_blocks_16,
+            2 - expected_success
+        );
         assert_eq!(stats.opaque_px, 21);
         assert_eq!(stats.transparent_px, 5);
         assert_eq!(stats.translucent_px, 11);
@@ -2285,6 +2314,18 @@ mod tests {
         assert_eq!(stats.textured_rect_sampled_white_vertex_contiguous_px, 0);
         assert_eq!(stats.textured_rect_sampled_vector_blocks, 0);
         assert_eq!(stats.textured_rect_sampled_vector_tail_px, 0);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_attempt_blocks_16,
+            0
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_success_blocks_16,
+            0
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vector_fallback_blocks_16,
+            0
+        );
     }
 
     #[test]
