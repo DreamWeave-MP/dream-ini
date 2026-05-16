@@ -14,6 +14,7 @@ use super::raster::{
     classify_triangle, clear_elision_quad_evidence, polygon_raster_bounds,
     rasterize_solid_fan_with_cache, rasterize_triangle, usize_to_f32,
 };
+use super::render_benchmark::{SampledRectModulatedWorkload, background_color};
 use super::surface::SoftwareSurface;
 use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
 use super::{GuiFrame, GuiShell};
@@ -57,13 +58,19 @@ impl SoftwareRenderer {
     ) -> io::Result<RenderOutcome> {
         let log_timings = frame.log_frame || frame.hitch_log_threshold.is_some();
         let total_start = log_timings.then(Instant::now);
-        let stage_start = log_timings.then(Instant::now);
-        let surface_resized = self.surface.resize(width, height)?;
-        let cleared_this_frame = surface_resized;
-        if cleared_this_frame {
-            self.surface.clear([17, 20, 28, 255]);
+        let (surface_resized, cleared_this_frame, resize_clear_elapsed) =
+            self.prepare_surface(width, height, log_timings)?;
+
+        if should_render_synthetic_benchmark(frame) {
+            return self.render_synthetic_benchmark(
+                width,
+                height,
+                frame,
+                total_start,
+                resize_clear_elapsed,
+                surface_resized,
+            );
         }
-        let resize_clear_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_timings.then(Instant::now);
         let raw_input = egui::RawInput {
@@ -155,6 +162,149 @@ impl SoftwareRenderer {
 
     pub(super) const fn surface(&self) -> &SoftwareSurface {
         &self.surface
+    }
+
+    fn prepare_surface(
+        &mut self,
+        width: usize,
+        height: usize,
+        log_timings: bool,
+    ) -> io::Result<(bool, bool, u128)> {
+        let stage_start = log_timings.then(Instant::now);
+        let surface_resized = self.surface.resize(width, height)?;
+        if surface_resized {
+            self.surface.clear([17, 20, 28, 255]);
+        }
+        Ok((
+            surface_resized,
+            surface_resized,
+            elapsed_micros(stage_start),
+        ))
+    }
+
+    fn render_synthetic_benchmark<S: GuiShell>(
+        &mut self,
+        width: usize,
+        height: usize,
+        frame: &mut GuiFrame<'_, S>,
+        total_start: Option<Instant>,
+        resize_clear_elapsed: u128,
+        surface_resized: bool,
+    ) -> io::Result<RenderOutcome> {
+        self.surface.clear(background_color());
+        let collect_stats = should_collect_deep_stats(frame.log_render_stats);
+        let mut primitive_stats = collect_stats.then(PrimitiveStats::default);
+        let mut raster_stats = collect_stats.then(RasterStats::default);
+        let mut raster_timings = collect_stats.then(RasterTimings::default);
+        let rasterize_start = Instant::now();
+        let (workload_stats, texture_bytes, clear_elision_stats) = {
+            let Some(benchmark) = frame.render_benchmark.as_deref_mut() else {
+                return Err(io::Error::other("missing synthetic render benchmark state"));
+            };
+            let Some(workload) =
+                benchmark.sampled_rect_modulated_workload(width, height, frame.log)
+            else {
+                return Err(io::Error::other("missing sampled rect benchmark workload"));
+            };
+            let clear_elision_stats =
+                collect_stats.then(|| synthetic_clear_elision_stats(workload, width, height));
+            self.rasterize_synthetic_workload(
+                workload,
+                primitive_stats.as_mut(),
+                raster_stats.as_mut(),
+                raster_timings.as_mut(),
+            )?;
+            (
+                workload.stats(),
+                workload.texture().pixels.len(),
+                clear_elision_stats,
+            )
+        };
+        let rasterize_elapsed = rasterize_start.elapsed().as_micros();
+        log_synthetic_surface_stats(
+            frame,
+            &self.surface,
+            workload_stats,
+            texture_bytes,
+            surface_resized,
+        );
+        log_raster_stats(
+            frame,
+            &self.surface,
+            clear_elision_stats.as_ref(),
+            primitive_stats.as_ref(),
+            raster_stats.as_ref(),
+            raster_timings.as_ref(),
+        );
+        let timings =
+            (frame.log_frame || frame.hitch_log_threshold.is_some()).then_some(RenderTimings {
+                resize_clear: resize_clear_elapsed,
+                egui_run: 0,
+                texture_apply: 0,
+                tessellate: 0,
+                rasterize: rasterize_elapsed,
+                texture_free: 0,
+                total: elapsed_micros(total_start),
+            });
+        log_render_timings(frame, timings, Duration::ZERO);
+        Ok(RenderOutcome {
+            repaint_delay: Duration::ZERO,
+            timings,
+            primitive_count: 1,
+            texture_evidence: TextureEvidence {
+                count: 1,
+                bytes: texture_bytes,
+                set_count: 0,
+                set_bytes: 0,
+                full_upload_count: 0,
+                partial_update_count: 0,
+            },
+        })
+    }
+
+    fn rasterize_synthetic_workload(
+        &mut self,
+        workload: &SampledRectModulatedWorkload,
+        mut stats: Option<&mut PrimitiveStats>,
+        mut raster_stats: Option<&mut RasterStats>,
+        mut raster_timings: Option<&mut RasterTimings>,
+    ) -> io::Result<()> {
+        if let Some(stats) = borrow_optional_mut(&mut stats) {
+            stats.mesh_primitives += 1;
+            stats.mesh_indices += workload.mesh().indices.len();
+        }
+        let clip = ClipBounds::new(
+            egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(
+                    usize_to_f32(self.surface.width),
+                    usize_to_f32(self.surface.height),
+                ),
+            ),
+            self.surface.width,
+            self.surface.height,
+        )?;
+        let mut context = MeshRasterContext {
+            surface: &mut self.surface,
+            fan_polygon_scratch: &mut self.solid_fan_polygon_scratch,
+            fan_seen_boundary_scratch: &mut self.solid_fan_seen_boundary_scratch,
+            fan_span_cache: &mut self.solid_fan_span_cache,
+            mesh: workload.mesh(),
+            texture: workload.texture(),
+            clip,
+            primitive_index: 0,
+            solid_fan_polygon_scratch_budget: SOLID_FAN_POLYGON_SCRATCH_CAPACITY,
+        };
+        rasterize_mesh_contents(
+            &mut context,
+            &mut stats,
+            &mut raster_stats,
+            &mut raster_timings,
+        )?;
+        if let Some(stats) = raster_stats {
+            self.solid_fan_span_cache.record_stats(stats);
+        }
+        Ok(())
     }
 
     fn probe_clear_elision(&self, primitives: &[egui::ClippedPrimitive]) -> ClearElisionFrameStats {
@@ -439,6 +589,97 @@ fn log_surface_stats<S: GuiShell>(
             ),
         );
     }
+}
+
+fn should_render_synthetic_benchmark<S: GuiShell>(frame: &GuiFrame<'_, S>) -> bool {
+    frame
+        .render_benchmark
+        .as_ref()
+        .is_some_and(|benchmark| benchmark.kind().uses_synthetic_workload())
+}
+
+fn log_synthetic_surface_stats<S: GuiShell>(
+    frame: &GuiFrame<'_, S>,
+    surface: &SoftwareSurface,
+    stats: super::render_benchmark::SampledRectModulatedWorkloadStats,
+    texture_bytes: usize,
+    surface_resized: bool,
+) {
+    if frame.log_frame {
+        write_log(
+            frame.log,
+            format!(
+                "software renderer frame={} surface={}x{} bytes={} textures=1 texture_bytes={} primitives=1 benchmark=sampled-rect-modulated benchmark_rects={} benchmark_pixels={}",
+                frame.frame_index,
+                surface.width,
+                surface.height,
+                surface.pixels.len(),
+                texture_bytes,
+                stats.rects,
+                stats.pixels,
+            ),
+        );
+    }
+    if frame.log_render_stats {
+        write_log(
+            frame.log,
+            format!(
+                "software renderer render_stats frame={} surface={}x{} surface_bytes={} texture_sets=0 texture_set_bytes=0 texture_full_uploads=0 texture_partial_updates=0 clipped_primitives=1 repaint_request_due_before_frame={} requested_repaint_after_egui=false cleared_this_frame=true surface_resized={} benchmark=sampled-rect-modulated benchmark_span_px_lt4={} benchmark_span_px_4_7={} benchmark_span_px_8_15={} benchmark_span_px_16_plus=0",
+                frame.frame_index,
+                surface.width,
+                surface.height,
+                surface.pixels.len(),
+                frame.repaint_request_due_before_frame,
+                surface_resized,
+                stats.lt4_pixels,
+                stats.mid_pixels,
+                stats.wide_pixels,
+            ),
+        );
+    }
+}
+
+fn synthetic_clear_elision_stats(
+    workload: &SampledRectModulatedWorkload,
+    surface_width: usize,
+    surface_height: usize,
+) -> ClearElisionFrameStats {
+    let Ok(clip) = ClipBounds::new(
+        egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(usize_to_f32(surface_width), usize_to_f32(surface_height)),
+        ),
+        surface_width,
+        surface_height,
+    ) else {
+        return ClearElisionFrameStats {
+            probe_frames: 1,
+            reject_first_visible_not_rect: 1,
+            ..Default::default()
+        };
+    };
+    let evidence = mesh_quad_vertices(workload.mesh(), &workload.mesh().indices[..6])
+        .ok()
+        .flatten()
+        .map(|vertices| {
+            clear_elision_quad_evidence(
+                vertices,
+                workload.texture(),
+                clip,
+                surface_width,
+                surface_height,
+            )
+        });
+    let mut stats = ClearElisionFrameStats {
+        probe_frames: 1,
+        ..Default::default()
+    };
+    if let Some(evidence) = evidence {
+        stats.record_quad_evidence(evidence);
+    } else {
+        stats.reject_first_visible_not_rect = 1;
+    }
+    stats
 }
 
 fn log_raster_stats<S: GuiShell>(

@@ -16,6 +16,8 @@ mod pacing;
 #[cfg(target_os = "linux")]
 mod raster;
 #[cfg(target_os = "linux")]
+mod render_benchmark;
+#[cfg(target_os = "linux")]
 mod renderer;
 #[cfg(target_os = "linux")]
 mod shell;
@@ -37,6 +39,8 @@ use pacing::{
     FrameScheduleAction, IDLE_POLL_INTERVAL, REFRESH_ENV_VAR, earliest_repaint_deadline,
     frame_schedule_action, repaint_deadline, select_refresh_rate, sleep_for_frame_schedule,
 };
+#[cfg(target_os = "linux")]
+use render_benchmark::SampledRectModulatedWorkload;
 #[cfg(target_os = "linux")]
 use renderer::SoftwareRenderer;
 #[cfg(target_os = "linux")]
@@ -334,6 +338,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
             hitch_log_threshold: self.render_log_config.hitch_log_threshold,
             frame_index: frame_count,
             repaint_request_due_before_frame: requested_repaint_now,
+            render_benchmark: self.render_benchmark.as_mut(),
         };
         framebuffer.draw_egui_gui(&mut self.renderer, &mut frame)
     }
@@ -475,6 +480,7 @@ impl RenderLogConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RenderBenchmarkKind {
     NormalGui,
+    SampledRectModulated,
 }
 
 #[cfg(target_os = "linux")]
@@ -482,6 +488,7 @@ impl RenderBenchmarkKind {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "normal-gui" => Some(Self::NormalGui),
+            "sampled-rect-modulated" => Some(Self::SampledRectModulated),
             _ => None,
         }
     }
@@ -489,13 +496,19 @@ impl RenderBenchmarkKind {
     const fn as_str(self) -> &'static str {
         match self {
             Self::NormalGui => "normal-gui",
+            Self::SampledRectModulated => "sampled-rect-modulated",
         }
     }
 
     const fn description(self) -> &'static str {
         match self {
             Self::NormalGui => "normal GUI render-loop frame counting",
+            Self::SampledRectModulated => SampledRectModulatedWorkload::DESCRIPTION,
         }
+    }
+
+    pub(super) const fn uses_synthetic_workload(self) -> bool {
+        matches!(self, Self::SampledRectModulated)
     }
 }
 
@@ -600,10 +613,11 @@ fn parse_render_benchmark_frame_limit(value: Option<&str>) -> Option<u64> {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct RenderBenchmarkState {
     config: RenderBenchmarkConfig,
     rendered_frames: u64,
+    sampled_rect_modulated: Option<SampledRectModulatedWorkload>,
 }
 
 #[cfg(target_os = "linux")]
@@ -612,7 +626,33 @@ impl RenderBenchmarkState {
         Self {
             config,
             rendered_frames: 0,
+            sampled_rect_modulated: None,
         }
+    }
+
+    pub(super) const fn kind(&self) -> RenderBenchmarkKind {
+        self.config.kind
+    }
+
+    pub(super) fn sampled_rect_modulated_workload(
+        &mut self,
+        width: usize,
+        height: usize,
+        log: Option<&SharedLog>,
+    ) -> Option<&SampledRectModulatedWorkload> {
+        if !self.kind().uses_synthetic_workload() {
+            return None;
+        }
+        let rebuild = self
+            .sampled_rect_modulated
+            .as_ref()
+            .is_none_or(|workload| !workload.matches_viewport(width, height));
+        if rebuild {
+            let workload = SampledRectModulatedWorkload::new(width, height);
+            write_log(log, workload.config_log_line(self.config.frame_limit));
+            self.sampled_rect_modulated = Some(workload);
+        }
+        self.sampled_rect_modulated.as_ref()
     }
 
     fn record_rendered_frame(&mut self) -> bool {
@@ -620,19 +660,19 @@ impl RenderBenchmarkState {
         self.rendered_frames >= self.config.frame_limit
     }
 
-    const fn name(self) -> &'static str {
+    const fn name(&self) -> &'static str {
         self.config.kind.as_str()
     }
 
-    const fn description(self) -> &'static str {
+    const fn description(&self) -> &'static str {
         self.config.kind.description()
     }
 
-    const fn rendered_frames(self) -> u64 {
+    const fn rendered_frames(&self) -> u64 {
         self.rendered_frames
     }
 
-    const fn frame_limit(self) -> u64 {
+    const fn frame_limit(&self) -> u64 {
         self.config.frame_limit
     }
 }
@@ -731,6 +771,7 @@ struct GuiFrame<'a, S: GuiShell> {
     hitch_log_threshold: Option<Duration>,
     frame_index: u64,
     repaint_request_due_before_frame: bool,
+    render_benchmark: Option<&'a mut RenderBenchmarkState>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -880,9 +921,12 @@ mod tests {
 
         assert_eq!(
             config,
-            RenderBenchmarkEnvConfig::Rejected(RenderBenchmarkRejectReason::UnsupportedName)
+            RenderBenchmarkEnvConfig::Enabled(RenderBenchmarkConfig {
+                kind: RenderBenchmarkKind::SampledRectModulated,
+                frame_limit: 17,
+            })
         );
-        assert_eq!(config.into_state(), None);
+        assert!(config.into_state().is_some());
     }
 
     #[test]

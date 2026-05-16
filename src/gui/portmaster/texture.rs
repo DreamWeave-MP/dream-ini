@@ -139,7 +139,7 @@ impl TextureImageMetadata {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(super) struct TextureImage {
     pub(super) width: usize,
     pub(super) height: usize,
