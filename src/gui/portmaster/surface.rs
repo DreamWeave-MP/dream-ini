@@ -8,6 +8,8 @@ const MAX_BLEND_PRODUCT: u16 = 255 * 255;
 const BLEND_LOOKUP_TABLE_SIDE: usize = 256;
 const BLEND_LOOKUP_TABLE_SIDE_U16: u16 = 256;
 const BLEND_LOOKUP_TABLE_LEN: usize = BLEND_LOOKUP_TABLE_SIDE * BLEND_LOOKUP_TABLE_SIDE;
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+const SPAN_NEON_PIXELS: usize = 16;
 
 macro_rules! blend_lookup_table {
     ($($inverse_alpha:literal),* $(,)?) => {
@@ -124,7 +126,7 @@ impl SoftwareSurface {
 
     fn blend_translucent_span_at_offset(&mut self, offset: usize, len: usize, color: [u8; 4]) {
         let end = offset + len * 4;
-        blend_constant_premultiplied_span_rgba_scalar(&mut self.pixels[offset..end], color);
+        blend_constant_premultiplied_span_rgba(&mut self.pixels[offset..end], color);
     }
 
     pub(super) fn blend_span(&mut self, y: usize, start_x: usize, end_x: usize, color: [u8; 4]) {
@@ -142,8 +144,24 @@ impl SoftwareSurface {
             return;
         }
 
-        blend_constant_premultiplied_span_rgba_scalar(&mut self.pixels[start..end], color);
+        blend_constant_premultiplied_span_rgba(&mut self.pixels[start..end], color);
     }
+}
+
+fn blend_constant_premultiplied_span_rgba(span: &mut [u8], source: [u8; 4]) {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        let vector_bytes = span.len() / (SPAN_NEON_PIXELS * 4) * (SPAN_NEON_PIXELS * 4);
+        let (vector_span, tail) = span.split_at_mut(vector_bytes);
+
+        // SAFETY: vector_bytes is rounded down to complete 16-pixel RGBA
+        // vectors, and tail pixels are handled by the scalar implementation.
+        unsafe { blend_constant_premultiplied_span_rgba_neon(vector_span, source) };
+        blend_constant_premultiplied_span_rgba_scalar(tail, source);
+    }
+
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    blend_constant_premultiplied_span_rgba_scalar(span, source);
 }
 
 fn blend_constant_premultiplied_span_rgba_scalar(span: &mut [u8], source: [u8; 4]) {
@@ -154,6 +172,53 @@ fn blend_constant_premultiplied_span_rgba_scalar(span: &mut [u8], source: [u8; 4
             source,
             inverse_alpha,
         );
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+unsafe fn blend_constant_premultiplied_span_rgba_neon(span: &mut [u8], source: [u8; 4]) {
+    use core::arch::aarch64::{
+        uint8x8_t, uint8x16_t, uint8x16x4_t, uint16x8_t, vaddq_u16, vcombine_u8, vdup_n_u8,
+        vdupq_n_u8, vdupq_n_u16, vget_high_u8, vget_low_u8, vld4q_u8, vmovn_u16, vmull_u8,
+        vqaddq_u8, vshrq_n_u16, vst4q_u8,
+    };
+
+    unsafe fn divide_product(product: uint16x8_t) -> uint8x8_t {
+        let biased = unsafe { vaddq_u16(product, vdupq_n_u16(128)) };
+        let correction = unsafe { vshrq_n_u16(biased, 8) };
+        let quotient = unsafe { vshrq_n_u16(vaddq_u16(biased, correction), 8) };
+        unsafe { vmovn_u16(quotient) }
+    }
+
+    unsafe fn blend_channel(
+        destination: uint8x16_t,
+        source: uint8x16_t,
+        inverse_alpha: uint8x8_t,
+    ) -> uint8x16_t {
+        let low_product = unsafe { vmull_u8(vget_low_u8(destination), inverse_alpha) };
+        let high_product = unsafe { vmull_u8(vget_high_u8(destination), inverse_alpha) };
+        let blend =
+            unsafe { vcombine_u8(divide_product(low_product), divide_product(high_product)) };
+        unsafe { vqaddq_u8(source, blend) }
+    }
+
+    debug_assert_eq!(span.len() % (SPAN_NEON_PIXELS * 4), 0);
+
+    let inverse_alpha = unsafe { vdup_n_u8(u8::MAX - source[3]) };
+    let red = unsafe { vdupq_n_u8(source[0]) };
+    let green = unsafe { vdupq_n_u8(source[1]) };
+    let blue = unsafe { vdupq_n_u8(source[2]) };
+    let alpha = unsafe { vdupq_n_u8(u8::MAX) };
+
+    for pixel_block in span.chunks_exact_mut(SPAN_NEON_PIXELS * 4) {
+        let destination = unsafe { vld4q_u8(pixel_block.as_ptr()) };
+        let blended = uint8x16x4_t(
+            unsafe { blend_channel(destination.0, red, inverse_alpha) },
+            unsafe { blend_channel(destination.1, green, inverse_alpha) },
+            unsafe { blend_channel(destination.2, blue, inverse_alpha) },
+            alpha,
+        );
+        unsafe { vst4q_u8(pixel_block.as_mut_ptr(), blended) };
     }
 }
 
@@ -331,21 +396,26 @@ mod tests {
     }
 
     #[test]
-    fn scalar_constant_premultiplied_span_matches_repeated_pixel_blend() {
-        for width in [0, 1, 3, 15, 16, 17, 31, 32, 33] {
-            for alpha in [1, 2, 63, 127, 128, 191, 254] {
-                for source_rgb in [[0, 0, 0], [alpha, 0, alpha], [alpha, alpha, alpha]] {
+    fn constant_premultiplied_span_matches_explicit_scalar_reference() {
+        for width in [0, 1, 3, 7, 8, 15, 16, 17, 31, 32, 33] {
+            for alpha in [1_u8, 2, 63, 127, 128, 191, 254] {
+                for source_rgb in [
+                    [0, 0, 0],
+                    [1, 0, alpha],
+                    [alpha / 2, alpha.saturating_sub(1), alpha],
+                    [alpha, alpha, alpha],
+                    [254, 255, 1],
+                    [255, 255, 255],
+                ] {
                     for pattern_seed in [0, 17, 251] {
                         let source = [source_rgb[0], source_rgb[1], source_rgb[2], alpha];
                         let mut by_span = patterned_pixels(width, pattern_seed);
-                        let mut by_pixel = by_span.clone();
+                        let mut expected = by_span.clone();
 
-                        blend_constant_premultiplied_span_rgba_scalar(&mut by_span, source);
-                        for pixel in by_pixel.chunks_exact_mut(4) {
-                            blend_translucent_premultiplied_over_opaque_destination(pixel, source);
-                        }
+                        blend_constant_premultiplied_span_rgba(&mut by_span, source);
+                        blend_constant_premultiplied_span_rgba_reference(&mut expected, source);
 
-                        assert_eq!(by_span, by_pixel, "width {width}, source {source:?}");
+                        assert_eq!(by_span, expected, "width {width}, source {source:?}");
                     }
                 }
             }
@@ -434,6 +504,19 @@ mod tests {
             ]);
         }
         pixels
+    }
+
+    fn blend_constant_premultiplied_span_rgba_reference(span: &mut [u8], source: [u8; 4]) {
+        let inverse_alpha = u16::from(u8::MAX - source[3]);
+        for pixel in span.chunks_exact_mut(4) {
+            for channel in 0..3 {
+                let product = u16::from(pixel[channel]) * inverse_alpha;
+                let blend = (product + 127) / 255;
+                pixel[channel] =
+                    u8::try_from(u16::from(source[channel]) + blend).unwrap_or(u8::MAX);
+            }
+            pixel[3] = u8::MAX;
+        }
     }
 
     #[test]
