@@ -847,16 +847,39 @@ fn rasterize_separable_uv_textured_rect_no_stats_white(
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let contiguous_texel_x =
+            sampled_textured_rect_contiguous_source_start(texture, row, range.start_x, range.end_x);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        for x in range.start_x..range.end_x {
-            let color =
-                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
-            match color[3] {
-                0 => {}
-                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
-                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+        let mut x = range.start_x;
+        while x < range.end_x {
+            let mut scalar_end = x + 1;
+            if let Some(first_texel_x) = contiguous_texel_x
+                && x + TEXTURED_RECT_VECTOR_BLOCK_PX <= range.end_x
+            {
+                scalar_end = x + TEXTURED_RECT_VECTOR_BLOCK_PX;
+                let texture_offset = texture_row_offset + (first_texel_x + x - range.start_x) * 4;
+                if rasterize_sampled_textured_rect_vector_block_neon(
+                    surface,
+                    pixel_offset,
+                    &texture.pixels
+                        [texture_offset..texture_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4],
+                ) {
+                    pixel_offset += TEXTURED_RECT_VECTOR_BLOCK_PX * 4;
+                    x += TEXTURED_RECT_VECTOR_BLOCK_PX;
+                    continue;
+                }
             }
-            pixel_offset += 4;
+            while x < scalar_end {
+                let color =
+                    separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+                match color[3] {
+                    0 => {}
+                    u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                    _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+                }
+                pixel_offset += 4;
+                x += 1;
+            }
         }
     }
 }
@@ -931,18 +954,46 @@ fn rasterize_separable_uv_textured_rect_with_stats_white(
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let contiguous_texel_x =
+            sampled_textured_rect_contiguous_source_start(texture, row, range.start_x, range.end_x);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        for x in range.start_x..range.end_x {
-            let color =
-                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
-            stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
-            stats.record_alpha_px(color[3], 1);
-            match color[3] {
-                0 => {}
-                u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
-                _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+        let mut x = range.start_x;
+        while x < range.end_x {
+            let mut scalar_end = x + 1;
+            if let Some(first_texel_x) = contiguous_texel_x
+                && x + TEXTURED_RECT_VECTOR_BLOCK_PX <= range.end_x
+            {
+                scalar_end = x + TEXTURED_RECT_VECTOR_BLOCK_PX;
+                let texture_offset = texture_row_offset + (first_texel_x + x - range.start_x) * 4;
+                if let Some(alpha) = rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
+                    surface,
+                    pixel_offset,
+                    &texture.pixels
+                        [texture_offset..texture_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4],
+                ) {
+                    stats.record_textured_rect_separable_direct_alpha_px(
+                        alpha,
+                        TEXTURED_RECT_VECTOR_BLOCK_PX,
+                    );
+                    stats.record_alpha_px(alpha, TEXTURED_RECT_VECTOR_BLOCK_PX);
+                    pixel_offset += TEXTURED_RECT_VECTOR_BLOCK_PX * 4;
+                    x += TEXTURED_RECT_VECTOR_BLOCK_PX;
+                    continue;
+                }
             }
-            pixel_offset += 4;
+            while x < scalar_end {
+                let color =
+                    separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+                stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
+                stats.record_alpha_px(color[3], 1);
+                match color[3] {
+                    0 => {}
+                    u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                    _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+                }
+                pixel_offset += 4;
+                x += 1;
+            }
         }
     }
 }
@@ -1105,23 +1156,84 @@ fn sampled_textured_rect_vector_candidate(
     start_x: usize,
     end_x: usize,
 ) -> bool {
+    sampled_textured_rect_contiguous_source_start(texture, row, start_x, end_x).is_some()
+}
+
+fn sampled_textured_rect_contiguous_source_start(
+    texture: &TextureImage,
+    row: RectUvRow,
+    start_x: usize,
+    end_x: usize,
+) -> Option<usize> {
     let width = end_x - start_x;
     if width == 0 || texture.width == 0 {
-        return false;
+        return None;
     }
     let max_texel_x = texture.width - 1;
     let first_texel_x = nearest_texel_axis(row.uv_at(start_x, start_x).x, max_texel_x);
-    let Some(last_texel_x) = first_texel_x.checked_add(width - 1) else {
-        return false;
-    };
+    let last_texel_x = first_texel_x.checked_add(width - 1)?;
     if last_texel_x >= texture.width {
-        return false;
+        return None;
     }
 
-    (1..width).all(|offset| {
-        nearest_texel_axis(row.uv_at(start_x + offset, start_x).x, max_texel_x)
-            == first_texel_x + offset
-    })
+    (1..width)
+        .all(|offset| {
+            nearest_texel_axis(row.uv_at(start_x + offset, start_x).x, max_texel_x)
+                == first_texel_x + offset
+        })
+        .then_some(first_texel_x)
+}
+
+fn rasterize_sampled_textured_rect_vector_block_neon(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    source: &[u8],
+) -> bool {
+    rasterize_sampled_textured_rect_vector_block_neon_with_alpha(surface, pixel_offset, source)
+        .is_some()
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
+    _surface: &mut SoftwareSurface,
+    _pixel_offset: usize,
+    _source: &[u8],
+) -> Option<u8> {
+    None
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    source: &[u8],
+) -> Option<u8> {
+    use core::arch::aarch64::{vld4q_u8, vmaxvq_u8, vminvq_u8, vst4q_u8};
+
+    debug_assert_eq!(source.len(), TEXTURED_RECT_VECTOR_BLOCK_PX * 4);
+
+    // SAFETY: source is exactly one complete 16-pixel RGBA block. vld4q_u8 accepts
+    // unaligned loads, and the destination offset points at a complete surface span.
+    let texels = unsafe { vld4q_u8(source.as_ptr()) };
+    // SAFETY: vmaxvq_u8/vminvq_u8 only inspect the loaded alpha vector.
+    let max_alpha = unsafe { vmaxvq_u8(texels.3) };
+    if max_alpha == 0 {
+        return Some(0);
+    }
+
+    // SAFETY: vmax above proved at least one non-zero alpha; min tells whether all
+    // lanes are opaque. Mixed-alpha blocks deliberately fall back to scalar.
+    let min_alpha = unsafe { vminvq_u8(texels.3) };
+    if min_alpha != u8::MAX {
+        return None;
+    }
+
+    let pixels =
+        &mut surface.pixels[pixel_offset..pixel_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4];
+    // SAFETY: pixels is exactly one complete 16-pixel RGBA destination block, and
+    // storing the deinterleaved vectors reproduces the same bytes as an opaque copy.
+    unsafe { vst4q_u8(pixels.as_mut_ptr(), texels) };
+    Some(u8::MAX)
 }
 
 fn separable_uv_texture_row_offset(texture: &TextureImage, v: f32) -> usize {
@@ -1447,6 +1559,7 @@ mod tests {
                 .collect(),
         );
         let mut surface = test_surface(width, 1);
+        let mut generic = test_surface(width, 1);
         let mut stats = RasterStats::default();
         let bounds = QuadBounds {
             min_x: 0.0,
@@ -1455,6 +1568,15 @@ mod tests {
             max_y: 1.0,
         };
         let corners = vector_eligible_row_corners(width, [255; 4]);
+
+        rasterize_textured_rect_no_stats_with_color(
+            &mut generic,
+            corners,
+            &texture,
+            rect_range(bounds, full_clip(width, 1)),
+            rect_uv_basis(bounds),
+            sample_nearest,
+        );
 
         rasterize_textured_rect(
             &mut surface,
@@ -1479,6 +1601,10 @@ mod tests {
         assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 1);
         assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 1);
         assert_eq!(stats.textured_rect_sampled_vector_tail_px, 5);
+        assert_eq!(stats.opaque_px, 29);
+        assert_eq!(stats.transparent_px, 16);
+        assert_eq!(stats.translucent_px, 8);
+        assert_eq!(surface.pixels, generic.pixels);
     }
 
     #[test]
