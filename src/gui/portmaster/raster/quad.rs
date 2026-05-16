@@ -16,6 +16,13 @@ const CLEAR_ELISION_NEAR_FULL_SURFACE_BASIS_POINTS: usize = 9_500;
 const TEXTURED_RECT_VECTOR_BLOCK_PX: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SampledTexturedRectVectorBlockAlpha {
+    Transparent,
+    Opaque,
+    Mixed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gui::portmaster) enum ClearElisionQuadRejection {
     NotRect,
     ClipNotFullSurface,
@@ -965,17 +972,14 @@ fn rasterize_separable_uv_textured_rect_with_stats_white(
             {
                 scalar_end = x + TEXTURED_RECT_VECTOR_BLOCK_PX;
                 let texture_offset = texture_row_offset + (first_texel_x + x - range.start_x) * 4;
+                let source = &texture.pixels
+                    [texture_offset..texture_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4];
                 if let Some(alpha) = rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
                     surface,
                     pixel_offset,
-                    &texture.pixels
-                        [texture_offset..texture_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4],
+                    source,
                 ) {
-                    stats.record_textured_rect_separable_direct_alpha_px(
-                        alpha,
-                        TEXTURED_RECT_VECTOR_BLOCK_PX,
-                    );
-                    stats.record_alpha_px(alpha, TEXTURED_RECT_VECTOR_BLOCK_PX);
+                    record_sampled_textured_rect_vector_block_alpha_stats(stats, alpha, source);
                     pixel_offset += TEXTURED_RECT_VECTOR_BLOCK_PX * 4;
                     x += TEXTURED_RECT_VECTOR_BLOCK_PX;
                     continue;
@@ -1150,6 +1154,33 @@ fn record_sampled_textured_rect_vector_alpha(
     }
 }
 
+fn record_sampled_textured_rect_vector_block_alpha_stats(
+    stats: &mut RasterStats,
+    alpha: SampledTexturedRectVectorBlockAlpha,
+    source: &[u8],
+) {
+    match alpha {
+        SampledTexturedRectVectorBlockAlpha::Transparent => {
+            stats.record_textured_rect_separable_direct_alpha_px(0, TEXTURED_RECT_VECTOR_BLOCK_PX);
+            stats.record_alpha_px(0, TEXTURED_RECT_VECTOR_BLOCK_PX);
+        }
+        SampledTexturedRectVectorBlockAlpha::Opaque => {
+            stats.record_textured_rect_separable_direct_alpha_px(
+                u8::MAX,
+                TEXTURED_RECT_VECTOR_BLOCK_PX,
+            );
+            stats.record_alpha_px(u8::MAX, TEXTURED_RECT_VECTOR_BLOCK_PX);
+        }
+        SampledTexturedRectVectorBlockAlpha::Mixed => {
+            for pixel in source.chunks_exact(4) {
+                let alpha = pixel[3];
+                stats.record_textured_rect_separable_direct_alpha_px(alpha, 1);
+                stats.record_alpha_px(alpha, 1);
+            }
+        }
+    }
+}
+
 fn sampled_textured_rect_vector_candidate(
     texture: &TextureImage,
     row: RectUvRow,
@@ -1198,7 +1229,7 @@ fn rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
     _surface: &mut SoftwareSurface,
     _pixel_offset: usize,
     _source: &[u8],
-) -> Option<u8> {
+) -> Option<SampledTexturedRectVectorBlockAlpha> {
     None
 }
 
@@ -1207,8 +1238,32 @@ fn rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
     surface: &mut SoftwareSurface,
     pixel_offset: usize,
     source: &[u8],
-) -> Option<u8> {
-    use core::arch::aarch64::{vld4q_u8, vmaxvq_u8, vminvq_u8, vst4q_u8};
+) -> Option<SampledTexturedRectVectorBlockAlpha> {
+    use core::arch::aarch64::{
+        uint8x8_t, uint8x16_t, uint8x16x4_t, uint16x8_t, vaddq_u16, vbslq_u8, vceqq_u8,
+        vcombine_u8, vdupq_n_u8, vdupq_n_u16, vget_high_u8, vget_low_u8, vld4q_u8, vmaxvq_u8,
+        vminvq_u8, vmovn_u16, vmull_u8, vmvnq_u8, vqaddq_u8, vshrq_n_u16, vst4q_u8,
+    };
+
+    unsafe fn divide_product(product: uint16x8_t) -> uint8x8_t {
+        let biased = unsafe { vaddq_u16(product, vdupq_n_u16(128)) };
+        let correction = unsafe { vshrq_n_u16(biased, 8) };
+        let quotient = unsafe { vshrq_n_u16(vaddq_u16(biased, correction), 8) };
+        unsafe { vmovn_u16(quotient) }
+    }
+
+    unsafe fn blend_channel(
+        destination: uint8x16_t,
+        source: uint8x16_t,
+        inverse_alpha: uint8x16_t,
+    ) -> uint8x16_t {
+        let low_product = unsafe { vmull_u8(vget_low_u8(destination), vget_low_u8(inverse_alpha)) };
+        let high_product =
+            unsafe { vmull_u8(vget_high_u8(destination), vget_high_u8(inverse_alpha)) };
+        let blend =
+            unsafe { vcombine_u8(divide_product(low_product), divide_product(high_product)) };
+        unsafe { vqaddq_u8(source, blend) }
+    }
 
     debug_assert_eq!(source.len(), TEXTURED_RECT_VECTOR_BLOCK_PX * 4);
 
@@ -1218,22 +1273,56 @@ fn rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
     // SAFETY: vmaxvq_u8/vminvq_u8 only inspect the loaded alpha vector.
     let max_alpha = unsafe { vmaxvq_u8(texels.3) };
     if max_alpha == 0 {
-        return Some(0);
+        return Some(SampledTexturedRectVectorBlockAlpha::Transparent);
     }
 
     // SAFETY: vmax above proved at least one non-zero alpha; min tells whether all
-    // lanes are opaque. Mixed-alpha blocks deliberately fall back to scalar.
+    // lanes are opaque so the block can be copied without reading destination.
     let min_alpha = unsafe { vminvq_u8(texels.3) };
-    if min_alpha != u8::MAX {
-        return None;
-    }
-
     let pixels =
         &mut surface.pixels[pixel_offset..pixel_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4];
+    if min_alpha != u8::MAX {
+        // SAFETY: pixels is exactly one complete 16-pixel RGBA destination block.
+        // The math below matches scalar premultiplied blending:
+        // src + round(dst * (255 - alpha) / 255), with alpha forced to 255 for
+        // non-transparent lanes and transparent lanes left byte-for-byte unchanged.
+        let destination = unsafe { vld4q_u8(pixels.as_ptr()) };
+        let inverse_alpha = unsafe { vmvnq_u8(texels.3) };
+        let transparent = unsafe { vceqq_u8(texels.3, vdupq_n_u8(0)) };
+        let opaque_alpha = unsafe { vdupq_n_u8(u8::MAX) };
+        let blended = uint8x16x4_t(
+            unsafe {
+                vbslq_u8(
+                    transparent,
+                    destination.0,
+                    blend_channel(destination.0, texels.0, inverse_alpha),
+                )
+            },
+            unsafe {
+                vbslq_u8(
+                    transparent,
+                    destination.1,
+                    blend_channel(destination.1, texels.1, inverse_alpha),
+                )
+            },
+            unsafe {
+                vbslq_u8(
+                    transparent,
+                    destination.2,
+                    blend_channel(destination.2, texels.2, inverse_alpha),
+                )
+            },
+            unsafe { vbslq_u8(transparent, destination.3, opaque_alpha) },
+        );
+        // SAFETY: destination block length is exactly 16 RGBA pixels.
+        unsafe { vst4q_u8(pixels.as_mut_ptr(), blended) };
+        return Some(SampledTexturedRectVectorBlockAlpha::Mixed);
+    }
+
     // SAFETY: pixels is exactly one complete 16-pixel RGBA destination block, and
     // storing the deinterleaved vectors reproduces the same bytes as an opaque copy.
     unsafe { vst4q_u8(pixels.as_mut_ptr(), texels) };
-    Some(u8::MAX)
+    Some(SampledTexturedRectVectorBlockAlpha::Opaque)
 }
 
 fn separable_uv_texture_row_offset(texture: &TextureImage, v: f32) -> usize {
@@ -1648,6 +1737,70 @@ mod tests {
     }
 
     #[test]
+    fn sampled_textured_rect_vector_mixed_alpha_matches_generic_for_blocks_and_tail() {
+        let width = 69;
+        let alphas: Vec<u8> = (0..width)
+            .map(|x| match x {
+                0..=15 => [
+                    0, 32, 64, 96, 128, 160, 192, 224, 255, 17, 51, 85, 119, 153, 187, 221,
+                ][x],
+                16..=31 | 64 => 0,
+                32..=47 | 65 => u8::MAX,
+                48..=63 => match x % 4 {
+                    0 => 0,
+                    1 => 128,
+                    2 => u8::MAX,
+                    _ => 200,
+                },
+                66 => 96,
+                67 => 160,
+                _ => 32,
+            })
+            .collect();
+        let texture = varied_alpha_row_texture(alphas);
+        let mut surface = test_surface(width, 1);
+        let mut generic = test_surface(width, 1);
+        let mut stats = RasterStats::default();
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: usize_to_f32(width),
+            max_y: 1.0,
+        };
+        let corners = vector_eligible_row_corners(width, [255; 4]);
+        let range = rect_range(bounds, full_clip(width, 1));
+        let uv_basis = rect_uv_basis(bounds);
+
+        rasterize_textured_rect_no_stats_with_color(
+            &mut generic,
+            corners,
+            &texture,
+            range,
+            uv_basis,
+            sample_nearest,
+        );
+        rasterize_textured_rect(
+            &mut surface,
+            corners,
+            bounds,
+            &texture,
+            full_clip(width, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(surface.pixels, generic.pixels);
+        assert_eq!(stats.textured_rect_sampled_vector_candidate_px, width);
+        assert_eq!(stats.textured_rect_sampled_vector_blocks, 4);
+        assert_eq!(stats.textured_rect_sampled_vector_opaque_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 2);
+        assert_eq!(stats.textured_rect_sampled_vector_tail_px, 5);
+        assert_eq!(stats.opaque_px, 22);
+        assert_eq!(stats.transparent_px, 22);
+        assert_eq!(stats.translucent_px, 25);
+    }
+
+    #[test]
     fn sampled_textured_rect_vector_stats_ignore_non_contiguous_sampled_rows() {
         let texture =
             alpha_row_texture((0..20).map(|x| if x == 0 { 0 } else { u8::MAX }).collect());
@@ -1923,6 +2076,29 @@ mod tests {
         let mut pixels = Vec::with_capacity(width * 4);
         for alpha in alphas {
             pixels.extend_from_slice(&[alpha, alpha, alpha, alpha]);
+        }
+        TextureImage {
+            width,
+            height: 1,
+            pixels,
+        }
+    }
+
+    fn varied_alpha_row_texture(alphas: Vec<u8>) -> TextureImage {
+        let width = alphas.len();
+        let mut pixels = Vec::with_capacity(width * 4);
+        for (index, alpha) in alphas.into_iter().enumerate() {
+            if alpha == 0 {
+                pixels.extend_from_slice(&[200, 50, 100, 0]);
+            } else {
+                let seed = u8::try_from(index % 4).expect("small seed");
+                pixels.extend_from_slice(&[
+                    alpha / 3 + seed,
+                    alpha / 2,
+                    alpha.saturating_sub(seed),
+                    alpha,
+                ]);
+            }
         }
         TextureImage {
             width,
