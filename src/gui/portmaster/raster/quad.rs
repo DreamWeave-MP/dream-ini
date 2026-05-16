@@ -1955,6 +1955,12 @@ mod tests {
         assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 0);
         assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 0);
         assert_eq!(stats.textured_rect_sampled_vector_tail_px, 1);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_opportunity_blocks_16,
+            1
+        );
+        assert_eq!(stats.textured_rect_sampled_modulated_opportunity_px_16, 16);
+        assert_eq!(stats.textured_rect_sampled_modulated_true_tail_px_16, 1);
     }
 
     #[test]
@@ -2027,7 +2033,77 @@ mod tests {
             stats.textured_rect_sampled_modulated_vertex_contiguous_px,
             127
         );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_opportunity_blocks_16,
+            7
+        );
+        assert_eq!(stats.textured_rect_sampled_modulated_opportunity_px_16, 112);
+        assert_eq!(stats.textured_rect_sampled_modulated_true_tail_px_16, 15);
         assert_eq!(stats.textured_rect_sampled_white_vertex_contiguous_px, 10);
+    }
+
+    #[test]
+    fn sampled_textured_rect_vector_stats_count_modulated_opportunities_16() {
+        let mut stats = RasterStats::default();
+        let vertex_color = [128, 192, 224, 255];
+        let cases = [15, 16, 37, 18];
+
+        for run_width in cases {
+            let texture_width = run_width + 2;
+            let texture = alpha_row_texture(vec![u8::MAX; texture_width]);
+            let mut surface = test_surface(texture_width, 1);
+            let bounds = QuadBounds {
+                min_x: 0.0,
+                min_y: 0.0,
+                max_x: usize_to_f32(texture_width),
+                max_y: 1.0,
+            };
+            let clip = ClipBounds {
+                min_x: 1,
+                min_y: 0,
+                max_x: run_width + 1,
+                max_y: 1,
+            };
+
+            rasterize_textured_rect(
+                &mut surface,
+                vector_eligible_row_corners(texture_width, vertex_color),
+                bounds,
+                &texture,
+                clip,
+                Some(&mut stats),
+            );
+        }
+
+        let white_texture = alpha_row_texture(vec![u8::MAX; 19]);
+        let mut white_surface = test_surface(19, 1);
+        let white_bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 19.0,
+            max_y: 1.0,
+        };
+        rasterize_textured_rect(
+            &mut white_surface,
+            vector_eligible_row_corners(19, [255; 4]),
+            white_bounds,
+            &white_texture,
+            full_clip(19, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_rect_sampled_modulated_contiguous_runs, 4);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vertex_contiguous_px,
+            86
+        );
+        assert_eq!(stats.textured_rect_sampled_white_vertex_contiguous_px, 19);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_opportunity_blocks_16,
+            4
+        );
+        assert_eq!(stats.textured_rect_sampled_modulated_opportunity_px_16, 64);
+        assert_eq!(stats.textured_rect_sampled_modulated_true_tail_px_16, 22);
     }
 
     #[test]
@@ -2093,6 +2169,12 @@ mod tests {
         assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 0);
         assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 1);
         assert_eq!(stats.textured_rect_sampled_vector_tail_px, 5);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_opportunity_blocks_16,
+            2
+        );
+        assert_eq!(stats.textured_rect_sampled_modulated_opportunity_px_16, 32);
+        assert_eq!(stats.textured_rect_sampled_modulated_true_tail_px_16, 5);
         assert_eq!(stats.opaque_px, 21);
         assert_eq!(stats.transparent_px, 5);
         assert_eq!(stats.translucent_px, 11);
