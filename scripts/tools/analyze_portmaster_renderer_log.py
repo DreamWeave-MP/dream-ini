@@ -32,6 +32,31 @@ SELECTED_COUNTERS = {
     "framebuffer_draw_timings": ("var_refresh_us", "validate_viewport_us", "render_us", "snapshot_us", "blit_us", "total_us"),
 }
 
+CONSTANT_TEXEL_RASTER_COUNTERS = (
+    "constant_texel_textured_triangle_opaque_px",
+    "constant_texel_textured_triangle_translucent_px",
+    "constant_texel_textured_triangle_transparent_px",
+    "constant_texel_textured_triangle_span_runs",
+    "constant_texel_textured_triangle_span_px_lt4",
+    "constant_texel_textured_triangle_span_px_4_7",
+    "constant_texel_textured_triangle_span_px_8_15",
+    "constant_texel_textured_triangle_span_px_16_31",
+    "constant_texel_textured_triangle_span_px_32_plus",
+    "constant_texel_textured_triangle_repeated_color_opportunity_blocks_16",
+    "constant_texel_textured_triangle_repeated_color_opportunity_px_16",
+    "constant_texel_textured_triangle_repeated_color_true_tail_px_16",
+    "constant_texel_textured_triangle_repeated_color_span_helper_calls",
+    "constant_texel_textured_triangle_repeated_color_span_helper_px",
+    "constant_texel_textured_triangle_repeated_color_opaque_write_helper_calls",
+    "constant_texel_textured_triangle_repeated_color_opaque_write_helper_px",
+    "constant_texel_textured_triangle_repeated_color_translucent_blend_helper_calls",
+    "constant_texel_textured_triangle_repeated_color_translucent_blend_helper_px",
+)
+
+SELECTED_COUNTERS["raster_stats"] += tuple(
+    key for key in CONSTANT_TEXEL_RASTER_COUNTERS if key not in SELECTED_COUNTERS["raster_stats"]
+)
+
 KEY_VALUE_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
 NUMERIC_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
 INTEGER_LIST_RE = re.compile(r"^-?\d+(?:,-?\d+)+$")
@@ -309,6 +334,66 @@ def normalized_sampled_rect_rows(section: SectionStats) -> tuple[list[tuple[str,
     return rows, unavailable
 
 
+def counter_total(section: SectionStats, key: str) -> float | None:
+    values = section.numeric_values.get(key)
+    return sum(values) if values is not None else None
+
+
+def format_percent(numerator: float, denominator: float) -> str:
+    return f"{(numerator / denominator) * 100.0:.2f}%"
+
+
+def append_share_row(rows: list[tuple[str, str, str]], label: str, numerator: float | None, denominator: float | None) -> None:
+    if numerator is None or denominator is None or denominator <= 0:
+        return
+    rows.append((label, format_number(numerator), format_percent(numerator, denominator)))
+
+
+def constant_texel_summary_rows(section: SectionStats) -> list[tuple[str, str, str]]:
+    rows = []
+    span_buckets = (
+        ("span width px <4", "constant_texel_textured_triangle_span_px_lt4"),
+        ("span width px 4-7", "constant_texel_textured_triangle_span_px_4_7"),
+        ("span width px 8-15", "constant_texel_textured_triangle_span_px_8_15"),
+        ("span width px 16-31", "constant_texel_textured_triangle_span_px_16_31"),
+        ("span width px 32+", "constant_texel_textured_triangle_span_px_32_plus"),
+    )
+    span_totals = [(label, counter_total(section, key)) for label, key in span_buckets]
+    if all(total is not None for _, total in span_totals):
+        span_px = sum(total for _, total in span_totals if total is not None)
+        for label, total in span_totals:
+            append_share_row(rows, label, total, span_px)
+
+    opportunity_px = counter_total(
+        section, "constant_texel_textured_triangle_repeated_color_opportunity_px_16"
+    )
+    true_tail_px = counter_total(
+        section, "constant_texel_textured_triangle_repeated_color_true_tail_px_16"
+    )
+    repeated_color_px = None
+    if opportunity_px is not None and true_tail_px is not None:
+        repeated_color_px = opportunity_px + true_tail_px
+        append_share_row(rows, "repeated-color 16-wide opportunity px", opportunity_px, repeated_color_px)
+        append_share_row(rows, "repeated-color true-tail px", true_tail_px, repeated_color_px)
+
+    helper_px = counter_total(
+        section, "constant_texel_textured_triangle_repeated_color_span_helper_px"
+    )
+    append_share_row(rows, "helper-use px share of repeated-color span px", helper_px, repeated_color_px)
+    append_share_row(rows, "helper-use px share of 16-wide opportunity px", helper_px, opportunity_px)
+
+    opaque_px = counter_total(section, "constant_texel_textured_triangle_opaque_px")
+    translucent_px = counter_total(section, "constant_texel_textured_triangle_translucent_px")
+    transparent_px = counter_total(section, "constant_texel_textured_triangle_transparent_px")
+    if opaque_px is not None and translucent_px is not None and transparent_px is not None:
+        alpha_px = opaque_px + translucent_px + transparent_px
+        append_share_row(rows, "alpha mix opaque px", opaque_px, alpha_px)
+        append_share_row(rows, "alpha mix translucent px", translucent_px, alpha_px)
+        append_share_row(rows, "alpha mix transparent px", transparent_px, alpha_px)
+
+    return rows
+
+
 def bucket_rows(section: SectionStats) -> list[tuple[str, str, str]]:
     rows = []
     for key in sorted(section.list_sums):
@@ -416,6 +501,14 @@ def print_report(path: Path, sections: dict[str, SectionStats], benchmark: Bench
             if unavailable:
                 print("Unavailable: " + "; ".join(unavailable))
             print()
+            constant_texel_rows = constant_texel_summary_rows(section)
+            if constant_texel_rows:
+                print("### Constant-Texel Span Summary")
+                print(
+                    "Opportunity/helper-use counters describe repeated-color spans and helper paths; they do not prove SIMD execution."
+                )
+                print_table(constant_texel_rows, ("metric", "px", "share"))
+                print()
         buckets = bucket_rows(section)
         if buckets:
             print("### Bucket Totals")
