@@ -13,6 +13,7 @@ use super::{RasterStats, UV_AFFINE_EPSILON, duration_as_us};
 use crate::gui::portmaster::{surface::SoftwareSurface, texture::TextureImage};
 
 const CLEAR_ELISION_NEAR_FULL_SURFACE_BASIS_POINTS: usize = 9_500;
+const TEXTURED_RECT_VECTOR_BLOCK_PX: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::gui::portmaster) enum ClearElisionQuadRejection {
@@ -935,19 +936,39 @@ fn rasterize_separable_uv_textured_rect_with_stats_white(
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let vector_candidate =
+            sampled_textured_rect_vector_candidate(texture, row, range.start_x, range.end_x);
+        if vector_candidate {
+            stats.record_textured_rect_sampled_vector_candidate(true, range.end_x - range.start_x);
+        }
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
+        let mut block_px = 0;
+        let mut block_opaque_px = 0;
+        let mut block_transparent_px = 0;
         for x in range.start_x..range.end_x {
             let color =
                 separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
             stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
             stats.record_alpha_px(color[3], 1);
+            if vector_candidate {
+                record_sampled_textured_rect_vector_alpha(
+                    stats,
+                    color[3],
+                    &mut block_px,
+                    &mut block_opaque_px,
+                    &mut block_transparent_px,
+                );
+            }
             match color[3] {
                 0 => {}
                 u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
                 _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
             }
             pixel_offset += 4;
+        }
+        if vector_candidate {
+            stats.textured_rect_sampled_vector_tail_px += block_px;
         }
     }
 }
@@ -963,18 +984,44 @@ fn rasterize_separable_uv_textured_rect_with_stats_modulated(
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        let vector_candidate =
+            sampled_textured_rect_vector_candidate(texture, row, range.start_x, range.end_x);
+        if vector_candidate {
+            stats.record_textured_rect_sampled_vector_candidate(false, range.end_x - range.start_x);
+        }
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
+        let mut block_px = 0;
+        let mut block_opaque_px = 0;
+        let mut block_transparent_px = 0;
         for x in range.start_x..range.end_x {
             let texel =
                 separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
             if texel[3] == 0 {
                 stats.record_textured_rect_separable_direct_alpha_px(0, 1);
                 stats.record_alpha_px(0, 1);
+                if vector_candidate {
+                    record_sampled_textured_rect_vector_alpha(
+                        stats,
+                        0,
+                        &mut block_px,
+                        &mut block_opaque_px,
+                        &mut block_transparent_px,
+                    );
+                }
             } else {
                 let color = modulate_color(vertex_color, texel);
                 stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
                 stats.record_alpha_px(color[3], 1);
+                if vector_candidate {
+                    record_sampled_textured_rect_vector_alpha(
+                        stats,
+                        color[3],
+                        &mut block_px,
+                        &mut block_opaque_px,
+                        &mut block_transparent_px,
+                    );
+                }
                 match color[3] {
                     0 => {}
                     u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
@@ -983,7 +1030,56 @@ fn rasterize_separable_uv_textured_rect_with_stats_modulated(
             }
             pixel_offset += 4;
         }
+        if vector_candidate {
+            stats.textured_rect_sampled_vector_tail_px += block_px;
+        }
     }
+}
+
+fn record_sampled_textured_rect_vector_alpha(
+    stats: &mut RasterStats,
+    alpha: u8,
+    block_px: &mut usize,
+    block_opaque_px: &mut usize,
+    block_transparent_px: &mut usize,
+) {
+    *block_px += 1;
+    match alpha {
+        0 => *block_transparent_px += 1,
+        u8::MAX => *block_opaque_px += 1,
+        _ => {}
+    }
+    if *block_px == TEXTURED_RECT_VECTOR_BLOCK_PX {
+        stats.record_textured_rect_sampled_vector_block(*block_opaque_px, *block_transparent_px);
+        *block_px = 0;
+        *block_opaque_px = 0;
+        *block_transparent_px = 0;
+    }
+}
+
+fn sampled_textured_rect_vector_candidate(
+    texture: &TextureImage,
+    row: RectUvRow,
+    start_x: usize,
+    end_x: usize,
+) -> bool {
+    let width = end_x - start_x;
+    if width == 0 || texture.width == 0 {
+        return false;
+    }
+    let max_texel_x = texture.width - 1;
+    let first_texel_x = nearest_texel_axis(row.uv_at(start_x, start_x).x, max_texel_x);
+    let Some(last_texel_x) = first_texel_x.checked_add(width - 1) else {
+        return false;
+    };
+    if last_texel_x >= texture.width {
+        return false;
+    }
+
+    (1..width).all(|offset| {
+        nearest_texel_axis(row.uv_at(start_x + offset, start_x).x, max_texel_x)
+            == first_texel_x + offset
+    })
 }
 
 fn separable_uv_texture_row_offset(texture: &TextureImage, v: f32) -> usize {
@@ -1293,6 +1389,137 @@ mod tests {
     }
 
     #[test]
+    fn sampled_textured_rect_vector_stats_classify_white_contiguous_blocks_and_tail() {
+        let width = 53;
+        let texture = alpha_row_texture(
+            (0..width)
+                .map(|x| {
+                    if (16..32).contains(&x) {
+                        0
+                    } else if (32..48).contains(&x) && x % 2 == 0 {
+                        128
+                    } else {
+                        u8::MAX
+                    }
+                })
+                .collect(),
+        );
+        let mut surface = test_surface(width, 1);
+        let mut stats = RasterStats::default();
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: usize_to_f32(width),
+            max_y: 1.0,
+        };
+        let corners = vector_eligible_row_corners(width, [255; 4]);
+
+        rasterize_textured_rect(
+            &mut surface,
+            corners,
+            bounds,
+            &texture,
+            full_clip(width, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_rect_sampled_vector_candidate_px, width);
+        assert_eq!(
+            stats.textured_rect_sampled_white_vertex_contiguous_px,
+            width
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vertex_contiguous_px,
+            0
+        );
+        assert_eq!(stats.textured_rect_sampled_vector_blocks, 3);
+        assert_eq!(stats.textured_rect_sampled_vector_opaque_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_tail_px, 5);
+    }
+
+    #[test]
+    fn sampled_textured_rect_vector_stats_count_modulated_contiguous_pixels() {
+        let width = 17;
+        let texture = alpha_row_texture(
+            (0..width)
+                .map(|x| if x == width - 1 { 0 } else { u8::MAX })
+                .collect(),
+        );
+        let mut surface = test_surface(width, 1);
+        let mut stats = RasterStats::default();
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: usize_to_f32(width),
+            max_y: 1.0,
+        };
+        let corners = vector_eligible_row_corners(width, [128, 192, 224, 255]);
+
+        rasterize_textured_rect(
+            &mut surface,
+            corners,
+            bounds,
+            &texture,
+            full_clip(width, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_rect_sampled_vector_candidate_px, width);
+        assert_eq!(stats.textured_rect_sampled_white_vertex_contiguous_px, 0);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vertex_contiguous_px,
+            width
+        );
+        assert_eq!(stats.textured_rect_sampled_vector_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_opaque_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 0);
+        assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 0);
+        assert_eq!(stats.textured_rect_sampled_vector_tail_px, 1);
+    }
+
+    #[test]
+    fn sampled_textured_rect_vector_stats_ignore_non_contiguous_sampled_rows() {
+        let texture =
+            alpha_row_texture((0..20).map(|x| if x == 0 { 0 } else { u8::MAX }).collect());
+        let mut surface = test_surface(32, 1);
+        let mut stats = RasterStats::default();
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 32.0,
+            max_y: 1.0,
+        };
+        let corners = textured_rect_corners(
+            egui::pos2(0.0, 0.0),
+            egui::pos2(32.0, 1.0),
+            [255; 4],
+            [
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+                egui::pos2(0.0, 0.0),
+                egui::pos2(1.0, 0.0),
+            ],
+        );
+
+        rasterize_textured_rect(
+            &mut surface,
+            corners,
+            bounds,
+            &texture,
+            full_clip(32, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_rect_sampled_calls, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_candidate_px, 0);
+        assert_eq!(stats.textured_rect_sampled_white_vertex_contiguous_px, 0);
+        assert_eq!(stats.textured_rect_sampled_vector_blocks, 0);
+        assert_eq!(stats.textured_rect_sampled_vector_tail_px, 0);
+    }
+
+    #[test]
     fn separable_uv_textured_rect_same_sampled_texel_counts_as_constant_texel() {
         let texture = mixed_alpha_texture();
         let mut surface = test_surface(8, 6);
@@ -1433,6 +1660,21 @@ mod tests {
         }
     }
 
+    fn vector_eligible_row_corners(width: usize, color: [u8; 4]) -> TexturedQuadCorners {
+        let max_texel = usize_to_f32(width - 1);
+        textured_rect_corners(
+            egui::pos2(0.0, 0.0),
+            egui::pos2(usize_to_f32(width), 1.0),
+            color,
+            [
+                egui::pos2(-0.5 / max_texel, 0.0),
+                egui::pos2((usize_to_f32(width) - 0.5) / max_texel, 0.0),
+                egui::pos2(-0.5 / max_texel, 0.0),
+                egui::pos2((usize_to_f32(width) - 0.5) / max_texel, 0.0),
+            ],
+        )
+    }
+
     fn vertex(x: f32, y: f32, color: [u8; 4], uv: egui::Pos2) -> egui::epaint::Vertex {
         egui::epaint::Vertex {
             pos: egui::pos2(x, y),
@@ -1505,6 +1747,19 @@ mod tests {
                 0, 0, 0, 0, 32, 32, 32, 96, 64, 64, 64, 255, 96, 96, 96, 0, 128, 128, 128, 160,
                 160, 160, 160, 255, 192, 192, 192, 0, 224, 224, 224, 224,
             ],
+        }
+    }
+
+    fn alpha_row_texture(alphas: Vec<u8>) -> TextureImage {
+        let width = alphas.len();
+        let mut pixels = Vec::with_capacity(width * 4);
+        for alpha in alphas {
+            pixels.extend_from_slice(&[alpha, alpha, alpha, alpha]);
+        }
+        TextureImage {
+            width,
+            height: 1,
+            pixels,
         }
     }
 
