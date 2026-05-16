@@ -74,7 +74,20 @@ pub(super) fn solid_fan_run<'a>(
     let candidate_triangles_scanned_before = stats
         .as_deref()
         .map_or(0, |stats| stats.candidate_triangles_scanned);
-    for center_slot in 0..3 {
+    let allowed_center_slots =
+        solid_fan_second_triangle_center_mask(mesh, index_offset, stats.as_deref_mut())?;
+    if !allowed_center_slots.iter().any(|allowed| *allowed) {
+        if let Some(stats) = stats {
+            stats.rejected_probe_calls += 1;
+            stats.preflight_reject_no_second_triangle_continuation += 1;
+            stats.record_probe_candidate_triangles(false, candidate_triangles_scanned_before);
+        }
+        return Ok(None);
+    }
+    for (center_slot, allowed) in allowed_center_slots.iter().enumerate() {
+        if !*allowed {
+            continue;
+        }
         if let Some(stats) = stats.as_deref_mut() {
             stats.center_slot_attempts += 1;
         }
@@ -99,6 +112,69 @@ pub(super) fn solid_fan_run<'a>(
         stats.record_probe_candidate_triangles(false, candidate_triangles_scanned_before);
     }
     Ok(None)
+}
+
+fn solid_fan_second_triangle_center_mask(
+    mesh: &egui::Mesh,
+    index_offset: usize,
+    mut stats: Option<&mut SolidFanProbeStats>,
+) -> io::Result<[bool; 3]> {
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.preflight_second_triangle_checks += 1;
+    }
+
+    let (Some(first), Some(second)) = (
+        fan_triangle_at(mesh, index_offset)?,
+        fan_triangle_at(mesh, index_offset + 3)?,
+    ) else {
+        record_preflight_slot_results([false; 3], stats);
+        return Ok([false; 3]);
+    };
+    if !fan_triangle_positions_are_finite(first) || !fan_triangle_positions_are_finite(second) {
+        record_preflight_slot_results([false; 3], stats);
+        return Ok([false; 3]);
+    }
+    let (Some(expected_area_sign), Some(second_area_sign)) = (
+        fan_triangle_area_sign(first),
+        fan_triangle_area_sign(second),
+    ) else {
+        record_preflight_slot_results([false; 3], stats);
+        return Ok([false; 3]);
+    };
+    if second_area_sign != expected_area_sign {
+        record_preflight_slot_results([false; 3], stats);
+        return Ok([false; 3]);
+    }
+
+    let mut allowed = [false; 3];
+    for (center_slot, allowed_slot) in allowed.iter_mut().enumerate() {
+        let center_index = first.indices[center_slot];
+        let center_pos = first.vertices[center_slot].pos;
+        let Some(second_center_slot) = candidate_center_slot(second, center_index, center_pos)
+        else {
+            continue;
+        };
+        let [previous_boundary, current_boundary] = fan_boundaries(first, center_slot);
+        let Some(next_boundary) =
+            next_fan_boundary(fan_boundaries(second, second_center_slot), current_boundary)
+        else {
+            continue;
+        };
+        if same_fan_vertex(next_boundary, previous_boundary) {
+            continue;
+        }
+        *allowed_slot = true;
+    }
+    record_preflight_slot_results(allowed, stats);
+    Ok(allowed)
+}
+
+fn record_preflight_slot_results(allowed: [bool; 3], stats: Option<&mut SolidFanProbeStats>) {
+    if let Some(stats) = stats {
+        let allowed_count = allowed.iter().filter(|allowed| **allowed).count();
+        stats.preflight_center_slots_allowed += allowed_count;
+        stats.preflight_center_slots_rejected += 3 - allowed_count;
+    }
 }
 
 fn solid_fan_run_for_center(

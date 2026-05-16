@@ -1081,41 +1081,7 @@ mod tests {
         let texture = renderer.textures.get(&texture_id).expect("stored texture");
         let reference = render_solid_fan_reference(&mesh, texture, clip_bounds(12, 12));
         assert_eq!(fan_pixels, reference);
-        assert_eq!(primitive_stats.solid_fan_runs, 1);
-        assert_eq!(primitive_stats.solid_fan_triangles, 4);
-        assert_eq!(primitive_stats.solid_fan_probe.probe_calls, 1);
-        assert_eq!(primitive_stats.solid_fan_probe.rejected_probe_calls, 0);
-        assert_eq!(primitive_stats.solid_fan_probe.center_slot_attempts, 2);
-        assert_eq!(primitive_stats.solid_fan_probe.cheap_candidate_attempts, 2);
-        assert_eq!(
-            primitive_stats.solid_fan_probe.candidate_triangles_scanned,
-            6
-        );
-        assert_eq!(
-            primitive_stats
-                .solid_fan_probe
-                .accepted_candidate_triangles_scanned,
-            6
-        );
-        assert_eq!(
-            primitive_stats
-                .solid_fan_probe
-                .rejected_candidate_triangles_scanned,
-            0
-        );
-        assert_eq!(primitive_stats.solid_fan_probe.repeated_boundary_checks, 3);
-        assert_eq!(
-            primitive_stats
-                .solid_fan_probe
-                .repeated_boundary_comparisons,
-            9
-        );
-        assert_eq!(primitive_stats.solid_fan_probe.reject_no_candidate, 1);
-        assert_eq!(primitive_stats.solid_fan_probe.accepted_runs, 1);
-        assert_eq!(primitive_stats.solid_fan_probe.accepted_triangles, 4);
-        assert_eq!(primitive_stats.solid_fan_probe.polygon_builds, 1);
-        assert_eq!(primitive_stats.solid_fan_probe.max_candidate_triangles, 4);
-        assert_eq!(primitive_stats.solid_fan_probe.max_accepted_triangles, 4);
+        assert_accepted_solid_fan_primitive_stats(&primitive_stats);
         assert_eq!(primitive_stats.generic_triangles_rasterized, 0);
         assert_eq!(raster_stats.solid_fan_calls, 1);
         assert_eq!(raster_stats.solid_fan_triangles, 4);
@@ -1215,6 +1181,67 @@ mod tests {
         assert_eq!(raster_stats.solid_fan_calls, 0);
         assert_eq!(raster_stats.solid_triangle_calls, 1);
         assert_eq!(raster_stats.textured_triangle_calls, 2);
+    }
+
+    #[test]
+    fn renderer_solid_fan_preflight_rejects_when_second_triangle_cannot_continue() {
+        let texture_id = egui::TextureId::Managed(1);
+        let mut renderer = renderer_with_white_texture(texture_id, 12, 12);
+        let mesh = disconnected_solid_triangles_mesh(texture_id);
+        let clip_rect = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(12.0, 12.0));
+        let mut primitive_stats = PrimitiveStats::default();
+        let mut raster_stats = RasterStats::default();
+
+        renderer
+            .rasterize_mesh(
+                &mesh,
+                clip_rect,
+                0,
+                Some(&mut primitive_stats),
+                Some(&mut raster_stats),
+                None,
+            )
+            .expect("rasterize mesh");
+
+        let texture = renderer.textures.get(&texture_id).expect("stored texture");
+        let reference = render_solid_fan_reference(&mesh, texture, clip_bounds(12, 12));
+        assert_eq!(renderer.surface.pixels, reference);
+        assert_eq!(primitive_stats.solid_fan_probe.probe_calls, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.rejected_probe_calls, 1);
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_second_triangle_checks,
+            1
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_reject_no_second_triangle_continuation,
+            1
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_center_slots_allowed,
+            0
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_center_slots_rejected,
+            3
+        );
+        assert_eq!(primitive_stats.solid_fan_probe.center_slot_attempts, 0);
+        assert_eq!(primitive_stats.solid_fan_probe.cheap_candidate_attempts, 0);
+        assert_eq!(
+            primitive_stats.solid_fan_probe.candidate_triangles_scanned,
+            0
+        );
+        assert_eq!(primitive_stats.solid_fan_runs, 0);
+        assert_eq!(primitive_stats.generic_triangles_rasterized, 4);
+        assert_eq!(raster_stats.solid_fan_calls, 0);
+        assert_eq!(raster_stats.solid_triangle_calls, 4);
     }
 
     #[test]
@@ -1418,6 +1445,90 @@ mod tests {
             vertices: vertices.to_vec(),
             texture_id,
         }
+    }
+
+    fn disconnected_solid_triangles_mesh(texture_id: egui::TextureId) -> egui::Mesh {
+        let vertices = [
+            test_vertex(1.0, 1.0),
+            test_vertex(3.0, 1.0),
+            test_vertex(1.0, 3.0),
+            test_vertex(5.0, 1.0),
+            test_vertex(7.0, 1.0),
+            test_vertex(5.0, 3.0),
+            test_vertex(1.0, 5.0),
+            test_vertex(3.0, 5.0),
+            test_vertex(1.0, 7.0),
+            test_vertex(5.0, 5.0),
+            test_vertex(7.0, 5.0),
+            test_vertex(5.0, 7.0),
+        ];
+        egui::Mesh {
+            indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            vertices: vertices.to_vec(),
+            texture_id,
+        }
+    }
+
+    fn assert_accepted_solid_fan_primitive_stats(primitive_stats: &PrimitiveStats) {
+        assert_eq!(primitive_stats.solid_fan_runs, 1);
+        assert_eq!(primitive_stats.solid_fan_triangles, 4);
+        assert_eq!(primitive_stats.solid_fan_probe.probe_calls, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.rejected_probe_calls, 0);
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_second_triangle_checks,
+            1
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_reject_no_second_triangle_continuation,
+            0
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_center_slots_allowed,
+            2
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_center_slots_rejected,
+            1
+        );
+        assert_eq!(primitive_stats.solid_fan_probe.center_slot_attempts, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.cheap_candidate_attempts, 1);
+        assert_eq!(
+            primitive_stats.solid_fan_probe.candidate_triangles_scanned,
+            4
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .accepted_candidate_triangles_scanned,
+            4
+        );
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .rejected_candidate_triangles_scanned,
+            0
+        );
+        assert_eq!(primitive_stats.solid_fan_probe.repeated_boundary_checks, 3);
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .repeated_boundary_comparisons,
+            9
+        );
+        assert_eq!(primitive_stats.solid_fan_probe.reject_no_candidate, 0);
+        assert_eq!(primitive_stats.solid_fan_probe.accepted_runs, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.accepted_triangles, 4);
+        assert_eq!(primitive_stats.solid_fan_probe.polygon_builds, 1);
+        assert_eq!(primitive_stats.solid_fan_probe.max_candidate_triangles, 4);
+        assert_eq!(primitive_stats.solid_fan_probe.max_accepted_triangles, 4);
     }
 
     fn render_solid_fan_reference(
