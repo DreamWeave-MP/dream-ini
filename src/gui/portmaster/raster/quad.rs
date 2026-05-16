@@ -1412,13 +1412,12 @@ fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon(
     source: &[u8],
     vertex_color: [u8; 4],
 ) -> bool {
-    rasterize_sampled_textured_rect_modulated_vector_block_4_neon_with_alpha(
+    rasterize_sampled_textured_rect_modulated_vector_block_4_neon_write(
         surface,
         pixel_offset,
         source,
         vertex_color,
     )
-    .is_some()
 }
 
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
@@ -1438,6 +1437,16 @@ fn rasterize_sampled_textured_rect_modulated_vector_block_neon_with_alpha(
     _vertex_color: [u8; 4],
 ) -> Option<SampledTexturedRectVectorBlockAlpha> {
     None
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon_write(
+    _surface: &mut SoftwareSurface,
+    _pixel_offset: usize,
+    _source: &[u8],
+    _vertex_color: [u8; 4],
+) -> bool {
+    false
 }
 
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
@@ -1650,16 +1659,31 @@ fn rasterize_sampled_textured_rect_modulated_vector_block_neon_with_alpha(
 }
 
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
-fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon_with_alpha(
+fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon_write(
     surface: &mut SoftwareSurface,
     pixel_offset: usize,
     source: &[u8],
     vertex_color: [u8; 4],
-) -> Option<SampledTexturedRectVectorBlockAlpha> {
+) -> bool {
+    rasterize_sampled_textured_rect_modulated_vector_block_4_neon_write_modulated_alpha(
+        surface,
+        pixel_offset,
+        source,
+        vertex_color,
+    );
+    true
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon_write_modulated_alpha(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    source: &[u8],
+    vertex_color: [u8; 4],
+) -> core::arch::aarch64::uint8x8_t {
     use core::arch::aarch64::{
         uint8x8_t, uint8x8x4_t, uint16x8_t, vaddq_u16, vbsl_u8, vceq_u8, vdup_n_u8, vdupq_n_u16,
-        vget_lane_u8, vld4_lane_u8, vmovn_u16, vmull_u8, vmvn_u8, vqadd_u8, vshrq_n_u16,
-        vst4_lane_u8,
+        vld4_lane_u8, vmovn_u16, vmull_u8, vmvn_u8, vqadd_u8, vshrq_n_u16, vst4_lane_u8,
     };
 
     unsafe fn divide_product(product: uint16x8_t) -> uint8x8_t {
@@ -1747,10 +1771,28 @@ fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon_with_alpha(
     );
     unsafe { store_rgba4(pixels, blended) };
 
-    let alpha0 = unsafe { vget_lane_u8::<0>(modulated.3) };
-    let alpha1 = unsafe { vget_lane_u8::<1>(modulated.3) };
-    let alpha2 = unsafe { vget_lane_u8::<2>(modulated.3) };
-    let alpha3 = unsafe { vget_lane_u8::<3>(modulated.3) };
+    modulated.3
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon_with_alpha(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    source: &[u8],
+    vertex_color: [u8; 4],
+) -> Option<SampledTexturedRectVectorBlockAlpha> {
+    use core::arch::aarch64::vget_lane_u8;
+
+    let alpha = rasterize_sampled_textured_rect_modulated_vector_block_4_neon_write_modulated_alpha(
+        surface,
+        pixel_offset,
+        source,
+        vertex_color,
+    );
+    let alpha0 = unsafe { vget_lane_u8::<0>(alpha) };
+    let alpha1 = unsafe { vget_lane_u8::<1>(alpha) };
+    let alpha2 = unsafe { vget_lane_u8::<2>(alpha) };
+    let alpha3 = unsafe { vget_lane_u8::<3>(alpha) };
     if alpha0 == 0 && alpha1 == 0 && alpha2 == 0 && alpha3 == 0 {
         Some(SampledTexturedRectVectorBlockAlpha::Transparent)
     } else if alpha0 == u8::MAX && alpha1 == u8::MAX && alpha2 == u8::MAX && alpha3 == u8::MAX {
