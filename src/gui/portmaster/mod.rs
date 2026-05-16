@@ -53,7 +53,14 @@ const HITCH_LOG_ENV_VAR: &str = "DREAM_INI_PM_HITCH_LOG_MS";
 #[cfg(target_os = "linux")]
 const RENDER_TRACE_ENV_VAR: &str = "DREAM_INI_PM_RENDER_TRACE";
 #[cfg(target_os = "linux")]
+const RENDER_BENCH_ENV_VAR: &str = "DREAM_INI_PM_RENDER_BENCH";
+#[cfg(target_os = "linux")]
+const RENDER_BENCH_FRAMES_ENV_VAR: &str = "DREAM_INI_PM_RENDER_BENCH_FRAMES";
+#[cfg(target_os = "linux")]
 const DEFAULT_RENDER_STATS_EVERY: u64 = 30;
+#[cfg(target_os = "linux")]
+const DEFAULT_RENDER_BENCH_FRAMES: u64 = 600;
+
 pub(crate) fn run() -> ExitCode {
     let log = open_log().map(Mutex::new).map(Arc::new);
     install_panic_hook(log.clone());
@@ -156,6 +163,7 @@ struct FramebufferGuiRuntime<'a> {
     log: Option<&'a SharedLog>,
     frame_interval: Duration,
     render_log_config: RenderLogConfig,
+    render_benchmark: Option<RenderBenchmarkState>,
 }
 
 #[cfg(target_os = "linux")]
@@ -168,6 +176,9 @@ impl<'a> FramebufferGuiRuntime<'a> {
         let shell = PortMasterGuiShell::new(log);
         let render_log_config = RenderLogConfig::from_env();
         render_log_config.log(log);
+        let render_benchmark_config = RenderBenchmarkEnvConfig::from_env();
+        render_benchmark_config.log(log);
+        let render_benchmark = render_benchmark_config.into_state();
         Self {
             egui_context,
             pending_repaint_delay,
@@ -178,6 +189,7 @@ impl<'a> FramebufferGuiRuntime<'a> {
             log,
             frame_interval,
             render_log_config,
+            render_benchmark,
         }
     }
 
@@ -227,6 +239,20 @@ impl<'a> FramebufferGuiRuntime<'a> {
             match self.draw_frame(framebuffer, frame_count, requested_repaint_now) {
                 Ok(draw_outcome) => {
                     frame_count = frame_count.saturating_add(1);
+                    if let Some(benchmark) = self.render_benchmark.as_mut()
+                        && benchmark.record_rendered_frame()
+                    {
+                        write_log(
+                            self.log,
+                            format!(
+                                "portmaster render benchmark complete name={} rendered_frames={} frame_limit={}",
+                                benchmark.name(),
+                                benchmark.rendered_frames(),
+                                benchmark.frame_limit()
+                            ),
+                        );
+                        break 'gui "render-benchmark-complete";
+                    }
                     next_repaint_at = self.next_repaint_after_frame(
                         frame_started_at,
                         Instant::now(),
@@ -317,6 +343,13 @@ impl<'a> FramebufferGuiRuntime<'a> {
         frame_finished_at: Instant,
         repaint_delay: Duration,
     ) -> Option<Instant> {
+        if self.render_benchmark.is_some() {
+            return Some(
+                frame_started_at
+                    .checked_add(self.frame_interval)
+                    .unwrap_or(frame_finished_at),
+            );
+        }
         let pending_during_frame = take_pending_repaint_delay(&self.pending_repaint_delay);
         let mut next_repaint_at = next_frame_repaint_deadline(
             frame_started_at,
@@ -434,6 +467,161 @@ impl RenderLogConfig {
                 env::var_os(RENDER_TRACE_ENV_VAR),
             ),
         );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderBenchmarkKind {
+    SampledRectModulated,
+}
+
+#[cfg(target_os = "linux")]
+impl RenderBenchmarkKind {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "sampled-rect-modulated" => Some(Self::SampledRectModulated),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::SampledRectModulated => "sampled-rect-modulated",
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RenderBenchmarkConfig {
+    kind: RenderBenchmarkKind,
+    frame_limit: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderBenchmarkRejectReason {
+    UnsupportedName,
+    InvalidFrameLimit,
+}
+
+#[cfg(target_os = "linux")]
+impl RenderBenchmarkRejectReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedName => "unsupported-name",
+            Self::InvalidFrameLimit => "invalid-frame-limit",
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderBenchmarkEnvConfig {
+    Disabled,
+    Enabled(RenderBenchmarkConfig),
+    Rejected(RenderBenchmarkRejectReason),
+}
+
+#[cfg(target_os = "linux")]
+impl RenderBenchmarkEnvConfig {
+    fn from_env() -> Self {
+        Self::from_values(
+            env::var(RENDER_BENCH_ENV_VAR).ok().as_deref(),
+            env::var(RENDER_BENCH_FRAMES_ENV_VAR).ok().as_deref(),
+        )
+    }
+
+    fn from_values(name: Option<&str>, frames: Option<&str>) -> Self {
+        let Some(name) = name else {
+            return Self::Disabled;
+        };
+        let Some(kind) = RenderBenchmarkKind::from_name(name) else {
+            return Self::Rejected(RenderBenchmarkRejectReason::UnsupportedName);
+        };
+        let Some(frame_limit) = parse_render_benchmark_frame_limit(frames) else {
+            return Self::Rejected(RenderBenchmarkRejectReason::InvalidFrameLimit);
+        };
+        Self::Enabled(RenderBenchmarkConfig { kind, frame_limit })
+    }
+
+    fn log(self, log: Option<&SharedLog>) {
+        match self {
+            Self::Disabled => {}
+            Self::Enabled(config) => write_log(
+                log,
+                format!(
+                    "portmaster render benchmark enabled name={} frames={} env_{}={:?} env_{}={:?}",
+                    config.kind.as_str(),
+                    config.frame_limit,
+                    RENDER_BENCH_ENV_VAR,
+                    env::var_os(RENDER_BENCH_ENV_VAR),
+                    RENDER_BENCH_FRAMES_ENV_VAR,
+                    env::var_os(RENDER_BENCH_FRAMES_ENV_VAR)
+                ),
+            ),
+            Self::Rejected(reason) => write_log(
+                log,
+                format!(
+                    "portmaster render benchmark disabled reason={} env_{}={:?} env_{}={:?}",
+                    reason.as_str(),
+                    RENDER_BENCH_ENV_VAR,
+                    env::var_os(RENDER_BENCH_ENV_VAR),
+                    RENDER_BENCH_FRAMES_ENV_VAR,
+                    env::var_os(RENDER_BENCH_FRAMES_ENV_VAR)
+                ),
+            ),
+        }
+    }
+
+    const fn into_state(self) -> Option<RenderBenchmarkState> {
+        match self {
+            Self::Enabled(config) => Some(RenderBenchmarkState::new(config)),
+            Self::Disabled | Self::Rejected(_) => None,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_render_benchmark_frame_limit(value: Option<&str>) -> Option<u64> {
+    match value {
+        Some(value) => value.parse::<u64>().ok().filter(|value| *value != 0),
+        None => Some(DEFAULT_RENDER_BENCH_FRAMES),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RenderBenchmarkState {
+    config: RenderBenchmarkConfig,
+    rendered_frames: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl RenderBenchmarkState {
+    const fn new(config: RenderBenchmarkConfig) -> Self {
+        Self {
+            config,
+            rendered_frames: 0,
+        }
+    }
+
+    fn record_rendered_frame(&mut self) -> bool {
+        self.rendered_frames = self.rendered_frames.saturating_add(1);
+        self.rendered_frames >= self.config.frame_limit
+    }
+
+    const fn name(self) -> &'static str {
+        self.config.kind.as_str()
+    }
+
+    const fn rendered_frames(self) -> u64 {
+        self.rendered_frames
+    }
+
+    const fn frame_limit(self) -> u64 {
+        self.config.frame_limit
     }
 }
 
@@ -626,5 +814,78 @@ mod tests {
         let config = RenderLogConfig::from_values(None, None, Some("17"), None);
 
         assert_eq!(config.hitch_log_threshold, Some(Duration::from_millis(17)));
+    }
+
+    #[test]
+    fn render_benchmark_is_disabled_when_env_name_is_absent() {
+        let config = RenderBenchmarkEnvConfig::from_values(None, None);
+
+        assert_eq!(config, RenderBenchmarkEnvConfig::Disabled);
+        assert_eq!(config.into_state(), None);
+    }
+
+    #[test]
+    fn render_benchmark_uses_default_frame_count_when_enabled() {
+        let config = RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), None);
+
+        assert_eq!(
+            config,
+            RenderBenchmarkEnvConfig::Enabled(RenderBenchmarkConfig {
+                kind: RenderBenchmarkKind::SampledRectModulated,
+                frame_limit: DEFAULT_RENDER_BENCH_FRAMES,
+            })
+        );
+    }
+
+    #[test]
+    fn render_benchmark_accepts_positive_frame_count() {
+        let config =
+            RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("17"));
+
+        assert_eq!(
+            config,
+            RenderBenchmarkEnvConfig::Enabled(RenderBenchmarkConfig {
+                kind: RenderBenchmarkKind::SampledRectModulated,
+                frame_limit: 17,
+            })
+        );
+    }
+
+    #[test]
+    fn render_benchmark_rejects_unknown_name() {
+        let config = RenderBenchmarkEnvConfig::from_values(Some("unknown"), Some("17"));
+
+        assert_eq!(
+            config,
+            RenderBenchmarkEnvConfig::Rejected(RenderBenchmarkRejectReason::UnsupportedName)
+        );
+        assert_eq!(config.into_state(), None);
+    }
+
+    #[test]
+    fn render_benchmark_rejects_invalid_frame_count() {
+        assert_eq!(
+            RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("0")),
+            RenderBenchmarkEnvConfig::Rejected(RenderBenchmarkRejectReason::InvalidFrameLimit)
+        );
+        assert_eq!(
+            RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("nope")),
+            RenderBenchmarkEnvConfig::Rejected(RenderBenchmarkRejectReason::InvalidFrameLimit)
+        );
+    }
+
+    #[test]
+    fn render_benchmark_state_completes_after_frame_limit() {
+        let mut state = RenderBenchmarkState::new(RenderBenchmarkConfig {
+            kind: RenderBenchmarkKind::SampledRectModulated,
+            frame_limit: 2,
+        });
+
+        assert!(!state.record_rendered_frame());
+        assert_eq!(state.rendered_frames(), 1);
+        assert!(state.record_rendered_frame());
+        assert_eq!(state.name(), "sampled-rect-modulated");
+        assert_eq!(state.rendered_frames(), 2);
+        assert_eq!(state.frame_limit(), 2);
     }
 }
