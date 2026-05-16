@@ -50,6 +50,17 @@ class SectionStats:
     text_values: dict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
 
 
+@dataclass
+class BenchmarkSummary:
+    name: str | None = None
+    configured_frames: int | None = None
+    completed_frames: int | None = None
+    completion_reason: str | None = None
+    workload: str | None = None
+    config: dict[str, str] = field(default_factory=dict)
+    disabled_reasons: Counter[str] = field(default_factory=Counter)
+
+
 @dataclass(frozen=True)
 class NormalizedMetric:
     name: str
@@ -82,6 +93,44 @@ def identify_section(line: str) -> tuple[str, int] | None:
     return None
 
 
+def parse_key_values(text: str) -> dict[str, str]:
+    values = {}
+    index = 0
+    while index < len(text):
+        match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)=", text[index:])
+        if match is None:
+            break
+        key = match.group(1)
+        value_start = index + match.end()
+        value_end = value_start
+        quote: str | None = None
+        bracket_depth = 0
+        while value_end < len(text):
+            char = text[value_end]
+            if quote is not None:
+                if char == quote and text[value_end - 1] != "\\":
+                    quote = None
+            elif char in {'"', "'"}:
+                quote = char
+            elif char in "[({":
+                bracket_depth += 1
+            elif char in "])}" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif char.isspace() and bracket_depth == 0:
+                break
+            value_end += 1
+        values[key] = clean_value(text[value_start:value_end])
+        index = value_end + 1
+    return values
+
+
+def clean_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return value[1:-1].replace('\\"', '"')
+    return value
+
+
 def parse_number(value: str) -> float | None:
     if NUMERIC_RE.match(value):
         return float(value) if "." in value else float(int(value))
@@ -99,8 +148,9 @@ def parse_number(value: str) -> float | None:
     return amount * 1_000_000.0
 
 
-def parse_records(path: Path) -> dict[str, SectionStats]:
+def parse_records(path: Path) -> tuple[dict[str, SectionStats], BenchmarkSummary]:
     sections = {name: SectionStats(name) for _, name in SECTION_MARKERS}
+    benchmark = BenchmarkSummary()
     current_frame: int | None = None
     with path.open("r", encoding="utf-8", errors="replace") as log_file:
         for line in log_file:
@@ -109,6 +159,7 @@ def parse_records(path: Path) -> dict[str, SectionStats]:
             frame = parse_frame(line)
             if frame is not None:
                 current_frame = frame
+            parse_benchmark_line(line, benchmark)
             section_match = identify_section(line)
             if section_match is None:
                 continue
@@ -134,7 +185,51 @@ def parse_records(path: Path) -> dict[str, SectionStats]:
                     section.numeric_values[key].append(numeric_value)
                     numeric_record[key] = numeric_value
             section.numeric_records.append(numeric_record)
-    return sections
+    return sections, benchmark
+
+
+def parse_benchmark_line(line: str, benchmark: BenchmarkSummary) -> None:
+    marker = "portmaster render benchmark "
+    index = line.find(marker)
+    if index < 0:
+        return
+    details = line[index + len(marker) :]
+    action, _, payload = details.partition(" ")
+    values = parse_key_values(payload)
+    if action == "enabled":
+        record_benchmark_values(benchmark, values)
+        return
+    if action == "config":
+        record_benchmark_values(benchmark, values)
+        for key, value in values.items():
+            if key not in {"name", "frames", "workload"}:
+                benchmark.config[key] = value
+        return
+    if action == "complete":
+        record_benchmark_values(benchmark, values)
+        completed = values.get("rendered_frames") or values.get("completed_frames") or values.get("frames")
+        if completed is not None:
+            benchmark.completed_frames = int(completed)
+        configured = values.get("frame_limit") or values.get("configured_frames")
+        if configured is not None:
+            benchmark.configured_frames = int(configured)
+        reason = values.get("reason")
+        if reason is not None:
+            benchmark.completion_reason = reason
+        return
+    if action == "disabled":
+        reason = values.get("reason")
+        if reason is not None:
+            benchmark.disabled_reasons[reason] += 1
+
+
+def record_benchmark_values(benchmark: BenchmarkSummary, values: dict[str, str]) -> None:
+    if "name" in values:
+        benchmark.name = values["name"]
+    if "frames" in values:
+        benchmark.configured_frames = int(values["frames"])
+    if "workload" in values:
+        benchmark.workload = values["workload"]
 
 
 def parse_timestamp(line: str) -> int | None:
@@ -238,7 +333,50 @@ def text_rows(section: SectionStats) -> list[tuple[str, str]]:
     return rows
 
 
-def print_report(path: Path, sections: dict[str, SectionStats], include_all: bool, zero_limit: int) -> None:
+def benchmark_rows(benchmark: BenchmarkSummary) -> list[tuple[str, str]]:
+    if not benchmark_has_data(benchmark):
+        return []
+    rows = []
+    if benchmark.name is not None:
+        rows.append(("name", benchmark.name))
+        kind = "synthetic sampled-rect workload" if benchmark.name == "sampled-rect-modulated" else "normal GUI render-loop run"
+        rows.append(("run type", kind))
+    if benchmark.configured_frames is not None:
+        rows.append(("configured frames", str(benchmark.configured_frames)))
+    if benchmark.completed_frames is not None:
+        rows.append(("completed frames", str(benchmark.completed_frames)))
+    if benchmark.completion_reason is not None:
+        rows.append(("completion reason", benchmark.completion_reason))
+    if benchmark.workload is not None:
+        rows.append(("workload", benchmark.workload))
+    for key in (
+        "viewport",
+        "rects",
+        "pixels",
+        "span_px_lt4",
+        "span_px_4_7",
+        "span_px_8_15",
+        "target_distribution",
+        "vertex_color_rgba",
+        "texture",
+        "texture_pattern",
+        "transparent",
+        "translucent",
+        "opaque",
+        "fixed_workload_per_frame",
+    ):
+        if key in benchmark.config:
+            rows.append((key, benchmark.config[key]))
+    if benchmark.disabled_reasons:
+        rows.append(("disabled reasons", ", ".join(f"{reason}:{count}" for reason, count in sorted(benchmark.disabled_reasons.items()))))
+    return rows
+
+
+def benchmark_has_data(benchmark: BenchmarkSummary) -> bool:
+    return any((benchmark.name, benchmark.configured_frames, benchmark.completed_frames, benchmark.workload, benchmark.config, benchmark.disabled_reasons))
+
+
+def print_report(path: Path, sections: dict[str, SectionStats], benchmark: BenchmarkSummary, include_all: bool, zero_limit: int) -> None:
     print("# PortMaster Renderer Log Summary")
     print()
     print(f"Log: `{path}`")
@@ -247,6 +385,11 @@ def print_report(path: Path, sections: dict[str, SectionStats], include_all: boo
     overview = [(name, str(sections[name].count), range_text(sections[name].frames), range_text(sections[name].timestamps)) for _, name in SECTION_MARKERS]
     print_table(overview, ("section", "samples", "frame range", "timestamp range"))
     print()
+    rows = benchmark_rows(benchmark)
+    if rows:
+        print("## Render Benchmark")
+        print_table(rows, ("field", "value"))
+        print()
     for _, name in SECTION_MARKERS:
         section = sections[name]
         print(f"## {name}")
@@ -300,11 +443,11 @@ def main() -> int:
     if not path.is_file():
         print(f"error: log file not found: {path}", file=sys.stderr)
         return 2
-    sections = parse_records(path)
+    sections, benchmark = parse_records(path)
     if not any(section.count for section in sections.values()):
         print(f"error: no renderer stats sections found in {path}", file=sys.stderr)
         return 1
-    print_report(path, sections, args.all_counters, args.zero_limit)
+    print_report(path, sections, benchmark, args.all_counters, args.zero_limit)
     return 0
 
 
