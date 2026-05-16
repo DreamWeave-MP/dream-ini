@@ -1710,61 +1710,54 @@ fn rasterize_sampled_textured_rect_modulated_vector_block_4_neon_with_alpha(
         unsafe { multiply_channel(texels.2, vertex_color[2]) },
         unsafe { multiply_channel(texels.3, vertex_color[3]) },
     );
+    let pixels =
+        &mut surface.pixels[pixel_offset..pixel_offset + TEXTURED_RECT_VECTOR_BLOCK_PX_4 * 4];
+    // SAFETY: the destination slice is one complete 4-pixel RGBA block. The
+    // arithmetic matches scalar rounded product/255 modulation and premultiplied
+    // blending: src + round(dst * (255 - alpha) / 255). Opaque lanes fall out
+    // naturally because inverse alpha is zero; transparent lanes select the
+    // destination byte-for-byte.
+    let destination = unsafe { load_rgba4(pixels) };
+    let inverse_alpha = unsafe { vmvn_u8(modulated.3) };
+    let transparent = unsafe { vceq_u8(modulated.3, vdup_n_u8(0)) };
+    let opaque_alpha = unsafe { vdup_n_u8(u8::MAX) };
+    let blended = uint8x8x4_t(
+        unsafe {
+            vbsl_u8(
+                transparent,
+                destination.0,
+                blend_channel(destination.0, modulated.0, inverse_alpha),
+            )
+        },
+        unsafe {
+            vbsl_u8(
+                transparent,
+                destination.1,
+                blend_channel(destination.1, modulated.1, inverse_alpha),
+            )
+        },
+        unsafe {
+            vbsl_u8(
+                transparent,
+                destination.2,
+                blend_channel(destination.2, modulated.2, inverse_alpha),
+            )
+        },
+        unsafe { vbsl_u8(transparent, destination.3, opaque_alpha) },
+    );
+    unsafe { store_rgba4(pixels, blended) };
+
     let alpha0 = unsafe { vget_lane_u8::<0>(modulated.3) };
     let alpha1 = unsafe { vget_lane_u8::<1>(modulated.3) };
     let alpha2 = unsafe { vget_lane_u8::<2>(modulated.3) };
     let alpha3 = unsafe { vget_lane_u8::<3>(modulated.3) };
-    let transparent_px = usize::from(alpha0 == 0)
-        + usize::from(alpha1 == 0)
-        + usize::from(alpha2 == 0)
-        + usize::from(alpha3 == 0);
-    if transparent_px == TEXTURED_RECT_VECTOR_BLOCK_PX_4 {
-        return Some(SampledTexturedRectVectorBlockAlpha::Transparent);
+    if alpha0 == 0 && alpha1 == 0 && alpha2 == 0 && alpha3 == 0 {
+        Some(SampledTexturedRectVectorBlockAlpha::Transparent)
+    } else if alpha0 == u8::MAX && alpha1 == u8::MAX && alpha2 == u8::MAX && alpha3 == u8::MAX {
+        Some(SampledTexturedRectVectorBlockAlpha::Opaque)
+    } else {
+        Some(SampledTexturedRectVectorBlockAlpha::Mixed)
     }
-
-    let pixels =
-        &mut surface.pixels[pixel_offset..pixel_offset + TEXTURED_RECT_VECTOR_BLOCK_PX_4 * 4];
-    let opaque_px = usize::from(alpha0 == u8::MAX)
-        + usize::from(alpha1 == u8::MAX)
-        + usize::from(alpha2 == u8::MAX)
-        + usize::from(alpha3 == u8::MAX);
-    if opaque_px != TEXTURED_RECT_VECTOR_BLOCK_PX_4 {
-        // SAFETY: the destination slice is one complete 4-pixel RGBA block. The
-        // arithmetic matches the scalar rounded product/255 modulation and blend.
-        let destination = unsafe { load_rgba4(pixels) };
-        let inverse_alpha = unsafe { vmvn_u8(modulated.3) };
-        let transparent = unsafe { vceq_u8(modulated.3, vdup_n_u8(0)) };
-        let opaque_alpha = unsafe { vdup_n_u8(u8::MAX) };
-        let blended = uint8x8x4_t(
-            unsafe {
-                vbsl_u8(
-                    transparent,
-                    destination.0,
-                    blend_channel(destination.0, modulated.0, inverse_alpha),
-                )
-            },
-            unsafe {
-                vbsl_u8(
-                    transparent,
-                    destination.1,
-                    blend_channel(destination.1, modulated.1, inverse_alpha),
-                )
-            },
-            unsafe {
-                vbsl_u8(
-                    transparent,
-                    destination.2,
-                    blend_channel(destination.2, modulated.2, inverse_alpha),
-                )
-            },
-            unsafe { vbsl_u8(transparent, destination.3, opaque_alpha) },
-        );
-        unsafe { store_rgba4(pixels, blended) };
-        return Some(SampledTexturedRectVectorBlockAlpha::Mixed);
-    }
-
-    unsafe { store_rgba4(pixels, modulated) };
-    Some(SampledTexturedRectVectorBlockAlpha::Opaque)
 }
 
 fn separable_uv_texture_row_offset(texture: &TextureImage, v: f32) -> usize {
