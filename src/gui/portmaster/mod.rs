@@ -915,7 +915,7 @@ mod tests {
     }
 
     #[test]
-    fn render_benchmark_rejects_sampled_rect_until_workload_exists() {
+    fn render_benchmark_accepts_sampled_rect_workload() {
         let config =
             RenderBenchmarkEnvConfig::from_values(Some("sampled-rect-modulated"), Some("17"));
 
