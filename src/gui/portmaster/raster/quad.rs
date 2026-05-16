@@ -944,6 +944,21 @@ fn rasterize_separable_uv_textured_rect_no_stats_modulated(
                     continue;
                 }
             }
+            if let Some(first_texel_x) = contiguous_texel_x {
+                let tail_px = range.end_x - x;
+                if tail_px <= 3 {
+                    let texture_offset =
+                        texture_row_offset + (first_texel_x + x - range.start_x) * 4;
+                    rasterize_sampled_textured_rect_modulated_tail(
+                        surface,
+                        pixel_offset,
+                        &texture.pixels[texture_offset..texture_offset + tail_px * 4],
+                        vertex_color,
+                        tail_px,
+                    );
+                    break;
+                }
+            }
             while x < scalar_end {
                 let texel =
                     separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
@@ -1122,22 +1137,32 @@ fn rasterize_separable_uv_textured_rect_with_stats_modulated(
                     continue;
                 }
             }
+            if let Some(first_texel_x) = contiguous_texel_x {
+                let tail_px = range.end_x - x;
+                if tail_px <= 3 {
+                    let texture_offset =
+                        texture_row_offset + (first_texel_x + x - range.start_x) * 4;
+                    let alphas = rasterize_sampled_textured_rect_modulated_tail(
+                        surface,
+                        pixel_offset,
+                        &texture.pixels[texture_offset..texture_offset + tail_px * 4],
+                        vertex_color,
+                        tail_px,
+                    );
+                    record_sampled_textured_rect_modulated_tail_alpha_stats(stats, alphas, tail_px);
+                    break;
+                }
+            }
             while x < scalar_end {
                 let texel =
                     separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
-                if texel[3] == 0 {
-                    stats.record_textured_rect_separable_direct_alpha_px(0, 1);
-                    stats.record_alpha_px(0, 1);
-                } else {
-                    let color = modulate_color(vertex_color, texel);
-                    stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
-                    stats.record_alpha_px(color[3], 1);
-                    match color[3] {
-                        0 => {}
-                        u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
-                        _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
-                    }
-                }
+                rasterize_sampled_textured_rect_modulated_scalar_pixel_with_stats(
+                    surface,
+                    pixel_offset,
+                    texel,
+                    vertex_color,
+                    stats,
+                );
                 pixel_offset += 4;
                 x += 1;
             }
@@ -1345,6 +1370,24 @@ fn record_sampled_textured_rect_modulated_vector_block_alpha_stats(
                 stats.record_alpha_px(alpha, 1);
             }
         }
+    }
+}
+
+fn record_sampled_textured_rect_modulated_tail_alpha_stats(
+    stats: &mut RasterStats,
+    alphas: [u8; 3],
+    tail_px: usize,
+) {
+    debug_assert!((1..=3).contains(&tail_px));
+    stats.record_textured_rect_separable_direct_alpha_px(alphas[0], 1);
+    stats.record_alpha_px(alphas[0], 1);
+    if tail_px >= 2 {
+        stats.record_textured_rect_separable_direct_alpha_px(alphas[1], 1);
+        stats.record_alpha_px(alphas[1], 1);
+    }
+    if tail_px == 3 {
+        stats.record_textured_rect_separable_direct_alpha_px(alphas[2], 1);
+        stats.record_alpha_px(alphas[2], 1);
     }
 }
 
@@ -1806,6 +1849,78 @@ fn separable_uv_texture_row_offset(texture: &TextureImage, v: f32) -> usize {
     nearest_texel_axis(v, texture.height.saturating_sub(1)) * texture.width * 4
 }
 
+fn rasterize_sampled_textured_rect_modulated_tail(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    source: &[u8],
+    vertex_color: [u8; 4],
+    tail_px: usize,
+) -> [u8; 3] {
+    debug_assert!((1..=3).contains(&tail_px));
+    debug_assert_eq!(source.len(), tail_px * 4);
+
+    let mut alphas = [0; 3];
+    alphas[0] = rasterize_sampled_textured_rect_modulated_tail_pixel(
+        surface,
+        pixel_offset,
+        [source[0], source[1], source[2], source[3]],
+        vertex_color,
+    );
+    if tail_px >= 2 {
+        alphas[1] = rasterize_sampled_textured_rect_modulated_tail_pixel(
+            surface,
+            pixel_offset + 4,
+            [source[4], source[5], source[6], source[7]],
+            vertex_color,
+        );
+    }
+    if tail_px == 3 {
+        alphas[2] = rasterize_sampled_textured_rect_modulated_tail_pixel(
+            surface,
+            pixel_offset + 8,
+            [source[8], source[9], source[10], source[11]],
+            vertex_color,
+        );
+    }
+    alphas
+}
+
+fn rasterize_sampled_textured_rect_modulated_tail_pixel(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    texel: [u8; 4],
+    vertex_color: [u8; 4],
+) -> u8 {
+    if texel[3] == 0 {
+        return 0;
+    }
+
+    let color = modulate_color(vertex_color, texel);
+    match color[3] {
+        0 => {}
+        u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+        _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+    }
+    color[3]
+}
+
+fn rasterize_sampled_textured_rect_modulated_scalar_pixel_with_stats(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    texel: [u8; 4],
+    vertex_color: [u8; 4],
+    stats: &mut RasterStats,
+) {
+    let alpha = rasterize_sampled_textured_rect_modulated_tail_pixel(
+        surface,
+        pixel_offset,
+        texel,
+        vertex_color,
+    );
+    stats.record_textured_rect_separable_direct_alpha_px(alpha, 1);
+    stats.record_alpha_px(alpha, 1);
+}
+
 fn separable_uv_texel_color(
     texture: &TextureImage,
     texture_row_offset: usize,
@@ -2237,6 +2352,21 @@ mod tests {
             stats.textured_rect_sampled_modulated_vector_fallback_blocks_16,
             1 - expected_success
         );
+    }
+
+    #[test]
+    fn sampled_textured_rect_modulated_tail_1_matches_generic_output_and_stats() {
+        assert_sampled_textured_rect_modulated_tail_matches_generic(1);
+    }
+
+    #[test]
+    fn sampled_textured_rect_modulated_tail_2_matches_generic_output_and_stats() {
+        assert_sampled_textured_rect_modulated_tail_matches_generic(2);
+    }
+
+    #[test]
+    fn sampled_textured_rect_modulated_tail_3_matches_generic_output_and_stats() {
+        assert_sampled_textured_rect_modulated_tail_matches_generic(3);
     }
 
     #[test]
@@ -2749,6 +2879,59 @@ mod tests {
         assert_eq!(specialized.pixels, generic.pixels);
     }
 
+    fn assert_sampled_textured_rect_modulated_tail_matches_generic(tail_px: usize) {
+        let width = TEXTURED_RECT_VECTOR_BLOCK_PX + tail_px;
+        let vertex_color = [64, 128, 192, 255];
+        let texture = modulated_tail_texture(width, tail_px);
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: usize_to_f32(width),
+            max_y: 1.0,
+        };
+        let range = rect_range(bounds, full_clip(width, 1));
+        let uv_basis = rect_uv_basis(bounds);
+        let corners = vector_eligible_row_corners(width, vertex_color);
+        let mut generic = test_surface(width, 1);
+        let mut specialized = test_surface(width, 1);
+        let mut stats = RasterStats::default();
+
+        rasterize_textured_rect_no_stats_with_color(
+            &mut generic,
+            corners,
+            &texture,
+            range,
+            uv_basis,
+            |texture, uv| modulate_color(vertex_color, sample_nearest(texture, uv)),
+        );
+        rasterize_textured_rect(
+            &mut specialized,
+            corners,
+            bounds,
+            &texture,
+            full_clip(width, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(specialized.pixels, generic.pixels);
+        assert_eq!(stats.textured_rect_sampled_vector_tail_px, tail_px);
+        assert_eq!(stats.textured_rect_separable_direct_transparent_px, 1);
+        assert_eq!(stats.transparent_px, 1);
+        assert_eq!(
+            stats.textured_rect_separable_direct_translucent_px,
+            usize::from(tail_px >= 2)
+        );
+        assert_eq!(stats.translucent_px, usize::from(tail_px >= 2));
+        assert_eq!(
+            stats.textured_rect_separable_direct_opaque_px,
+            TEXTURED_RECT_VECTOR_BLOCK_PX + usize::from(tail_px == 3)
+        );
+        assert_eq!(
+            stats.opaque_px,
+            TEXTURED_RECT_VECTOR_BLOCK_PX + usize::from(tail_px == 3)
+        );
+    }
+
     fn textured_rect_corners(
         min: egui::Pos2,
         max: egui::Pos2,
@@ -2881,6 +3064,23 @@ mod tests {
                     alpha,
                 ]);
             }
+        }
+        TextureImage {
+            width,
+            height: 1,
+            pixels,
+        }
+    }
+
+    fn modulated_tail_texture(width: usize, tail_px: usize) -> TextureImage {
+        let tail_alphas = [0, 128, u8::MAX];
+        let mut pixels = Vec::with_capacity(width * 4);
+        for x in 0..TEXTURED_RECT_VECTOR_BLOCK_PX {
+            let seed = u8::try_from(x).expect("small x");
+            pixels.extend_from_slice(&[seed, seed.wrapping_mul(3), 255 - seed, u8::MAX]);
+        }
+        for &alpha in &tail_alphas[..tail_px] {
+            pixels.extend_from_slice(&[200, 80, 40, alpha]);
         }
         TextureImage {
             width,
