@@ -520,52 +520,46 @@ fn rasterize_textured_rect(
     let inv_width = 1.0 / (max_x - min_x);
     let inv_height = 1.0 / (max_y - min_y);
     let vertex_color = color_to_array(corners.tl.color);
+    let range = RectRasterRange {
+        start_x,
+        end_x,
+        start_y,
+        end_y,
+    };
+    let uv_basis = RectUvBasis {
+        min_x,
+        min_y,
+        inv_width,
+        inv_height,
+    };
     if let Some(stats) = stats {
         let px = (end_x - start_x) * (end_y - start_y);
         let classification = classify_textured_rect(corners, texture);
         stats.textured_rect_calls += 1;
         stats.textured_rect_px += px;
         stats.record_textured_rect_classification(classification, px);
+        record_sampled_textured_rect_vector_stats(
+            corners,
+            texture,
+            classification,
+            range,
+            uv_basis,
+            vertex_color,
+            stats,
+        );
         let raster_start = Instant::now();
         rasterize_textured_rect_with_stats(
             surface,
             corners,
             texture,
             classification,
-            RectRasterRange {
-                start_x,
-                end_x,
-                start_y,
-                end_y,
-            },
-            RectUvBasis {
-                min_x,
-                min_y,
-                inv_width,
-                inv_height,
-            },
+            range,
+            uv_basis,
             stats,
         );
         stats.record_textured_rect_elapsed(classification.kind, raster_start.elapsed());
     } else {
-        rasterize_textured_rect_no_stats(
-            surface,
-            corners,
-            texture,
-            RectRasterRange {
-                start_x,
-                end_x,
-                start_y,
-                end_y,
-            },
-            RectUvBasis {
-                min_x,
-                min_y,
-                inv_width,
-                inv_height,
-            },
-            vertex_color,
-        );
+        rasterize_textured_rect_no_stats(surface, corners, texture, range, uv_basis, vertex_color);
     }
 }
 
@@ -936,39 +930,19 @@ fn rasterize_separable_uv_textured_rect_with_stats_white(
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
-        let vector_candidate =
-            sampled_textured_rect_vector_candidate(texture, row, range.start_x, range.end_x);
-        if vector_candidate {
-            stats.record_textured_rect_sampled_vector_candidate(true, range.end_x - range.start_x);
-        }
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        let mut block_px = 0;
-        let mut block_opaque_px = 0;
-        let mut block_transparent_px = 0;
         for x in range.start_x..range.end_x {
             let color =
                 separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
             stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
             stats.record_alpha_px(color[3], 1);
-            if vector_candidate {
-                record_sampled_textured_rect_vector_alpha(
-                    stats,
-                    color[3],
-                    &mut block_px,
-                    &mut block_opaque_px,
-                    &mut block_transparent_px,
-                );
-            }
             match color[3] {
                 0 => {}
                 u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
                 _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
             }
             pixel_offset += 4;
-        }
-        if vector_candidate {
-            stats.textured_rect_sampled_vector_tail_px += block_px;
         }
     }
 }
@@ -984,44 +958,18 @@ fn rasterize_separable_uv_textured_rect_with_stats_modulated(
 ) {
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
-        let vector_candidate =
-            sampled_textured_rect_vector_candidate(texture, row, range.start_x, range.end_x);
-        if vector_candidate {
-            stats.record_textured_rect_sampled_vector_candidate(false, range.end_x - range.start_x);
-        }
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        let mut block_px = 0;
-        let mut block_opaque_px = 0;
-        let mut block_transparent_px = 0;
         for x in range.start_x..range.end_x {
             let texel =
                 separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
             if texel[3] == 0 {
                 stats.record_textured_rect_separable_direct_alpha_px(0, 1);
                 stats.record_alpha_px(0, 1);
-                if vector_candidate {
-                    record_sampled_textured_rect_vector_alpha(
-                        stats,
-                        0,
-                        &mut block_px,
-                        &mut block_opaque_px,
-                        &mut block_transparent_px,
-                    );
-                }
             } else {
                 let color = modulate_color(vertex_color, texel);
                 stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
                 stats.record_alpha_px(color[3], 1);
-                if vector_candidate {
-                    record_sampled_textured_rect_vector_alpha(
-                        stats,
-                        color[3],
-                        &mut block_px,
-                        &mut block_opaque_px,
-                        &mut block_transparent_px,
-                    );
-                }
                 match color[3] {
                     0 => {}
                     u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
@@ -1030,9 +978,103 @@ fn rasterize_separable_uv_textured_rect_with_stats_modulated(
             }
             pixel_offset += 4;
         }
-        if vector_candidate {
-            stats.textured_rect_sampled_vector_tail_px += block_px;
+    }
+}
+
+fn record_sampled_textured_rect_vector_stats(
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    classification: TexturedRectClassification,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    vertex_color: [u8; 4],
+    stats: &mut RasterStats,
+) {
+    if !classification.is_sampled_separable_uv() {
+        return;
+    }
+
+    if vertex_color == [255, 255, 255, 255] {
+        record_sampled_textured_rect_vector_stats_white(corners, texture, range, uv_basis, stats);
+    } else {
+        record_sampled_textured_rect_vector_stats_modulated(
+            corners,
+            texture,
+            range,
+            uv_basis,
+            vertex_color,
+            stats,
+        );
+    }
+}
+
+fn record_sampled_textured_rect_vector_stats_white(
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    stats: &mut RasterStats,
+) {
+    for y in range.start_y..range.end_y {
+        let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        if !sampled_textured_rect_vector_candidate(texture, row, range.start_x, range.end_x) {
+            continue;
         }
+        stats.record_textured_rect_sampled_vector_candidate(true, range.end_x - range.start_x);
+        let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let mut block_px = 0;
+        let mut block_opaque_px = 0;
+        let mut block_transparent_px = 0;
+        for x in range.start_x..range.end_x {
+            let color =
+                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+            record_sampled_textured_rect_vector_alpha(
+                stats,
+                color[3],
+                &mut block_px,
+                &mut block_opaque_px,
+                &mut block_transparent_px,
+            );
+        }
+        stats.textured_rect_sampled_vector_tail_px += block_px;
+    }
+}
+
+fn record_sampled_textured_rect_vector_stats_modulated(
+    corners: TexturedQuadCorners,
+    texture: &TextureImage,
+    range: RectRasterRange,
+    uv_basis: RectUvBasis,
+    vertex_color: [u8; 4],
+    stats: &mut RasterStats,
+) {
+    for y in range.start_y..range.end_y {
+        let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
+        if !sampled_textured_rect_vector_candidate(texture, row, range.start_x, range.end_x) {
+            continue;
+        }
+        stats.record_textured_rect_sampled_vector_candidate(false, range.end_x - range.start_x);
+        let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let mut block_px = 0;
+        let mut block_opaque_px = 0;
+        let mut block_transparent_px = 0;
+        for x in range.start_x..range.end_x {
+            let texel =
+                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+            let alpha = if texel[3] == 0 {
+                0
+            } else {
+                modulate_color(vertex_color, texel)[3]
+            };
+            record_sampled_textured_rect_vector_alpha(
+                stats,
+                alpha,
+                &mut block_px,
+                &mut block_opaque_px,
+                &mut block_transparent_px,
+            );
+        }
+        stats.textured_rect_sampled_vector_tail_px += block_px;
     }
 }
 
