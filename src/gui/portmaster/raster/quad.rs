@@ -902,19 +902,43 @@ fn rasterize_separable_uv_textured_rect_no_stats_modulated(
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let contiguous_texel_x =
+            sampled_textured_rect_contiguous_source_start(texture, row, range.start_x, range.end_x);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        for x in range.start_x..range.end_x {
-            let texel =
-                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
-            if texel[3] != 0 {
-                let color = modulate_color(vertex_color, texel);
-                match color[3] {
-                    0 => {}
-                    u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
-                    _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+        let mut x = range.start_x;
+        while x < range.end_x {
+            let mut scalar_end = x + 1;
+            if let Some(first_texel_x) = contiguous_texel_x
+                && x + TEXTURED_RECT_VECTOR_BLOCK_PX <= range.end_x
+            {
+                scalar_end = x + TEXTURED_RECT_VECTOR_BLOCK_PX;
+                let texture_offset = texture_row_offset + (first_texel_x + x - range.start_x) * 4;
+                if rasterize_sampled_textured_rect_modulated_vector_block_neon(
+                    surface,
+                    pixel_offset,
+                    &texture.pixels
+                        [texture_offset..texture_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4],
+                    vertex_color,
+                ) {
+                    pixel_offset += TEXTURED_RECT_VECTOR_BLOCK_PX * 4;
+                    x += TEXTURED_RECT_VECTOR_BLOCK_PX;
+                    continue;
                 }
             }
-            pixel_offset += 4;
+            while x < scalar_end {
+                let texel =
+                    separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+                if texel[3] != 0 {
+                    let color = modulate_color(vertex_color, texel);
+                    match color[3] {
+                        0 => {}
+                        u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                        _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+                    }
+                }
+                pixel_offset += 4;
+                x += 1;
+            }
         }
     }
 }
@@ -1014,24 +1038,57 @@ fn rasterize_separable_uv_textured_rect_with_stats_modulated(
     for y in range.start_y..range.end_y {
         let row = textured_rect_uv_row(corners, range.start_x, y, uv_basis);
         let texture_row_offset = separable_uv_texture_row_offset(texture, row.uv.y);
+        let contiguous_texel_x =
+            sampled_textured_rect_contiguous_source_start(texture, row, range.start_x, range.end_x);
         let mut pixel_offset = surface.row_offset(y) + range.start_x * 4;
-        for x in range.start_x..range.end_x {
-            let texel =
-                separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
-            if texel[3] == 0 {
-                stats.record_textured_rect_separable_direct_alpha_px(0, 1);
-                stats.record_alpha_px(0, 1);
-            } else {
-                let color = modulate_color(vertex_color, texel);
-                stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
-                stats.record_alpha_px(color[3], 1);
-                match color[3] {
-                    0 => {}
-                    u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
-                    _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+        let mut x = range.start_x;
+        while x < range.end_x {
+            let mut scalar_end = x + 1;
+            if let Some(first_texel_x) = contiguous_texel_x
+                && x + TEXTURED_RECT_VECTOR_BLOCK_PX <= range.end_x
+            {
+                scalar_end = x + TEXTURED_RECT_VECTOR_BLOCK_PX;
+                let texture_offset = texture_row_offset + (first_texel_x + x - range.start_x) * 4;
+                let source = &texture.pixels
+                    [texture_offset..texture_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4];
+                if let Some(alpha) =
+                    rasterize_sampled_textured_rect_modulated_vector_block_neon_with_alpha(
+                        surface,
+                        pixel_offset,
+                        source,
+                        vertex_color,
+                    )
+                {
+                    record_sampled_textured_rect_modulated_vector_block_alpha_stats(
+                        stats,
+                        alpha,
+                        source,
+                        vertex_color,
+                    );
+                    pixel_offset += TEXTURED_RECT_VECTOR_BLOCK_PX * 4;
+                    x += TEXTURED_RECT_VECTOR_BLOCK_PX;
+                    continue;
                 }
             }
-            pixel_offset += 4;
+            while x < scalar_end {
+                let texel =
+                    separable_uv_texel_color(texture, texture_row_offset, row, x, range.start_x);
+                if texel[3] == 0 {
+                    stats.record_textured_rect_separable_direct_alpha_px(0, 1);
+                    stats.record_alpha_px(0, 1);
+                } else {
+                    let color = modulate_color(vertex_color, texel);
+                    stats.record_textured_rect_separable_direct_alpha_px(color[3], 1);
+                    stats.record_alpha_px(color[3], 1);
+                    match color[3] {
+                        0 => {}
+                        u8::MAX => surface.write_opaque_pixel_at_offset(pixel_offset, color),
+                        _ => surface.blend_translucent_pixel_at_offset(pixel_offset, color),
+                    }
+                }
+                pixel_offset += 4;
+                x += 1;
+            }
         }
     }
 }
@@ -1181,6 +1238,38 @@ fn record_sampled_textured_rect_vector_block_alpha_stats(
     }
 }
 
+fn record_sampled_textured_rect_modulated_vector_block_alpha_stats(
+    stats: &mut RasterStats,
+    alpha: SampledTexturedRectVectorBlockAlpha,
+    source: &[u8],
+    vertex_color: [u8; 4],
+) {
+    match alpha {
+        SampledTexturedRectVectorBlockAlpha::Transparent => {
+            stats.record_textured_rect_separable_direct_alpha_px(0, TEXTURED_RECT_VECTOR_BLOCK_PX);
+            stats.record_alpha_px(0, TEXTURED_RECT_VECTOR_BLOCK_PX);
+        }
+        SampledTexturedRectVectorBlockAlpha::Opaque => {
+            stats.record_textured_rect_separable_direct_alpha_px(
+                u8::MAX,
+                TEXTURED_RECT_VECTOR_BLOCK_PX,
+            );
+            stats.record_alpha_px(u8::MAX, TEXTURED_RECT_VECTOR_BLOCK_PX);
+        }
+        SampledTexturedRectVectorBlockAlpha::Mixed => {
+            for pixel in source.chunks_exact(4) {
+                let alpha = if pixel[3] == 0 {
+                    0
+                } else {
+                    modulate_color(vertex_color, [pixel[0], pixel[1], pixel[2], pixel[3]])[3]
+                };
+                stats.record_textured_rect_separable_direct_alpha_px(alpha, 1);
+                stats.record_alpha_px(alpha, 1);
+            }
+        }
+    }
+}
+
 fn sampled_textured_rect_vector_candidate(
     texture: &TextureImage,
     row: RectUvRow,
@@ -1224,11 +1313,36 @@ fn rasterize_sampled_textured_rect_vector_block_neon(
         .is_some()
 }
 
+fn rasterize_sampled_textured_rect_modulated_vector_block_neon(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    source: &[u8],
+    vertex_color: [u8; 4],
+) -> bool {
+    rasterize_sampled_textured_rect_modulated_vector_block_neon_with_alpha(
+        surface,
+        pixel_offset,
+        source,
+        vertex_color,
+    )
+    .is_some()
+}
+
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 fn rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
     _surface: &mut SoftwareSurface,
     _pixel_offset: usize,
     _source: &[u8],
+) -> Option<SampledTexturedRectVectorBlockAlpha> {
+    None
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn rasterize_sampled_textured_rect_modulated_vector_block_neon_with_alpha(
+    _surface: &mut SoftwareSurface,
+    _pixel_offset: usize,
+    _source: &[u8],
+    _vertex_color: [u8; 4],
 ) -> Option<SampledTexturedRectVectorBlockAlpha> {
     None
 }
@@ -1322,6 +1436,113 @@ fn rasterize_sampled_textured_rect_vector_block_neon_with_alpha(
     // SAFETY: pixels is exactly one complete 16-pixel RGBA destination block, and
     // storing the deinterleaved vectors reproduces the same bytes as an opaque copy.
     unsafe { vst4q_u8(pixels.as_mut_ptr(), texels) };
+    Some(SampledTexturedRectVectorBlockAlpha::Opaque)
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn rasterize_sampled_textured_rect_modulated_vector_block_neon_with_alpha(
+    surface: &mut SoftwareSurface,
+    pixel_offset: usize,
+    source: &[u8],
+    vertex_color: [u8; 4],
+) -> Option<SampledTexturedRectVectorBlockAlpha> {
+    use core::arch::aarch64::{
+        uint8x8_t, uint8x16_t, uint8x16x4_t, uint16x8_t, vaddq_u16, vbslq_u8, vceqq_u8,
+        vcombine_u8, vdup_n_u8, vdupq_n_u8, vdupq_n_u16, vget_high_u8, vget_low_u8, vld4q_u8,
+        vmaxvq_u8, vminvq_u8, vmovn_u16, vmull_u8, vmvnq_u8, vqaddq_u8, vshrq_n_u16, vst4q_u8,
+    };
+
+    unsafe fn divide_product(product: uint16x8_t) -> uint8x8_t {
+        let biased = unsafe { vaddq_u16(product, vdupq_n_u16(128)) };
+        let correction = unsafe { vshrq_n_u16(biased, 8) };
+        let quotient = unsafe { vshrq_n_u16(vaddq_u16(biased, correction), 8) };
+        unsafe { vmovn_u16(quotient) }
+    }
+
+    unsafe fn multiply_channel(channel: uint8x16_t, multiplier: u8) -> uint8x16_t {
+        let factor = unsafe { vdup_n_u8(multiplier) };
+        let low_product = unsafe { vmull_u8(vget_low_u8(channel), factor) };
+        let high_product = unsafe { vmull_u8(vget_high_u8(channel), factor) };
+        unsafe { vcombine_u8(divide_product(low_product), divide_product(high_product)) }
+    }
+
+    unsafe fn blend_channel(
+        destination: uint8x16_t,
+        source: uint8x16_t,
+        inverse_alpha: uint8x16_t,
+    ) -> uint8x16_t {
+        let low_product = unsafe { vmull_u8(vget_low_u8(destination), vget_low_u8(inverse_alpha)) };
+        let high_product =
+            unsafe { vmull_u8(vget_high_u8(destination), vget_high_u8(inverse_alpha)) };
+        let blend =
+            unsafe { vcombine_u8(divide_product(low_product), divide_product(high_product)) };
+        unsafe { vqaddq_u8(source, blend) }
+    }
+
+    debug_assert_eq!(source.len(), TEXTURED_RECT_VECTOR_BLOCK_PX * 4);
+
+    // SAFETY: source is exactly one complete 16-pixel RGBA block. vld4q_u8 accepts
+    // unaligned loads, and the destination offset points at a complete surface span.
+    let texels = unsafe { vld4q_u8(source.as_ptr()) };
+    let modulated = uint8x16x4_t(
+        unsafe { multiply_channel(texels.0, vertex_color[0]) },
+        unsafe { multiply_channel(texels.1, vertex_color[1]) },
+        unsafe { multiply_channel(texels.2, vertex_color[2]) },
+        unsafe { multiply_channel(texels.3, vertex_color[3]) },
+    );
+
+    // SAFETY: vmaxvq_u8/vminvq_u8 only inspect the modulated alpha vector.
+    let max_alpha = unsafe { vmaxvq_u8(modulated.3) };
+    if max_alpha == 0 {
+        return Some(SampledTexturedRectVectorBlockAlpha::Transparent);
+    }
+
+    let pixels =
+        &mut surface.pixels[pixel_offset..pixel_offset + TEXTURED_RECT_VECTOR_BLOCK_PX * 4];
+    // SAFETY: vmax above proved at least one non-zero alpha; min tells whether all
+    // lanes are opaque so the block can be copied without reading destination.
+    let min_alpha = unsafe { vminvq_u8(modulated.3) };
+    if min_alpha != u8::MAX {
+        // SAFETY: pixels is exactly one complete 16-pixel RGBA destination block.
+        // Source channels use scalar modulation's rounded product/255, then the
+        // blend matches scalar premultiplied blending: src + round(dst * (255 - alpha) / 255).
+        // Lanes with modulated alpha 0 are left byte-for-byte unchanged.
+        let destination = unsafe { vld4q_u8(pixels.as_ptr()) };
+        let inverse_alpha = unsafe { vmvnq_u8(modulated.3) };
+        let transparent = unsafe { vceqq_u8(modulated.3, vdupq_n_u8(0)) };
+        let opaque_alpha = unsafe { vdupq_n_u8(u8::MAX) };
+        let blended = uint8x16x4_t(
+            unsafe {
+                vbslq_u8(
+                    transparent,
+                    destination.0,
+                    blend_channel(destination.0, modulated.0, inverse_alpha),
+                )
+            },
+            unsafe {
+                vbslq_u8(
+                    transparent,
+                    destination.1,
+                    blend_channel(destination.1, modulated.1, inverse_alpha),
+                )
+            },
+            unsafe {
+                vbslq_u8(
+                    transparent,
+                    destination.2,
+                    blend_channel(destination.2, modulated.2, inverse_alpha),
+                )
+            },
+            unsafe { vbslq_u8(transparent, destination.3, opaque_alpha) },
+        );
+        // SAFETY: destination block length is exactly 16 RGBA pixels.
+        unsafe { vst4q_u8(pixels.as_mut_ptr(), blended) };
+        return Some(SampledTexturedRectVectorBlockAlpha::Mixed);
+    }
+
+    // SAFETY: pixels is exactly one complete 16-pixel RGBA destination block, and
+    // storing the deinterleaved vectors reproduces scalar opaque modulated writes.
+    unsafe { vst4q_u8(pixels.as_mut_ptr(), modulated) };
     Some(SampledTexturedRectVectorBlockAlpha::Opaque)
 }
 
@@ -1734,6 +1955,77 @@ mod tests {
         assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 0);
         assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 0);
         assert_eq!(stats.textured_rect_sampled_vector_tail_px, 1);
+    }
+
+    #[test]
+    fn sampled_textured_rect_modulated_vector_stats_match_generic_for_blocks_and_tail() {
+        let width = 37;
+        let texture = varied_alpha_row_texture(
+            (0..width)
+                .map(|x| match x {
+                    0..=15 | 35 => u8::MAX,
+                    16..=31 => match x % 4 {
+                        0 => 0,
+                        1 => 64,
+                        2 => 160,
+                        _ => u8::MAX,
+                    },
+                    32 => 0,
+                    33 => 64,
+                    34 => 160,
+                    _ => 32,
+                })
+                .collect(),
+        );
+        let mut surface = test_surface(width, 1);
+        let mut generic = test_surface(width, 1);
+        let mut stats = RasterStats::default();
+        let bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: usize_to_f32(width),
+            max_y: 1.0,
+        };
+        let vertex_color = [128, 192, 224, 255];
+        let corners = vector_eligible_row_corners(width, vertex_color);
+        let range = rect_range(bounds, full_clip(width, 1));
+        let uv_basis = rect_uv_basis(bounds);
+
+        rasterize_textured_rect_no_stats_with_color(
+            &mut generic,
+            corners,
+            &texture,
+            range,
+            uv_basis,
+            |texture, uv| modulate_color(vertex_color, sample_nearest(texture, uv)),
+        );
+        rasterize_textured_rect(
+            &mut surface,
+            corners,
+            bounds,
+            &texture,
+            full_clip(width, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(surface.pixels, generic.pixels);
+        assert_eq!(stats.textured_rect_sampled_vector_candidate_px, width);
+        assert_eq!(stats.textured_rect_sampled_white_vertex_contiguous_px, 0);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vertex_contiguous_px,
+            width
+        );
+        assert_eq!(stats.textured_rect_sampled_vector_blocks, 2);
+        assert_eq!(stats.textured_rect_sampled_vector_opaque_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_transparent_blocks, 0);
+        assert_eq!(stats.textured_rect_sampled_vector_mixed_blocks, 1);
+        assert_eq!(stats.textured_rect_sampled_vector_tail_px, 5);
+        assert_eq!(stats.opaque_px, 21);
+        assert_eq!(stats.transparent_px, 5);
+        assert_eq!(stats.translucent_px, 11);
+        assert_eq!(stats.textured_rect_separable_direct_opaque_px, 21);
+        assert_eq!(stats.textured_rect_separable_direct_transparent_px, 5);
+        assert_eq!(stats.textured_rect_separable_direct_translucent_px, 11);
     }
 
     #[test]
