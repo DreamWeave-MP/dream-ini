@@ -44,9 +44,26 @@ class SectionStats:
     count: int = 0
     frames: list[int] = field(default_factory=list)
     timestamps: list[int] = field(default_factory=list)
+    numeric_records: list[dict[str, float]] = field(default_factory=list)
     numeric_values: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     list_sums: dict[str, list[list[int]]] = field(default_factory=lambda: defaultdict(list))
     text_values: dict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
+
+
+@dataclass(frozen=True)
+class NormalizedMetric:
+    name: str
+    denominator: str
+    unit: str
+    denominator_scale: float = 1.0
+
+
+NORMALIZED_SAMPLED_RECT_METRICS = (
+    NormalizedMetric("textured_rect_sampled_us_per_sampled_rect_px", "textured_rect_sampled_px", "us/px"),
+    NormalizedMetric("textured_rect_sampled_us_per_modulated_contiguous_px", "textured_rect_sampled_modulated_vertex_contiguous_px", "us/px"),
+    NormalizedMetric("textured_rect_sampled_us_per_vectorized_px_4", "textured_rect_sampled_modulated_vector_success_blocks_4", "us/px", 4.0),
+    NormalizedMetric("textured_rect_sampled_us_per_vector_success_block_4", "textured_rect_sampled_modulated_vector_success_blocks_4", "us/block"),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +120,7 @@ def parse_records(path: Path) -> dict[str, SectionStats]:
             sample_frame = frame if frame is not None else current_frame
             if sample_frame is not None:
                 section.frames.append(sample_frame)
+            numeric_record = {}
             for key, raw_value in KEY_VALUE_RE.findall(line[start:]):
                 if key == "frame":
                     continue
@@ -114,6 +132,8 @@ def parse_records(path: Path) -> dict[str, SectionStats]:
                     section.text_values[key][raw_value] += 1
                 else:
                     section.numeric_values[key].append(numeric_value)
+                    numeric_record[key] = numeric_value
+            section.numeric_records.append(numeric_record)
     return sections
 
 
@@ -143,6 +163,12 @@ def distribution(values: list[float]) -> tuple[str, str, str, str, str, str, str
     return (format_number(total), format_number(ordered[0]), format_number(percentile(ordered, 50)), format_number(percentile(ordered, 90)), format_number(percentile(ordered, 95)), format_number(ordered[-1]), format_number(mean))
 
 
+def distribution_without_sum(values: list[float]) -> tuple[str, str, str, str, str, str]:
+    ordered = sorted(values)
+    mean = statistics.fmean(values) if values else 0.0
+    return (format_number(ordered[0]), format_number(percentile(ordered, 50)), format_number(percentile(ordered, 90)), format_number(percentile(ordered, 95)), format_number(ordered[-1]), format_number(mean))
+
+
 def range_text(values: list[int]) -> str:
     if not values:
         return "n/a"
@@ -159,6 +185,33 @@ def print_table(rows: list[tuple[str, ...]], headers: tuple[str, ...]) -> None:
 def selected_rows(section: SectionStats, include_all: bool) -> list[tuple[str, ...]]:
     keys = sorted(section.numeric_values) if include_all else [key for key in SELECTED_COUNTERS.get(section.name, ()) if key in section.numeric_values]
     return [(key, str(len(section.numeric_values[key])), *distribution(section.numeric_values[key])) for key in keys]
+
+
+def normalized_sampled_rect_rows(section: SectionStats) -> tuple[list[tuple[str, ...]], list[str]]:
+    rows = []
+    unavailable = []
+    for metric in NORMALIZED_SAMPLED_RECT_METRICS:
+        ratios = []
+        skipped_zero = 0
+        skipped_missing = 0
+        for record in section.numeric_records:
+            numerator = record.get("textured_rect_sampled_us")
+            denominator = record.get(metric.denominator)
+            if numerator is None or denominator is None:
+                skipped_missing += 1
+                continue
+            denominator *= metric.denominator_scale
+            if denominator == 0:
+                skipped_zero += 1
+                continue
+            ratios.append(numerator / denominator)
+        if ratios:
+            skipped = skipped_missing + skipped_zero
+            rows.append((metric.name, metric.unit, str(len(ratios)), str(skipped), *distribution_without_sum(ratios)))
+        else:
+            reason = "missing counter" if skipped_missing else "zero denominator"
+            unavailable.append(f"{metric.name} ({reason})")
+    return rows, unavailable
 
 
 def bucket_rows(section: SectionStats) -> list[tuple[str, str, str]]:
@@ -208,6 +261,17 @@ def print_report(path: Path, sections: dict[str, SectionStats], include_all: boo
             label = "All Numeric Counter Distributions" if include_all else "Selected Counter Sums And Distributions"
             print(f"### {label}")
             print_table(rows, ("counter", "n", "sum", "min", "p50", "p90", "p95", "max", "mean"))
+            print()
+        if section.name == "raster_stats":
+            normalized_rows, unavailable = normalized_sampled_rect_rows(section)
+            print("### Normalized Sampled-Rect Timing Distributions")
+            print("Ratios are computed from matching values in the same raster_stats sample; samples with missing or zero denominators are skipped.")
+            if normalized_rows:
+                print_table(normalized_rows, ("metric", "unit", "n", "skipped", "min", "p50", "p90", "p95", "max", "mean"))
+            else:
+                print("Insufficient data for normalized sampled-rect timing metrics.")
+            if unavailable:
+                print("Unavailable: " + "; ".join(unavailable))
             print()
         buckets = bucket_rows(section)
         if buckets:
