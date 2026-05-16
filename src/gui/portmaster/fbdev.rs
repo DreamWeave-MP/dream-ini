@@ -25,7 +25,7 @@ const FRAMEBUFFER_PATHS: [&str; 2] = ["/dev/fb0", "/dev/graphics/fb0"];
 pub(super) const DRAW_ENV_VAR: &str = "DREAM_INI_FB_DRAW";
 const FORCE_GENERIC_BLIT_ENV_VAR: &str = "DREAM_INI_PM_FORCE_GENERIC_BLIT";
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
-const BGRA_OPAQUE_NEON_PIXELS: usize = 16;
+const FAST32_NEON_PIXELS: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FramebufferDrawOutcome {
@@ -982,6 +982,23 @@ fn convert_rgba_row_to_fast32(destination: &mut [u8], source: &[u8], format: Fas
 }
 
 fn convert_rgba_row_to_bgrx_zero(destination: &mut [u8], source: &[u8]) {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        let vector_bytes = fast32_neon_prefix_bytes(destination.len(), source.len());
+        let (vector_destination, tail_destination) = destination.split_at_mut(vector_bytes);
+        let (vector_source, tail_source) = source.split_at(vector_bytes);
+
+        // SAFETY: vector_bytes is rounded down to complete 16-pixel RGBA/BGRX
+        // vectors, and both slices are at least vector_bytes long.
+        unsafe { convert_rgba_row_to_bgrx_zero_neon(vector_destination, vector_source) };
+        convert_rgba_row_to_bgrx_zero_scalar(tail_destination, tail_source);
+    }
+
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    convert_rgba_row_to_bgrx_zero_scalar(destination, source);
+}
+
+fn convert_rgba_row_to_bgrx_zero_scalar(destination: &mut [u8], source: &[u8]) {
     for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
         destination[0] = source[2];
         destination[1] = source[1];
@@ -993,7 +1010,7 @@ fn convert_rgba_row_to_bgrx_zero(destination: &mut [u8], source: &[u8]) {
 fn convert_rgba_row_to_bgra_opaque(destination: &mut [u8], source: &[u8]) {
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     {
-        let vector_bytes = bgra_opaque_neon_prefix_bytes(destination.len(), source.len());
+        let vector_bytes = fast32_neon_prefix_bytes(destination.len(), source.len());
         let (vector_destination, tail_destination) = destination.split_at_mut(vector_bytes);
         let (vector_source, tail_source) = source.split_at(vector_bytes);
 
@@ -1016,20 +1033,36 @@ fn convert_rgba_row_to_bgra_opaque_scalar(destination: &mut [u8], source: &[u8])
     }
 }
 
-fn bgra_opaque_neon_prefix_bytes(destination_len: usize, source_len: usize) -> usize {
+fn fast32_neon_prefix_bytes(destination_len: usize, source_len: usize) -> usize {
     let pixels = destination_len.min(source_len) / 4;
-    pixels / BGRA_OPAQUE_NEON_PIXELS * BGRA_OPAQUE_NEON_PIXELS * 4
+    pixels / FAST32_NEON_PIXELS * FAST32_NEON_PIXELS * 4
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+unsafe fn convert_rgba_row_to_bgrx_zero_neon(destination: &mut [u8], source: &[u8]) {
+    debug_assert_eq!(destination.len(), source.len());
+    debug_assert_eq!(source.len() % (FAST32_NEON_PIXELS * 4), 0);
+
+    let zero = unsafe { vdupq_n_u8(0) };
+    for (source, destination) in source
+        .chunks_exact(FAST32_NEON_PIXELS * 4)
+        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
+    {
+        let rgba = unsafe { vld4q_u8(source.as_ptr()) };
+        let bgrx = uint8x16x4_t(rgba.2, rgba.1, rgba.0, zero);
+        unsafe { vst4q_u8(destination.as_mut_ptr(), bgrx) };
+    }
 }
 
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 unsafe fn convert_rgba_row_to_bgra_opaque_neon(destination: &mut [u8], source: &[u8]) {
     debug_assert_eq!(destination.len(), source.len());
-    debug_assert_eq!(source.len() % (BGRA_OPAQUE_NEON_PIXELS * 4), 0);
+    debug_assert_eq!(source.len() % (FAST32_NEON_PIXELS * 4), 0);
 
     let alpha = unsafe { vdupq_n_u8(u8::MAX) };
     for (source, destination) in source
-        .chunks_exact(BGRA_OPAQUE_NEON_PIXELS * 4)
-        .zip(destination.chunks_exact_mut(BGRA_OPAQUE_NEON_PIXELS * 4))
+        .chunks_exact(FAST32_NEON_PIXELS * 4)
+        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
     {
         let rgba = unsafe { vld4q_u8(source.as_ptr()) };
         let bgra = uint8x16x4_t(rgba.2, rgba.1, rgba.0, alpha);
@@ -1346,6 +1379,23 @@ mod tests {
     }
 
     #[test]
+    fn portmaster_bgrx_zero_converter_matches_scalar_for_tail_widths_and_alpha() {
+        for width in [0, 1, 3, 15, 16, 17, 31, 32, 33] {
+            let source = test_surface_with_alpha_pattern(width, 1).pixels;
+            let mut accelerated = vec![0xee; source.len()];
+            let mut scalar = accelerated.clone();
+
+            convert_rgba_row_to_bgrx_zero(&mut accelerated, &source);
+            convert_rgba_row_to_bgrx_zero_scalar(&mut scalar, &source);
+
+            assert_eq!(accelerated, scalar, "width {width}");
+            for pixel in accelerated.chunks_exact(4) {
+                assert_eq!(pixel[3], 0, "width {width}");
+            }
+        }
+    }
+
+    #[test]
     fn portmaster_bgra_opaque_converter_matches_scalar_for_tail_widths_and_alpha() {
         for width in [0, 1, 3, 15, 16, 17, 31, 32, 33] {
             let source = test_surface_with_alpha_pattern(width, 1).pixels;
@@ -1363,18 +1413,18 @@ mod tests {
     }
 
     #[test]
-    fn portmaster_bgra_opaque_neon_prefix_uses_complete_vectors_only() {
+    fn portmaster_fast32_neon_prefix_uses_complete_vectors_only() {
         for width in [0, 1, 15, 16, 17, 31, 32, 33] {
             let bytes = width * 4;
-            let prefix = bgra_opaque_neon_prefix_bytes(bytes, bytes);
+            let prefix = fast32_neon_prefix_bytes(bytes, bytes);
 
-            assert_eq!(prefix % (BGRA_OPAQUE_NEON_PIXELS * 4), 0);
+            assert_eq!(prefix % (FAST32_NEON_PIXELS * 4), 0);
             assert!(prefix <= bytes);
-            assert!(bytes - prefix < BGRA_OPAQUE_NEON_PIXELS * 4);
+            assert!(bytes - prefix < FAST32_NEON_PIXELS * 4);
         }
 
-        assert_eq!(bgra_opaque_neon_prefix_bytes(16 * 4, 15 * 4), 0);
-        assert_eq!(bgra_opaque_neon_prefix_bytes(17 * 4, 16 * 4), 16 * 4);
+        assert_eq!(fast32_neon_prefix_bytes(16 * 4, 15 * 4), 0);
+        assert_eq!(fast32_neon_prefix_bytes(17 * 4, 16 * 4), 16 * 4);
     }
 
     #[test]
