@@ -1071,6 +1071,23 @@ unsafe fn convert_rgba_row_to_bgra_opaque_neon(destination: &mut [u8], source: &
 }
 
 fn convert_rgba_row_to_rgbx_zero(destination: &mut [u8], source: &[u8]) {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        let vector_bytes = fast32_neon_prefix_bytes(destination.len(), source.len());
+        let (vector_destination, tail_destination) = destination.split_at_mut(vector_bytes);
+        let (vector_source, tail_source) = source.split_at(vector_bytes);
+
+        // SAFETY: vector_bytes is rounded down to complete 16-pixel RGBA/RGBX
+        // vectors, and both slices are at least vector_bytes long.
+        unsafe { convert_rgba_row_to_rgbx_zero_neon(vector_destination, vector_source) };
+        convert_rgba_row_to_rgbx_zero_scalar(tail_destination, tail_source);
+    }
+
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    convert_rgba_row_to_rgbx_zero_scalar(destination, source);
+}
+
+fn convert_rgba_row_to_rgbx_zero_scalar(destination: &mut [u8], source: &[u8]) {
     for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
         destination[0] = source[0];
         destination[1] = source[1];
@@ -1080,11 +1097,60 @@ fn convert_rgba_row_to_rgbx_zero(destination: &mut [u8], source: &[u8]) {
 }
 
 fn convert_rgba_row_to_rgba_opaque(destination: &mut [u8], source: &[u8]) {
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        let vector_bytes = fast32_neon_prefix_bytes(destination.len(), source.len());
+        let (vector_destination, tail_destination) = destination.split_at_mut(vector_bytes);
+        let (vector_source, tail_source) = source.split_at(vector_bytes);
+
+        // SAFETY: vector_bytes is rounded down to complete 16-pixel RGBA/RGBA
+        // vectors, and both slices are at least vector_bytes long.
+        unsafe { convert_rgba_row_to_rgba_opaque_neon(vector_destination, vector_source) };
+        convert_rgba_row_to_rgba_opaque_scalar(tail_destination, tail_source);
+    }
+
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    convert_rgba_row_to_rgba_opaque_scalar(destination, source);
+}
+
+fn convert_rgba_row_to_rgba_opaque_scalar(destination: &mut [u8], source: &[u8]) {
     for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
         destination[0] = source[0];
         destination[1] = source[1];
         destination[2] = source[2];
         destination[3] = u8::MAX;
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+unsafe fn convert_rgba_row_to_rgbx_zero_neon(destination: &mut [u8], source: &[u8]) {
+    debug_assert_eq!(destination.len(), source.len());
+    debug_assert_eq!(source.len() % (FAST32_NEON_PIXELS * 4), 0);
+
+    let zero = unsafe { vdupq_n_u8(0) };
+    for (source, destination) in source
+        .chunks_exact(FAST32_NEON_PIXELS * 4)
+        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
+    {
+        let rgba = unsafe { vld4q_u8(source.as_ptr()) };
+        let rgbx = uint8x16x4_t(rgba.0, rgba.1, rgba.2, zero);
+        unsafe { vst4q_u8(destination.as_mut_ptr(), rgbx) };
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+unsafe fn convert_rgba_row_to_rgba_opaque_neon(destination: &mut [u8], source: &[u8]) {
+    debug_assert_eq!(destination.len(), source.len());
+    debug_assert_eq!(source.len() % (FAST32_NEON_PIXELS * 4), 0);
+
+    let alpha = unsafe { vdupq_n_u8(u8::MAX) };
+    for (source, destination) in source
+        .chunks_exact(FAST32_NEON_PIXELS * 4)
+        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
+    {
+        let rgba = unsafe { vld4q_u8(source.as_ptr()) };
+        let opaque = uint8x16x4_t(rgba.0, rgba.1, rgba.2, alpha);
+        unsafe { vst4q_u8(destination.as_mut_ptr(), opaque) };
     }
 }
 
@@ -1404,6 +1470,40 @@ mod tests {
 
             convert_rgba_row_to_bgra_opaque(&mut accelerated, &source);
             convert_rgba_row_to_bgra_opaque_scalar(&mut scalar, &source);
+
+            assert_eq!(accelerated, scalar, "width {width}");
+            for pixel in accelerated.chunks_exact(4) {
+                assert_eq!(pixel[3], u8::MAX, "width {width}");
+            }
+        }
+    }
+
+    #[test]
+    fn portmaster_rgbx_zero_converter_matches_scalar_for_tail_widths_and_alpha() {
+        for width in [0, 1, 3, 15, 16, 17, 31, 32, 33] {
+            let source = test_surface_with_alpha_pattern(width, 1).pixels;
+            let mut accelerated = vec![0xee; source.len()];
+            let mut scalar = accelerated.clone();
+
+            convert_rgba_row_to_rgbx_zero(&mut accelerated, &source);
+            convert_rgba_row_to_rgbx_zero_scalar(&mut scalar, &source);
+
+            assert_eq!(accelerated, scalar, "width {width}");
+            for pixel in accelerated.chunks_exact(4) {
+                assert_eq!(pixel[3], 0, "width {width}");
+            }
+        }
+    }
+
+    #[test]
+    fn portmaster_rgba_opaque_converter_matches_scalar_for_tail_widths_and_alpha() {
+        for width in [0, 1, 3, 15, 16, 17, 31, 32, 33] {
+            let source = test_surface_with_alpha_pattern(width, 1).pixels;
+            let mut accelerated = vec![0xee; source.len()];
+            let mut scalar = accelerated.clone();
+
+            convert_rgba_row_to_rgba_opaque(&mut accelerated, &source);
+            convert_rgba_row_to_rgba_opaque_scalar(&mut scalar, &source);
 
             assert_eq!(accelerated, scalar, "width {width}");
             for pixel in accelerated.chunks_exact(4) {
