@@ -17,7 +17,9 @@ use super::raster::{
 use super::surface::SoftwareSurface;
 use super::texture::{TextureDeltaStats, TextureImage, TextureStore};
 use super::{GuiFrame, GuiShell};
-use fan::{FanBoundaryKey, SolidFanPolygonScratch, SolidFanRun, solid_fan_run};
+use fan::{
+    FanBoundaryKey, SOLID_FAN_MIN_TRIANGLES, SolidFanPolygonScratch, SolidFanRun, solid_fan_run,
+};
 use quad::{has_four_unique_indices, try_rasterize_quad_window};
 use stats::{
     PrimitiveStats, RasterTimings, SolidFanRasterRecord, SolidFanRasterWork, TriangleSource,
@@ -668,6 +670,13 @@ impl MeshRasterContext<'_> {
         raster_stats: &mut Option<&mut RasterStats>,
         raster_timings: &mut Option<&mut RasterTimings>,
     ) -> io::Result<Option<usize>> {
+        if self.remaining_triangles_at(index_offset) < SOLID_FAN_MIN_TRIANGLES {
+            if let Some(stats) = borrow_optional_mut(stats) {
+                stats.solid_fan_probe.preflight_reject_too_few_triangles += 1;
+            }
+            return Ok(None);
+        }
+
         let fan_probe_start = raster_timings.as_ref().map(|_| Instant::now());
         let fan = solid_fan_run(
             self.mesh,
@@ -711,6 +720,10 @@ impl MeshRasterContext<'_> {
         let fan_triangle_count = fan.triangle_count;
         self.fan_polygon_scratch.clear();
         Ok(Some(fan_triangle_count))
+    }
+
+    fn remaining_triangles_at(&self, index_offset: usize) -> usize {
+        self.mesh.indices[index_offset..].len() / 3
     }
 
     fn rasterize_generic_triangle_at(
@@ -1157,6 +1170,54 @@ mod tests {
     }
 
     #[test]
+    fn renderer_preflight_skips_too_short_solid_fan_probe_and_uses_generic_triangles() {
+        let texture_id = egui::TextureId::Managed(1);
+        let mut renderer = SoftwareRenderer::default();
+        renderer.surface.resize(12, 12).expect("surface");
+        renderer.surface.clear([0, 0, 0, 255]);
+        renderer
+            .textures
+            .apply(&texture_delta(texture_id))
+            .expect("texture");
+        let mesh = too_short_mixed_triangle_mesh(texture_id);
+        let clip_rect = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(12.0, 12.0));
+        let mut primitive_stats = PrimitiveStats::default();
+        let mut raster_stats = RasterStats::default();
+
+        renderer
+            .rasterize_mesh(
+                &mesh,
+                clip_rect,
+                0,
+                Some(&mut primitive_stats),
+                Some(&mut raster_stats),
+                None,
+            )
+            .expect("rasterize mesh");
+
+        let texture = renderer.textures.get(&texture_id).expect("stored texture");
+        let reference = render_solid_fan_reference(&mesh, texture, clip_bounds(12, 12));
+        assert_eq!(renderer.surface.pixels, reference);
+        assert_eq!(primitive_stats.solid_fan_probe.probe_calls, 0);
+        assert_eq!(
+            primitive_stats
+                .solid_fan_probe
+                .preflight_reject_too_few_triangles,
+            3
+        );
+        assert_eq!(primitive_stats.solid_fan_probe.rejected_probe_calls, 0);
+        assert_eq!(primitive_stats.solid_fan_runs, 0);
+        assert_eq!(primitive_stats.generic_triangles_rasterized, 3);
+        assert_eq!(primitive_stats.generic_solid_triangles, 1);
+        assert_eq!(primitive_stats.generic_textured_triangles, 2);
+        assert_eq!(primitive_stats.generic_textured_constant_texel_triangles, 1);
+        assert_eq!(primitive_stats.generic_textured_sampled_triangles, 1);
+        assert_eq!(raster_stats.solid_fan_calls, 0);
+        assert_eq!(raster_stats.solid_triangle_calls, 1);
+        assert_eq!(raster_stats.textured_triangle_calls, 2);
+    }
+
+    #[test]
     fn renderer_reports_resident_solid_fan_cache_without_fan_call_in_frame() {
         let texture_id = egui::TextureId::Managed(1);
         let mut renderer = SoftwareRenderer::default();
@@ -1332,6 +1393,28 @@ mod tests {
         });
         egui::Mesh {
             indices: vec![1, 0, 2, 2, 0, 3, 3, 0, 4, 4, 0, 5],
+            vertices: vertices.to_vec(),
+            texture_id,
+        }
+    }
+
+    fn too_short_mixed_triangle_mesh(texture_id: egui::TextureId) -> egui::Mesh {
+        let mut vertices = [
+            test_vertex(1.0, 1.0),
+            test_vertex(4.0, 1.0),
+            test_vertex(1.0, 4.0),
+            test_vertex(5.0, 1.0),
+            test_vertex(8.0, 1.0),
+            test_vertex(5.0, 4.0),
+            test_vertex(1.0, 5.0),
+            test_vertex(4.0, 5.0),
+            test_vertex(1.0, 8.0),
+        ];
+        vertices[5].color = egui::Color32::BLACK;
+        vertices[7].uv = egui::pos2(1.0, 0.0);
+        vertices[8].uv = egui::pos2(0.0, 1.0);
+        egui::Mesh {
+            indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8],
             vertices: vertices.to_vec(),
             texture_id,
         }

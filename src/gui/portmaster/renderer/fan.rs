@@ -58,7 +58,7 @@ struct CheapFanSeed<'a> {
     expected_area_sign: i8,
 }
 
-const SOLID_FAN_MIN_TRIANGLES: usize = 4;
+pub(super) const SOLID_FAN_MIN_TRIANGLES: usize = 4;
 
 pub(super) fn solid_fan_run<'a>(
     mesh: &'a egui::Mesh,
