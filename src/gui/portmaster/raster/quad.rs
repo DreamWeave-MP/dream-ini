@@ -1958,6 +1958,79 @@ mod tests {
     }
 
     #[test]
+    fn sampled_textured_rect_vector_stats_bucket_clipped_modulated_contiguous_run_widths() {
+        let mut stats = RasterStats::default();
+        let vertex_color = [128, 192, 224, 255];
+        let cases = [3, 4, 8, 16, 32, 64];
+
+        for run_width in cases {
+            let texture_width = run_width + 2;
+            let texture = alpha_row_texture(vec![u8::MAX; texture_width]);
+            let mut surface = test_surface(texture_width, 1);
+            let bounds = QuadBounds {
+                min_x: 0.0,
+                min_y: 0.0,
+                max_x: usize_to_f32(texture_width),
+                max_y: 1.0,
+            };
+            let clip = ClipBounds {
+                min_x: 1,
+                min_y: 0,
+                max_x: run_width + 1,
+                max_y: 1,
+            };
+
+            rasterize_textured_rect(
+                &mut surface,
+                vector_eligible_row_corners(texture_width, vertex_color),
+                bounds,
+                &texture,
+                clip,
+                Some(&mut stats),
+            );
+        }
+
+        let white_texture = alpha_row_texture(vec![u8::MAX; 10]);
+        let mut white_surface = test_surface(10, 1);
+        let white_bounds = QuadBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 10.0,
+            max_y: 1.0,
+        };
+        rasterize_textured_rect(
+            &mut white_surface,
+            vector_eligible_row_corners(10, [255; 4]),
+            white_bounds,
+            &white_texture,
+            full_clip(10, 1),
+            Some(&mut stats),
+        );
+
+        assert_eq!(stats.textured_rect_sampled_modulated_contiguous_runs, 6);
+        assert_eq!(stats.textured_rect_sampled_modulated_contiguous_px_lt4, 3);
+        assert_eq!(stats.textured_rect_sampled_modulated_contiguous_px_4_7, 4);
+        assert_eq!(stats.textured_rect_sampled_modulated_contiguous_px_8_15, 8);
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_contiguous_px_16_31,
+            16
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_contiguous_px_32_63,
+            32
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_contiguous_px_64_plus,
+            64
+        );
+        assert_eq!(
+            stats.textured_rect_sampled_modulated_vertex_contiguous_px,
+            127
+        );
+        assert_eq!(stats.textured_rect_sampled_white_vertex_contiguous_px, 10);
+    }
+
+    #[test]
     fn sampled_textured_rect_modulated_vector_stats_match_generic_for_blocks_and_tail() {
         let width = 37;
         let texture = varied_alpha_row_texture(
