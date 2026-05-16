@@ -172,10 +172,16 @@ pub(in crate::gui::portmaster) struct RasterStats {
     pub(in crate::gui::portmaster) textured_rect_sampled_modulated_opportunity_blocks_16: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_modulated_opportunity_px_16: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_modulated_true_tail_px_16: usize,
+    pub(in crate::gui::portmaster) textured_rect_sampled_modulated_opportunity_blocks_4: usize,
+    pub(in crate::gui::portmaster) textured_rect_sampled_modulated_opportunity_px_4: usize,
+    pub(in crate::gui::portmaster) textured_rect_sampled_modulated_true_tail_px_4: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_vector_backend_available: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_modulated_vector_attempt_blocks_16: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_modulated_vector_success_blocks_16: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_modulated_vector_fallback_blocks_16: usize,
+    pub(in crate::gui::portmaster) textured_rect_sampled_modulated_vector_attempt_blocks_4: usize,
+    pub(in crate::gui::portmaster) textured_rect_sampled_modulated_vector_success_blocks_4: usize,
+    pub(in crate::gui::portmaster) textured_rect_sampled_modulated_vector_fallback_blocks_4: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_vector_blocks: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_vector_opaque_blocks: usize,
     pub(in crate::gui::portmaster) textured_rect_sampled_vector_transparent_blocks: usize,
@@ -345,10 +351,16 @@ macro_rules! raster_stats_values {
             $stats.textured_rect_sampled_modulated_opportunity_blocks_16,
             $stats.textured_rect_sampled_modulated_opportunity_px_16,
             $stats.textured_rect_sampled_modulated_true_tail_px_16,
+            $stats.textured_rect_sampled_modulated_opportunity_blocks_4,
+            $stats.textured_rect_sampled_modulated_opportunity_px_4,
+            $stats.textured_rect_sampled_modulated_true_tail_px_4,
             $stats.textured_rect_sampled_vector_backend_available,
             $stats.textured_rect_sampled_modulated_vector_attempt_blocks_16,
             $stats.textured_rect_sampled_modulated_vector_success_blocks_16,
             $stats.textured_rect_sampled_modulated_vector_fallback_blocks_16,
+            $stats.textured_rect_sampled_modulated_vector_attempt_blocks_4,
+            $stats.textured_rect_sampled_modulated_vector_success_blocks_4,
+            $stats.textured_rect_sampled_modulated_vector_fallback_blocks_4,
             $stats.textured_rect_sampled_vector_blocks,
             $stats.textured_rect_sampled_vector_opaque_blocks,
             $stats.textured_rect_sampled_vector_transparent_blocks,
@@ -372,6 +384,7 @@ impl RasterStats {
             self.textured_rect_sampled_modulated_vertex_contiguous_px += px;
             self.record_textured_rect_sampled_modulated_contiguous_run(px);
             self.record_textured_rect_sampled_modulated_opportunity_16(px);
+            self.record_textured_rect_sampled_modulated_opportunity_4(px);
         }
     }
 
@@ -381,6 +394,15 @@ impl RasterStats {
         self.textured_rect_sampled_modulated_opportunity_blocks_16 += blocks;
         self.textured_rect_sampled_modulated_opportunity_px_16 += opportunity_px;
         self.textured_rect_sampled_modulated_true_tail_px_16 += px - opportunity_px;
+    }
+
+    fn record_textured_rect_sampled_modulated_opportunity_4(&mut self, px: usize) {
+        let remainder_after_16 = px % TEXTURED_RECT_VECTOR_BLOCK_PX;
+        let blocks = remainder_after_16 / 4;
+        let opportunity_px = blocks * 4;
+        self.textured_rect_sampled_modulated_opportunity_blocks_4 += blocks;
+        self.textured_rect_sampled_modulated_opportunity_px_4 += opportunity_px;
+        self.textured_rect_sampled_modulated_true_tail_px_4 += remainder_after_16 - opportunity_px;
     }
 
     fn record_textured_rect_sampled_modulated_contiguous_run(&mut self, px: usize) {
@@ -397,15 +419,16 @@ impl RasterStats {
 
     pub(super) fn record_textured_rect_sampled_vector_block(
         &mut self,
+        block_px: usize,
         opaque_px: usize,
         transparent_px: usize,
     ) {
         self.textured_rect_sampled_vector_blocks += 1;
         match (opaque_px, transparent_px) {
-            (TEXTURED_RECT_VECTOR_BLOCK_PX, _) => {
+            (opaque_px, _) if opaque_px == block_px => {
                 self.textured_rect_sampled_vector_opaque_blocks += 1;
             }
-            (_, TEXTURED_RECT_VECTOR_BLOCK_PX) => {
+            (_, transparent_px) if transparent_px == block_px => {
                 self.textured_rect_sampled_vector_transparent_blocks += 1;
             }
             _ => self.textured_rect_sampled_vector_mixed_blocks += 1,
@@ -418,6 +441,18 @@ impl RasterStats {
             self.textured_rect_sampled_modulated_vector_success_blocks_16 += 1;
         } else {
             self.textured_rect_sampled_modulated_vector_fallback_blocks_16 += 1;
+        }
+    }
+
+    pub(super) fn record_textured_rect_sampled_modulated_vector_attempt_4(
+        &mut self,
+        success: bool,
+    ) {
+        self.textured_rect_sampled_modulated_vector_attempt_blocks_4 += 1;
+        if success {
+            self.textured_rect_sampled_modulated_vector_success_blocks_4 += 1;
+        } else {
+            self.textured_rect_sampled_modulated_vector_fallback_blocks_4 += 1;
         }
     }
 
@@ -469,9 +504,9 @@ impl RasterStats {
         write!(&mut line, " solid_fan_fallback_rows={} solid_fan_edge_precompute_calls={} solid_fan_edge_precompute_edges={} solid_fan_edge_precompute_used_rows={} solid_fan_edge_precompute_fallback_budget={} solid_fan_edge_precompute_fallback_non_finite={} solid_fan_edge_precompute_old_solver_rows={} solid_fan_span_cache_hits={} solid_fan_span_cache_misses={} solid_fan_span_cache_hit_rows={} solid_fan_span_cache_hit_px={} solid_fan_span_cache_stored_rows={} solid_fan_span_cache_rejected_too_many_rows={} solid_fan_span_cache_resident_entries={} solid_fan_span_cache_resident_rows={} solid_fan_span_cache_total_evictions={} solid_fan_span_cache_row_budget_evictions={} textured_triangle_calls={} textured_triangle_bbox_px={} textured_triangle_covered_px={}", values[44], values[45], values[46], values[47], values[48], values[49], values[50], values[51], values[52], values[53], values[54], values[55], values[56], values[57], values[58], values[59], values[60], values[61], values[62], values[63]).expect("writing to a String cannot fail");
         write!(&mut line, " textured_triangle_candidate_px={} textured_triangle_narrowed_rows={} textured_triangle_full_scan_rows={} constant_texel_textured_triangle_calls={} constant_texel_textured_triangle_white_texel_calls={} constant_texel_textured_triangle_non_white_texel_calls={} constant_texel_textured_triangle_white_alpha_only_eligible_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_uniform_rgb_calls={} constant_texel_textured_triangle_white_alpha_only_rejected_varying_rgb_calls={} constant_texel_textured_triangle_candidate_px={} constant_texel_textured_triangle_covered_px={} constant_texel_textured_triangle_white_texel_covered_px={} constant_texel_textured_triangle_white_endpoint_rows={} constant_texel_textured_triangle_white_endpoint_match_rows={} constant_texel_textured_triangle_white_endpoint_mismatch_rows={} constant_texel_textured_triangle_white_endpoint_empty_rows={} constant_texel_textured_triangle_white_endpoint_span_px={} constant_texel_textured_triangle_white_endpoint_probe_px={} constant_texel_textured_triangle_white_endpoint_render_rows={} constant_texel_textured_triangle_white_endpoint_render_px={} constant_texel_textured_triangle_white_scan_runs={}", values[64], values[65], values[66], values[67], values[68], values[69], values[70], values[71], values[72], values[73], values[74], values[75], values[76], values[77], values[78], values[79], values[80], values[81], values[82], values[83], values[84], values[85]).expect("writing to a String cannot fail");
         write!(&mut line, " constant_texel_textured_triangle_white_scan_multi_run_rows={} constant_texel_textured_triangle_non_white_texel_covered_px={} constant_texel_textured_triangle_opaque_px={} constant_texel_textured_triangle_translucent_px={} constant_texel_textured_triangle_transparent_px={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_constant_alpha_run_px={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_calls={} constant_texel_textured_triangle_white_alpha_only_variable_alpha_run_px={} constant_texel_textured_triangle_white_constant_alpha_run_calls={} constant_texel_textured_triangle_white_constant_alpha_run_px={} constant_texel_textured_triangle_white_constant_color_run_calls={} constant_texel_textured_triangle_white_constant_color_run_px={} constant_texel_textured_triangle_white_variable_color_run_calls={} constant_texel_textured_triangle_white_variable_color_run_px={} constant_texel_textured_triangle_white_variable_alpha_run_calls={} constant_texel_textured_triangle_white_variable_alpha_run_px={} constant_texel_textured_triangle_us={} constant_texel_textured_triangle_white_texel_us={} constant_texel_textured_triangle_non_white_texel_us={}", values[86], values[87], values[88], values[89], values[90], values[91], values[92], values[93], values[94], values[95], values[96], values[97], values[98], values[99], values[100], values[101], values[102], values[103], values[104], values[105]).expect("writing to a String cannot fail");
-        write!(&mut line, " sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} textured_rect_separable_run_calls={} textured_rect_separable_run_px={} textured_rect_separable_opaque_run_calls={} textured_rect_separable_opaque_run_px={} textured_rect_separable_translucent_run_calls={} textured_rect_separable_translucent_run_px={} textured_rect_separable_transparent_run_calls={} textured_rect_separable_transparent_run_px={} textured_rect_separable_white_vertex_calls={} textured_rect_separable_white_vertex_px={} textured_rect_separable_modulated_vertex_calls={} textured_rect_separable_modulated_vertex_px={} textured_rect_separable_direct_calls={} textured_rect_separable_direct_px={} textured_rect_separable_direct_opaque_px={} textured_rect_separable_direct_translucent_px={} textured_rect_separable_direct_transparent_px={} textured_rect_sampled_vector_candidate_px={} textured_rect_sampled_white_vertex_contiguous_px={} textured_rect_sampled_modulated_vertex_contiguous_px={} textured_rect_sampled_modulated_contiguous_runs={} textured_rect_sampled_modulated_contiguous_px_lt4={} textured_rect_sampled_modulated_contiguous_px_4_7={} textured_rect_sampled_modulated_contiguous_px_8_15={} textured_rect_sampled_modulated_contiguous_px_16_31={} textured_rect_sampled_modulated_contiguous_px_32_63={} textured_rect_sampled_modulated_contiguous_px_64_plus={} textured_rect_sampled_modulated_opportunity_blocks_16={} textured_rect_sampled_modulated_opportunity_px_16={} textured_rect_sampled_modulated_true_tail_px_16={} textured_rect_sampled_vector_backend_available={} textured_rect_sampled_modulated_vector_attempt_blocks_16={} textured_rect_sampled_modulated_vector_success_blocks_16={} textured_rect_sampled_modulated_vector_fallback_blocks_16={} textured_rect_sampled_vector_blocks={} textured_rect_sampled_vector_opaque_blocks={} textured_rect_sampled_vector_transparent_blocks={} textured_rect_sampled_vector_mixed_blocks={} textured_rect_sampled_vector_tail_px={}", values[106], values[107], values[108], values[109], values[110], values[111], values[112], values[113], values[114], values[115], values[116], values[117], values[118], values[119], values[120], values[121], values[122], values[123], values[124], values[125], values[126], values[127], values[128], values[129], values[130], values[131], values[132], values[133], values[134], values[135], values[136], values[137], values[138], values[139], values[140], values[141], values[142], values[143], values[144], values[145], values[146], values[147], values[148]).expect("writing to a String cannot fail");
+        write!(&mut line, " sampled_textured_triangle_calls={} sampled_textured_triangle_candidate_px={} sampled_textured_triangle_covered_px={} sampled_textured_triangle_us={} textured_rect_separable_run_calls={} textured_rect_separable_run_px={} textured_rect_separable_opaque_run_calls={} textured_rect_separable_opaque_run_px={} textured_rect_separable_translucent_run_calls={} textured_rect_separable_translucent_run_px={} textured_rect_separable_transparent_run_calls={} textured_rect_separable_transparent_run_px={} textured_rect_separable_white_vertex_calls={} textured_rect_separable_white_vertex_px={} textured_rect_separable_modulated_vertex_calls={} textured_rect_separable_modulated_vertex_px={} textured_rect_separable_direct_calls={} textured_rect_separable_direct_px={} textured_rect_separable_direct_opaque_px={} textured_rect_separable_direct_translucent_px={} textured_rect_separable_direct_transparent_px={} textured_rect_sampled_vector_candidate_px={} textured_rect_sampled_white_vertex_contiguous_px={} textured_rect_sampled_modulated_vertex_contiguous_px={} textured_rect_sampled_modulated_contiguous_runs={} textured_rect_sampled_modulated_contiguous_px_lt4={} textured_rect_sampled_modulated_contiguous_px_4_7={} textured_rect_sampled_modulated_contiguous_px_8_15={} textured_rect_sampled_modulated_contiguous_px_16_31={} textured_rect_sampled_modulated_contiguous_px_32_63={} textured_rect_sampled_modulated_contiguous_px_64_plus={} textured_rect_sampled_modulated_opportunity_blocks_16={} textured_rect_sampled_modulated_opportunity_px_16={} textured_rect_sampled_modulated_true_tail_px_16={} textured_rect_sampled_modulated_opportunity_blocks_4={} textured_rect_sampled_modulated_opportunity_px_4={} textured_rect_sampled_modulated_true_tail_px_4={} textured_rect_sampled_vector_backend_available={} textured_rect_sampled_modulated_vector_attempt_blocks_16={} textured_rect_sampled_modulated_vector_success_blocks_16={} textured_rect_sampled_modulated_vector_fallback_blocks_16={} textured_rect_sampled_modulated_vector_attempt_blocks_4={} textured_rect_sampled_modulated_vector_success_blocks_4={} textured_rect_sampled_modulated_vector_fallback_blocks_4={} textured_rect_sampled_vector_blocks={} textured_rect_sampled_vector_opaque_blocks={} textured_rect_sampled_vector_transparent_blocks={} textured_rect_sampled_vector_mixed_blocks={} textured_rect_sampled_vector_tail_px={}", values[106], values[107], values[108], values[109], values[110], values[111], values[112], values[113], values[114], values[115], values[116], values[117], values[118], values[119], values[120], values[121], values[122], values[123], values[124], values[125], values[126], values[127], values[128], values[129], values[130], values[131], values[132], values[133], values[134], values[135], values[136], values[137], values[138], values[139], values[140], values[141], values[142], values[143], values[144], values[145], values[146], values[147], values[148], values[149], values[150], values[151], values[152], values[153], values[154]).expect("writing to a String cannot fail");
         let buckets = self.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16;
-        write!(&mut line, " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16={},{},{},{},{},{} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}", buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], values[149], values[150], values[151], values[152], values[153]).expect("writing to a String cannot fail");
+        write!(&mut line, " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16={},{},{},{},{},{} degenerate_triangle_skips={} fully_clipped_triangle_skips={} opaque_px={} translucent_px={} transparent_px={}", buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], values[155], values[156], values[157], values[158], values[159]).expect("writing to a String cannot fail");
         line
     }
 }
@@ -623,23 +658,29 @@ mod tests {
                 textured_rect_sampled_modulated_opportunity_blocks_16: 138,
                 textured_rect_sampled_modulated_opportunity_px_16: 139,
                 textured_rect_sampled_modulated_true_tail_px_16: 140,
-                textured_rect_sampled_vector_backend_available: 141,
-                textured_rect_sampled_modulated_vector_attempt_blocks_16: 142,
-                textured_rect_sampled_modulated_vector_success_blocks_16: 143,
-                textured_rect_sampled_modulated_vector_fallback_blocks_16: 144,
-                textured_rect_sampled_vector_blocks: 145,
-                textured_rect_sampled_vector_opaque_blocks: 146,
-                textured_rect_sampled_vector_transparent_blocks: 147,
-                textured_rect_sampled_vector_mixed_blocks: 148,
-                textured_rect_sampled_vector_tail_px: 149,
+                textured_rect_sampled_modulated_opportunity_blocks_4: 141,
+                textured_rect_sampled_modulated_opportunity_px_4: 142,
+                textured_rect_sampled_modulated_true_tail_px_4: 143,
+                textured_rect_sampled_vector_backend_available: 144,
+                textured_rect_sampled_modulated_vector_attempt_blocks_16: 145,
+                textured_rect_sampled_modulated_vector_success_blocks_16: 146,
+                textured_rect_sampled_modulated_vector_fallback_blocks_16: 147,
+                textured_rect_sampled_modulated_vector_attempt_blocks_4: 148,
+                textured_rect_sampled_modulated_vector_success_blocks_4: 149,
+                textured_rect_sampled_modulated_vector_fallback_blocks_4: 150,
+                textured_rect_sampled_vector_blocks: 151,
+                textured_rect_sampled_vector_opaque_blocks: 152,
+                textured_rect_sampled_vector_transparent_blocks: 153,
+                textured_rect_sampled_vector_mixed_blocks: 154,
+                textured_rect_sampled_vector_tail_px: 155,
                 textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16: [
-                    150, 151, 152, 153, 154, 155,
+                    156, 157, 158, 159, 160, 161,
                 ],
-                degenerate_triangle_skips: 156,
-                fully_clipped_triangle_skips: 157,
-                opaque_px: 158,
-                translucent_px: 159,
-                transparent_px: 160,
+                degenerate_triangle_skips: 162,
+                fully_clipped_triangle_skips: 163,
+                opaque_px: 164,
+                translucent_px: 165,
+                transparent_px: 166,
             }
         };
     }
@@ -666,7 +707,7 @@ mod tests {
         assert!(line.contains(" textured_rect_separable_uv_calls=11 "));
         assert!(line.contains(" textured_rect_nonseparable_uv_px=14 "));
         assert!(line.contains(
-            " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16=150,151,152,153,154,155 "
+            " textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16=156,157,158,159,160,161 "
         ));
         assert!(line.contains(" textured_rect_sampled_vector_candidate_px=128 "));
         assert!(line.contains(" textured_rect_sampled_modulated_contiguous_runs=131 "));
@@ -674,14 +715,20 @@ mod tests {
         assert!(line.contains(" textured_rect_sampled_modulated_opportunity_blocks_16=138 "));
         assert!(line.contains(" textured_rect_sampled_modulated_opportunity_px_16=139 "));
         assert!(line.contains(" textured_rect_sampled_modulated_true_tail_px_16=140 "));
-        assert!(line.contains(" textured_rect_sampled_vector_backend_available=141 "));
-        assert!(line.contains(" textured_rect_sampled_modulated_vector_attempt_blocks_16=142 "));
-        assert!(line.contains(" textured_rect_sampled_modulated_vector_success_blocks_16=143 "));
-        assert!(line.contains(" textured_rect_sampled_modulated_vector_fallback_blocks_16=144 "));
-        assert!(line.contains(" textured_rect_sampled_vector_tail_px=149 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_opportunity_blocks_4=141 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_opportunity_px_4=142 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_true_tail_px_4=143 "));
+        assert!(line.contains(" textured_rect_sampled_vector_backend_available=144 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_vector_attempt_blocks_16=145 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_vector_success_blocks_16=146 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_vector_fallback_blocks_16=147 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_vector_attempt_blocks_4=148 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_vector_success_blocks_4=149 "));
+        assert!(line.contains(" textured_rect_sampled_modulated_vector_fallback_blocks_4=150 "));
+        assert!(line.contains(" textured_rect_sampled_vector_tail_px=155 "));
         assert_eq!(
             actual_values,
-            (1..=149).chain(156..=160).collect::<Vec<_>>()
+            (1..=155).chain(162..=166).collect::<Vec<_>>()
         );
     }
 
@@ -706,7 +753,7 @@ mod tests {
 
         let mut expected = stats;
         expected.textured_rect_sampled_vector_backend_available = 0;
-        assert_eq!(raster_stats_values!(&expected), [0; 154]);
+        assert_eq!(raster_stats_values!(&expected), [0; 160]);
         assert_eq!(
             stats.textured_rect_separable_run_px_buckets_le1_le2_le4_le8_le16_gt16,
             [0; 6]
