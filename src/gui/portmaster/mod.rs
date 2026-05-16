@@ -2,8 +2,6 @@
 
 #[cfg(target_os = "linux")]
 use std::env;
-#[cfg(target_os = "linux")]
-use std::ffi::OsString;
 use std::io;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -54,8 +52,6 @@ const RENDER_STATS_EVERY_ENV_VAR: &str = "DREAM_INI_PM_RENDER_STATS_EVERY";
 const HITCH_LOG_ENV_VAR: &str = "DREAM_INI_PM_HITCH_LOG_MS";
 #[cfg(target_os = "linux")]
 const RENDER_TRACE_ENV_VAR: &str = "DREAM_INI_PM_RENDER_TRACE";
-#[cfg(target_os = "linux")]
-const DISABLE_SOLID_FAN_ENV_VAR: &str = "DREAM_INI_PM_DISABLE_SOLID_FAN";
 #[cfg(target_os = "linux")]
 const DEFAULT_RENDER_STATS_EVERY: u64 = 30;
 pub(crate) fn run() -> ExitCode {
@@ -172,15 +168,13 @@ impl<'a> FramebufferGuiRuntime<'a> {
         let shell = PortMasterGuiShell::new(log);
         let render_log_config = RenderLogConfig::from_env();
         render_log_config.log(log);
-        let renderer_config = RendererConfig::from_env();
-        renderer_config.log(log);
         Self {
             egui_context,
             pending_repaint_delay,
             app,
             shell,
             snapshots: Vec::new(),
-            renderer: SoftwareRenderer::new(renderer_config.disable_solid_fan),
+            renderer: SoftwareRenderer::default(),
             log,
             frame_interval,
             render_log_config,
@@ -376,47 +370,6 @@ impl IdlePollLogState {
         let skipped = self.skipped_since_frame_log;
         self.skipped_since_frame_log = 0;
         skipped
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RendererConfig {
-    disable_solid_fan: bool,
-    disable_solid_fan_raw: Option<OsString>,
-}
-
-#[cfg(target_os = "linux")]
-impl RendererConfig {
-    fn from_env() -> Self {
-        let disable_solid_fan_raw = env::var_os(DISABLE_SOLID_FAN_ENV_VAR);
-        Self::from_raw(disable_solid_fan_raw)
-    }
-
-    fn from_values(disable_solid_fan: Option<&str>) -> Self {
-        Self::from_raw(disable_solid_fan.map(OsString::from))
-    }
-
-    fn from_raw(disable_solid_fan_raw: Option<OsString>) -> Self {
-        let disable_solid_fan = env_flag_enabled(
-            disable_solid_fan_raw
-                .as_deref()
-                .and_then(|value| value.to_str()),
-        );
-        Self {
-            disable_solid_fan,
-            disable_solid_fan_raw,
-        }
-    }
-
-    fn log(&self, log: Option<&SharedLog>) {
-        write_log(
-            log,
-            format!(
-                "portmaster renderer config disable_solid_fan={} env_{}={:?}",
-                self.disable_solid_fan, DISABLE_SOLID_FAN_ENV_VAR, self.disable_solid_fan_raw,
-            ),
-        );
     }
 }
 
@@ -648,20 +601,6 @@ mod tests {
         assert!(should_log_render_stats(0, config));
         assert!(should_log_render_stats(1, config));
         assert!(should_log_render_stats(999, config));
-    }
-
-    #[test]
-    fn renderer_config_defaults_solid_fan_enabled() {
-        let config = RendererConfig::from_values(None);
-
-        assert!(!config.disable_solid_fan);
-    }
-
-    #[test]
-    fn renderer_config_can_disable_solid_fan() {
-        let config = RendererConfig::from_values(Some("true"));
-
-        assert!(config.disable_solid_fan);
     }
 
     #[test]
