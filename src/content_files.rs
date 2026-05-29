@@ -100,6 +100,7 @@ pub(crate) fn import_content_files(
         &mut warnings,
     )?;
 
+    // Vanilla/G7 order: group, mtime, reverse case-insensitive filename, then path.
     content_files.sort_by(|left, right| {
         content_file_group(&left.name)
             .cmp(&content_file_group(&right.name))
