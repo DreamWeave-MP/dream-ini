@@ -80,8 +80,8 @@ impl IniImporter {
     /// Imports from paths into the lightweight map model.
     ///
     /// # Errors
-    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, content files
-    /// cannot be resolved, or plugin headers are invalid.
+    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, content or
+    /// archive names are invalid, fallback archives cannot be resolved, or cfg parsing fails.
     pub fn import_paths(
         &self,
         ini_path: &Path,
@@ -93,8 +93,8 @@ impl IniImporter {
     /// Imports from an INI path and an optional cfg path.
     ///
     /// # Errors
-    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, content files
-    /// cannot be resolved, or plugin headers are invalid.
+    /// Returns [`ImportError`] when files cannot be read, encoding is unsupported, content or
+    /// archive names are invalid, fallback archives cannot be resolved, or cfg parsing fails.
     pub fn import_optional_cfg_path(
         &self,
         ini_path: &Path,
@@ -134,8 +134,8 @@ impl IniImporter {
     /// Imports already parsed maps into the lightweight map model.
     ///
     /// # Errors
-    /// Returns [`ImportError`] when content files cannot be resolved or plugin headers cannot be
-    /// read or decoded.
+    /// Returns [`ImportError`] when content or archive names are invalid, fallback archives cannot
+    /// be resolved, or cfg normalization fails.
     pub fn import_maps(
         &self,
         cfg: &mut MultiMap,
@@ -166,17 +166,14 @@ impl IniImporter {
         }
 
         if self.options.import_game_files {
-            let encoding = self.effective_encoding(&imported_cfg)?;
             let imported_content = import_content_files(ContentFileImportRequest {
                 ini,
                 cfg: &search_cfg,
                 ini_path,
                 cfg_dir,
-                game: self.options.game,
                 explicit_data_dirs: &self.options.data_dirs,
                 explicit_data_dir_base: self.options.data_dir_base.as_deref(),
                 write_resolved_data_dirs: self.options.write_resolved_data_dirs,
-                encoding,
                 verbose: self.options.verbose,
             })?;
             for data_dir in imported_content.data_dirs {

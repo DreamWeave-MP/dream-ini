@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::events::ImportEvent;
-use crate::plugin::{apply_morrowind_expansion_order, dependency_sort, read_plugin_header};
-use crate::{Game, ImportError, ImportWarning, MultiMap, TextEncoding};
+use crate::{ImportError, ImportWarning, MultiMap};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportedContentFiles {
@@ -35,11 +34,9 @@ pub(crate) struct ContentFileImportRequest<'a> {
     pub(crate) cfg: &'a MultiMap,
     pub(crate) ini_path: &'a Path,
     pub(crate) cfg_dir: Option<&'a Path>,
-    pub(crate) game: Game,
     pub(crate) explicit_data_dirs: &'a [PathBuf],
     pub(crate) explicit_data_dir_base: Option<&'a Path>,
     pub(crate) write_resolved_data_dirs: bool,
-    pub(crate) encoding: TextEncoding,
     pub(crate) verbose: bool,
 }
 
@@ -111,20 +108,17 @@ pub(crate) fn import_content_files(
     }
 
     content_files.sort_by(|left, right| {
-        left.sort_key
-            .cmp(&right.sort_key)
+        content_file_group(&left.name)
+            .cmp(&content_file_group(&right.name))
+            .then_with(|| left.sort_key.cmp(&right.sort_key))
+            .then_with(|| {
+                left.name
+                    .to_ascii_lowercase()
+                    .cmp(&right.name.to_ascii_lowercase())
+            })
             .then_with(|| left.path.cmp(&right.path))
     });
-
-    let format = request.game.plugin_format();
-    let mut dependencies = Vec::new();
-    for content_file in content_files {
-        let header = read_plugin_header(&content_file.path, format, request.encoding)?;
-        dependencies.push((header.name, header.masters));
-    }
-
-    let mut content = dependency_sort(dependencies);
-    apply_morrowind_expansion_order(&mut content);
+    let content = content_files.into_iter().map(|file| file.name).collect();
 
     Ok(ImportedContentFiles {
         content,
@@ -291,6 +285,7 @@ fn resolve_content_file(
                 });
             }
             return Some(ResolvedContentFile {
+                name: file.to_owned(),
                 sort_key: system_time_key(modified),
                 path,
                 data_path: search_path.path.clone(),
@@ -332,6 +327,7 @@ struct ContentSearchPath {
 
 #[derive(Debug, Clone)]
 struct ResolvedContentFile {
+    name: String,
     sort_key: u128,
     path: PathBuf,
     data_path: PathBuf,
@@ -475,6 +471,10 @@ fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
     value
         .get(value.len().saturating_sub(suffix.len())..)
         .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+}
+
+fn content_file_group(file: &str) -> u8 {
+    u8::from(!ends_with_ignore_ascii_case(file, ".esm"))
 }
 
 fn system_time_key(time: SystemTime) -> u128 {

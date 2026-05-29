@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::fs;
+use std::fs::{self, FileTimes};
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::test_support::{tes3_bytes, unique_test_dir, values};
 use crate::{
@@ -8,13 +9,22 @@ use crate::{
     parse_ini_str,
 };
 
+fn write_with_modified(path: &std::path::Path, bytes: &[u8], seconds: u64) {
+    fs::write(path, bytes).unwrap();
+    let time = UNIX_EPOCH + Duration::from_secs(seconds);
+    fs::File::open(path)
+        .unwrap()
+        .set_times(FileTimes::new().set_accessed(time).set_modified(time))
+        .unwrap();
+}
+
 #[test]
-fn imports_game_files_using_tes3_dependencies() {
-    let dir = unique_test_dir("game-files");
+fn imports_game_files_with_esm_before_esp() {
+    let dir = unique_test_dir("game-files-esm-before-esp");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
-    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
-    fs::write(data_dir.join("Patch.esp"), tes3_bytes(&["Base.esm"])).unwrap();
+    write_with_modified(&data_dir.join("Patch.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("Base.esm"), &tes3_bytes(&[]), 200);
 
     let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
     let ini = parse_ini_str("[Game Files]\nGameFile0=Patch.esp\nGameFile1=Base.esm\n");
@@ -33,6 +43,77 @@ fn imports_game_files_using_tes3_dependencies() {
         &["Base.esm".to_owned(), "Patch.esp".to_owned()]
     );
     assert!(result.events.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn imports_game_files_sorting_each_extension_group_by_mtime() {
+    let dir = unique_test_dir("game-files-mtime-groups");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    write_with_modified(&data_dir.join("Newer.esm"), &tes3_bytes(&[]), 400);
+    write_with_modified(&data_dir.join("Older.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("Older.esm"), &tes3_bytes(&[]), 300);
+    write_with_modified(&data_dir.join("Newer.esp"), &tes3_bytes(&[]), 200);
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str(concat!(
+        "[Game Files]\n",
+        "GameFile0=Newer.esm\n",
+        "GameFile1=Older.esp\n",
+        "GameFile2=Older.esm\n",
+        "GameFile3=Newer.esp\n",
+    ));
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &[
+            "Older.esm".to_owned(),
+            "Newer.esm".to_owned(),
+            "Older.esp".to_owned(),
+            "Newer.esp".to_owned(),
+        ]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn plugin_header_dependencies_do_not_reorder_content_files() {
+    let dir = unique_test_dir("game-files-ignore-header-dependencies");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    write_with_modified(
+        &data_dir.join("Dependent.esp"),
+        &tes3_bytes(&["Master.esp"]),
+        100,
+    );
+    write_with_modified(&data_dir.join("Master.esp"), &tes3_bytes(&[]), 200);
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Master.esp\nGameFile1=Dependent.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &["Dependent.esp".to_owned(), "Master.esp".to_owned()]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -539,14 +620,13 @@ fn missing_game_file_stops_scan_and_writes_partial_content() {
 }
 
 #[test]
-fn invalid_plugin_header_leaves_cfg_unchanged() {
-    let dir = unique_test_dir("game-files-invalid-header-atomic");
+fn invalid_plugin_header_imports_when_suffix_and_resolution_are_valid() {
+    let dir = unique_test_dir("game-files-invalid-header-imports");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
     fs::write(data_dir.join("Bad.esp"), b"TES4").unwrap();
 
     let mut cfg = parse_cfg_str("fallback=Old_Setting,old\nno-sound=0\n");
-    let original_cfg = cfg.clone();
     let ini = parse_ini_str("[General]\nDisable Audio=1\n[Game Files]\nGameFile0=Bad.esp\n");
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
@@ -554,12 +634,12 @@ fn invalid_plugin_header_leaves_cfg_unchanged() {
         ..ImportOptions::default()
     });
 
-    let error = importer
+    importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err();
+        .unwrap();
 
-    assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
-    assert_eq!(cfg, original_cfg);
+    assert_eq!(values(&cfg, "no-sound"), &["1".to_owned()]);
+    assert_eq!(values(&cfg, "content"), &["Bad.esp".to_owned()]);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -607,21 +687,26 @@ fn duplicate_content_file_uses_first_search_path() {
     fs::write(configured_data_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
 
     let mut cfg = parse_cfg_str(&format!("data={}\n", configured_data_dir.display()));
-    let original_cfg = cfg.clone();
     let ini = parse_ini_str("[Game Files]\nGameFile0=Patch.esp\n");
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
         import_archives: false,
-        data_dirs: vec![explicit_data_dir],
+        data_dirs: vec![explicit_data_dir.clone()],
         ..ImportOptions::default()
     });
 
-    let error = importer
+    importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err();
+        .unwrap();
 
-    assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
-    assert_eq!(cfg, original_cfg);
+    assert_eq!(values(&cfg, "content"), &["Patch.esp".to_owned()]);
+    assert_eq!(
+        values(&cfg, "data"),
+        &[
+            configured_data_dir.to_string_lossy().into_owned(),
+            explicit_data_dir.to_string_lossy().into_owned(),
+        ]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
