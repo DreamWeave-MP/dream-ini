@@ -111,6 +111,11 @@ pub(super) fn warning_title(warning: &ImportWarning) -> String {
         ImportWarning::MalformedIniLine { line } => {
             format!("Línea INI mal formada ignorada: {line}")
         }
+        ImportWarning::MissingGameFile { file } => {
+            format!(
+                "Entrada GameFile no encontrada: {file}. No se importaron las entradas GameFile posteriores."
+            )
+        }
     }
 }
 

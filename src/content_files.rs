@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::events::ImportEvent;
-use crate::plugin::{apply_morrowind_expansion_order, dependency_sort, read_plugin_header};
-use crate::{Game, ImportError, MultiMap, TextEncoding};
+use crate::{ImportError, ImportWarning, MultiMap};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportedContentFiles {
     pub(crate) content: Vec<String>,
     pub(crate) data_dirs: Vec<DataDirToWrite>,
     pub(crate) events: Vec<ImportEvent>,
+    pub(crate) warnings: Vec<ImportWarning>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,11 +34,9 @@ pub(crate) struct ContentFileImportRequest<'a> {
     pub(crate) cfg: &'a MultiMap,
     pub(crate) ini_path: &'a Path,
     pub(crate) cfg_dir: Option<&'a Path>,
-    pub(crate) game: Game,
     pub(crate) explicit_data_dirs: &'a [PathBuf],
     pub(crate) explicit_data_dir_base: Option<&'a Path>,
     pub(crate) write_resolved_data_dirs: bool,
-    pub(crate) encoding: TextEncoding,
     pub(crate) verbose: bool,
 }
 
@@ -93,36 +91,41 @@ pub(crate) fn import_content_files(
         request.write_resolved_data_dirs,
     );
     let mut events = Vec::new();
-    let mut content_files =
-        resolve_content_files(request.ini, &search_paths, request.verbose, &mut events)?;
+    let mut warnings = Vec::new();
+    let mut content_files = resolve_content_files(
+        request.ini,
+        &search_paths,
+        request.verbose,
+        &mut events,
+        &mut warnings,
+    )?;
 
+    // Vanilla/G7 order: group, mtime, reverse case-insensitive filename, then path.
+    content_files.sort_by(|left, right| {
+        content_file_group(&left.name)
+            .cmp(&content_file_group(&right.name))
+            .then_with(|| left.sort_key.cmp(&right.sort_key))
+            .then_with(|| {
+                right
+                    .name
+                    .to_ascii_lowercase()
+                    .cmp(&left.name.to_ascii_lowercase())
+            })
+            .then_with(|| left.path.cmp(&right.path))
+    });
     let data_dirs = used_data_dirs_to_write(request.cfg, request.cfg_dir, &content_files);
     for data_dir in &data_dirs {
         events.push(ImportEvent::DataDirAddedForContent {
             path: data_dir.path.clone(),
         });
     }
-
-    content_files.sort_by(|left, right| {
-        left.sort_key
-            .cmp(&right.sort_key)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-
-    let format = request.game.plugin_format();
-    let mut dependencies = Vec::new();
-    for content_file in content_files {
-        let header = read_plugin_header(&content_file.path, format, request.encoding)?;
-        dependencies.push((header.name, header.masters));
-    }
-
-    let mut content = dependency_sort(dependencies);
-    apply_morrowind_expansion_order(&mut content);
+    let content = content_files.into_iter().map(|file| file.name).collect();
 
     Ok(ImportedContentFiles {
         content,
         data_dirs,
         events,
+        warnings,
     })
 }
 
@@ -165,7 +168,7 @@ fn resolve_archives(
 
 fn archive_values(ini: &MultiMap) -> Vec<String> {
     let mut archives = vec!["Morrowind.bsa".to_owned()];
-    archives.extend(sequential_ini_values(ini, "Archives:Archive ").cloned());
+    archives.extend(sequential_ini_values_ignore_ascii_case(ini, "Archives", "Archive ").cloned());
     archives
 }
 
@@ -240,9 +243,9 @@ fn resolve_content_files(
     search_paths: &[ContentSearchPath],
     verbose: bool,
     events: &mut Vec<ImportEvent>,
+    warnings: &mut Vec<ImportWarning>,
 ) -> Result<Vec<ResolvedContentFile>, ImportError> {
     let mut content_files = Vec::new();
-    let mut missing_content_files = Vec::new();
     for file in game_file_values(ini).into_iter().map(|file| file.trim()) {
         if !ends_with_ignore_ascii_case(file, ".esm") && !ends_with_ignore_ascii_case(file, ".esp")
         {
@@ -255,21 +258,14 @@ fn resolve_content_files(
         if let Some(entry) = resolve_content_file(file, search_paths, verbose, events) {
             content_files.push(entry);
         } else {
-            missing_content_files.push(file.to_owned());
+            warnings.push(ImportWarning::MissingGameFile {
+                file: file.to_owned(),
+            });
+            break;
         }
     }
 
-    if missing_content_files.is_empty() {
-        Ok(content_files)
-    } else {
-        Err(ImportError::MissingContentFiles {
-            files: missing_content_files,
-            searched_paths: search_paths
-                .iter()
-                .map(|search_path| search_path.path.clone())
-                .collect(),
-        })
-    }
+    Ok(content_files)
 }
 
 fn resolve_content_file(
@@ -290,6 +286,7 @@ fn resolve_content_file(
                 });
             }
             return Some(ResolvedContentFile {
+                name: file.to_owned(),
                 sort_key: system_time_key(modified),
                 path,
                 data_path: search_path.path.clone(),
@@ -303,19 +300,7 @@ fn resolve_content_file(
 }
 
 fn game_file_values(ini: &MultiMap) -> Vec<&String> {
-    let mut values = Vec::new();
-    for (key, entries) in ini {
-        if let Some(index) = key
-            .strip_prefix("Game Files:GameFile")
-            .and_then(|suffix| suffix.parse::<usize>().ok())
-        {
-            for (entry_index, entry) in entries.iter().enumerate() {
-                values.push((index, entry_index, entry));
-            }
-        }
-    }
-    values.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    values.into_iter().map(|(_, _, value)| value).collect()
+    sequential_ini_values_ignore_ascii_case(ini, "Game Files", "GameFile").collect()
 }
 
 fn is_plugin_filename(file: &str) -> bool {
@@ -343,6 +328,7 @@ struct ContentSearchPath {
 
 #[derive(Debug, Clone)]
 struct ResolvedContentFile {
+    name: String,
     sort_key: u128,
     path: PathBuf,
     data_path: PathBuf,
@@ -406,11 +392,24 @@ fn used_archive_data_dirs_to_write(
     used_paths
 }
 
-fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<Item = &'a String> {
+fn sequential_ini_values_ignore_ascii_case<'a>(
+    ini: &'a MultiMap,
+    section: &str,
+    key_prefix: &str,
+) -> impl Iterator<Item = &'a String> {
     (0..)
-        .map(move |index| format!("{prefix}{index}"))
-        .map_while(move |key| ini.get(&key))
-        .flat_map(|values| values.iter())
+        .map(move |index| format!("{section}:{key_prefix}{index}"))
+        .map_while(move |key| ini_values_ignore_ascii_case(ini, &key))
+        .flatten()
+}
+
+fn ini_values_ignore_ascii_case<'a>(ini: &'a MultiMap, key: &str) -> Option<Vec<&'a String>> {
+    let values: Vec<&String> = ini
+        .iter()
+        .filter(|(entry_key, _)| entry_key.eq_ignore_ascii_case(key))
+        .flat_map(|(_, values)| values)
+        .collect();
+    (!values.is_empty()).then_some(values)
 }
 
 fn add_search_paths(
@@ -473,6 +472,10 @@ fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
     value
         .get(value.len().saturating_sub(suffix.len())..)
         .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+}
+
+fn content_file_group(file: &str) -> u8 {
+    u8::from(!ends_with_ignore_ascii_case(file, ".esm"))
 }
 
 fn system_time_key(time: SystemTime) -> u128 {

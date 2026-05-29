@@ -73,14 +73,6 @@ pub enum Game {
     Morrowind,
 }
 
-impl Game {
-    pub(crate) fn plugin_format(self) -> PluginFormat {
-        match self {
-            Self::Morrowind => PluginFormat::Tes3,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginFormat {
     Tes3,

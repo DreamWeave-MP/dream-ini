@@ -1,19 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::fs;
+use std::fs::{self, FileTimes, OpenOptions};
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::test_support::{tes3_bytes, unique_test_dir, values};
 use crate::{
-    ImportError, ImportEvent, ImportOptions, IniImporter, MultiMap, parse_cfg_str, parse_ini_str,
+    ImportError, ImportEvent, ImportOptions, ImportWarning, IniImporter, MultiMap, parse_cfg_str,
+    parse_ini_str,
 };
 
+fn write_with_modified(path: &std::path::Path, bytes: &[u8], seconds: u64) {
+    fs::write(path, bytes).unwrap();
+    let time = UNIX_EPOCH + Duration::from_secs(seconds);
+    OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_times(FileTimes::new().set_accessed(time).set_modified(time))
+        .unwrap();
+}
+
 #[test]
-fn imports_game_files_using_tes3_dependencies() {
-    let dir = unique_test_dir("game-files");
+fn imports_game_files_with_esm_before_esp() {
+    let dir = unique_test_dir("game-files-esm-before-esp");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
-    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
-    fs::write(data_dir.join("Patch.esp"), tes3_bytes(&["Base.esm"])).unwrap();
+    write_with_modified(&data_dir.join("Patch.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("Base.esm"), &tes3_bytes(&[]), 200);
 
     let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
     let ini = parse_ini_str("[Game Files]\nGameFile0=Patch.esp\nGameFile1=Base.esm\n");
@@ -32,6 +45,114 @@ fn imports_game_files_using_tes3_dependencies() {
         &["Base.esm".to_owned(), "Patch.esp".to_owned()]
     );
     assert!(result.events.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn imports_game_files_sorting_each_extension_group_by_mtime() {
+    let dir = unique_test_dir("game-files-mtime-groups");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    write_with_modified(&data_dir.join("Newer.esm"), &tes3_bytes(&[]), 400);
+    write_with_modified(&data_dir.join("Older.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("Older.esm"), &tes3_bytes(&[]), 300);
+    write_with_modified(&data_dir.join("Newer.esp"), &tes3_bytes(&[]), 200);
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str(concat!(
+        "[Game Files]\n",
+        "GameFile0=Newer.esm\n",
+        "GameFile1=Older.esp\n",
+        "GameFile2=Older.esm\n",
+        "GameFile3=Newer.esp\n",
+    ));
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &[
+            "Older.esm".to_owned(),
+            "Newer.esm".to_owned(),
+            "Older.esp".to_owned(),
+            "Newer.esp".to_owned(),
+        ]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn imports_game_files_sorting_equal_mtime_by_reverse_name() {
+    let dir = unique_test_dir("game-files-equal-mtime-reverse-name");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    write_with_modified(&data_dir.join("Alpha.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("gamma.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("Beta.esp"), &tes3_bytes(&[]), 100);
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str(concat!(
+        "[Game Files]\n",
+        "GameFile0=Alpha.esp\n",
+        "GameFile1=gamma.esp\n",
+        "GameFile2=Beta.esp\n",
+    ));
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &[
+            "gamma.esp".to_owned(),
+            "Beta.esp".to_owned(),
+            "Alpha.esp".to_owned(),
+        ]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn plugin_header_dependencies_do_not_reorder_content_files() {
+    let dir = unique_test_dir("game-files-ignore-header-dependencies");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    write_with_modified(
+        &data_dir.join("Dependent.esp"),
+        &tes3_bytes(&["Master.esp"]),
+        100,
+    );
+    write_with_modified(&data_dir.join("Master.esp"), &tes3_bytes(&[]), 200);
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Master.esp\nGameFile1=Dependent.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &["Dependent.esp".to_owned(), "Master.esp".to_owned()]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -190,6 +311,54 @@ fn repeated_explicit_data_dirs_use_search_order() {
 }
 
 #[test]
+fn generated_data_dirs_follow_sorted_content_order() {
+    let dir = unique_test_dir("game-files-data-dirs-sorted-content-order");
+    let newer_data_dir = dir.join("Newer Data");
+    let older_data_dir = dir.join("Older Data");
+    fs::create_dir_all(&newer_data_dir).unwrap();
+    fs::create_dir_all(&older_data_dir).unwrap();
+    write_with_modified(&newer_data_dir.join("Newer.esp"), &tes3_bytes(&[]), 200);
+    write_with_modified(&older_data_dir.join("Older.esp"), &tes3_bytes(&[]), 100);
+
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Newer.esp\nGameFile1=Older.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        data_dirs: vec![newer_data_dir.clone(), older_data_dir.clone()],
+        ..ImportOptions::default()
+    });
+
+    let result = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &["Older.esp".to_owned(), "Newer.esp".to_owned()]
+    );
+    assert_eq!(
+        values(&cfg, "data"),
+        &[
+            older_data_dir.to_string_lossy().into_owned(),
+            newer_data_dir.to_string_lossy().into_owned(),
+        ]
+    );
+    assert_eq!(
+        result.events,
+        vec![
+            ImportEvent::DataDirAddedForContent {
+                path: older_data_dir.clone(),
+            },
+            ImportEvent::DataDirAddedForContent {
+                path: newer_data_dir.clone(),
+            },
+        ]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn default_data_files_path_is_not_duplicated() {
     let dir = unique_test_dir("game-files-default-data-duplicate");
     let data_dir = dir.join("Data Files");
@@ -330,13 +499,19 @@ fn cfg_resources_vfs_is_not_used_for_morrowind_content_import() {
         ..ImportOptions::default()
     });
 
-    importer
+    let result = importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err();
+        .unwrap();
 
     assert_eq!(values(&cfg, "resources"), &["resources".to_owned()]);
     assert_eq!(values(&cfg, "content"), &[] as &[String]);
     assert_eq!(values(&cfg, "data"), &[] as &[String]);
+    assert_eq!(
+        result.warnings,
+        vec![ImportWarning::MissingGameFile {
+            file: "Base.esm".to_owned()
+        }]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -426,14 +601,20 @@ fn cfg_data_local_is_not_used_as_only_content_source() {
         import_archives: false,
         ..ImportOptions::default()
     });
-    let error = importer.import_paths(&ini, &cfg).unwrap_err().to_string();
+    let result = importer.import_paths(&ini, &cfg).unwrap();
 
-    assert!(error.contains("content files not found: Base.esm"));
+    assert_eq!(values(&result.cfg, "content"), &[] as &[String]);
+    assert_eq!(
+        result.warnings,
+        vec![ImportWarning::MissingGameFile {
+            file: "Base.esm".to_owned()
+        }]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn missing_default_data_files_path_fails_import() {
+fn missing_default_data_files_path_warns_and_imports_no_content() {
     let dir = unique_test_dir("game-files-default-data-missing");
     fs::create_dir_all(&dir).unwrap();
 
@@ -445,76 +626,94 @@ fn missing_default_data_files_path_fails_import() {
         ..ImportOptions::default()
     });
 
-    let error = importer
+    let result = importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err()
-        .to_string();
+        .unwrap();
 
     assert_eq!(values(&cfg, "content"), &[] as &[String]);
     assert_eq!(values(&cfg, "data"), &[] as &[String]);
-    assert!(error.contains("content files not found: Missing.esm"));
-    assert!(error.contains("pass --data or add data=..."));
+    assert_eq!(
+        result.warnings,
+        vec![ImportWarning::MissingGameFile {
+            file: "Missing.esm".to_owned()
+        }]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn missing_game_files_fail_import() {
+fn missing_game_file_warns_and_imports_no_content() {
     let dir = unique_test_dir("game-files-missing");
-    fs::create_dir_all(&dir).unwrap();
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Skipped.esp"), tes3_bytes(&[])).unwrap();
 
     let mut cfg = MultiMap::new();
-    let ini = parse_ini_str("[Game Files]\nGameFile0=Missing.esp\n");
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Missing.esp\nGameFile1=Skipped.esp\n");
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
         import_archives: false,
         ..ImportOptions::default()
     });
 
-    let error = importer
+    let result = importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err()
-        .to_string();
+        .unwrap();
 
     assert_eq!(values(&cfg, "content"), &[] as &[String]);
-    assert!(error.contains("content files not found: Missing.esp"));
+    assert_eq!(
+        result.warnings,
+        vec![ImportWarning::MissingGameFile {
+            file: "Missing.esp".to_owned()
+        }]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn partially_resolved_game_files_fail_without_writing_partial_content() {
+fn missing_game_file_stops_scan_and_writes_partial_content() {
     let dir = unique_test_dir("game-files-partial");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
     fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(data_dir.join("Skipped.esp"), tes3_bytes(&["Base.esm"])).unwrap();
 
     let mut cfg = MultiMap::new();
-    let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\nGameFile1=Missing.esp\n");
+    let ini = parse_ini_str(
+        "[Game Files]\nGameFile0=Base.esm\nGameFile1=Missing.esp\nGameFile2=Skipped.esp\n",
+    );
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
         import_archives: false,
         ..ImportOptions::default()
     });
 
-    let error = importer
+    let result = importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err()
-        .to_string();
+        .unwrap();
 
-    assert_eq!(values(&cfg, "content"), &[] as &[String]);
-    assert_eq!(values(&cfg, "data"), &[] as &[String]);
-    assert!(error.contains("content files not found: Missing.esp"));
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+    assert_eq!(
+        values(&cfg, "data"),
+        &[data_dir.to_string_lossy().into_owned()]
+    );
+    assert_eq!(
+        result.warnings,
+        vec![ImportWarning::MissingGameFile {
+            file: "Missing.esp".to_owned()
+        }]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn invalid_plugin_header_leaves_cfg_unchanged() {
-    let dir = unique_test_dir("game-files-invalid-header-atomic");
+fn invalid_plugin_header_imports_when_suffix_and_resolution_are_valid() {
+    let dir = unique_test_dir("game-files-invalid-header-imports");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
     fs::write(data_dir.join("Bad.esp"), b"TES4").unwrap();
 
     let mut cfg = parse_cfg_str("fallback=Old_Setting,old\nno-sound=0\n");
-    let original_cfg = cfg.clone();
     let ini = parse_ini_str("[General]\nDisable Audio=1\n[Game Files]\nGameFile0=Bad.esp\n");
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
@@ -522,12 +721,12 @@ fn invalid_plugin_header_leaves_cfg_unchanged() {
         ..ImportOptions::default()
     });
 
-    let error = importer
+    importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err();
+        .unwrap();
 
-    assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
-    assert_eq!(cfg, original_cfg);
+    assert_eq!(values(&cfg, "no-sound"), &["1".to_owned()]);
+    assert_eq!(values(&cfg, "content"), &["Bad.esp".to_owned()]);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -575,26 +774,31 @@ fn duplicate_content_file_uses_first_search_path() {
     fs::write(configured_data_dir.join("Patch.esp"), tes3_bytes(&[])).unwrap();
 
     let mut cfg = parse_cfg_str(&format!("data={}\n", configured_data_dir.display()));
-    let original_cfg = cfg.clone();
     let ini = parse_ini_str("[Game Files]\nGameFile0=Patch.esp\n");
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
         import_archives: false,
-        data_dirs: vec![explicit_data_dir],
+        data_dirs: vec![explicit_data_dir.clone()],
         ..ImportOptions::default()
     });
 
-    let error = importer
+    importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err();
+        .unwrap();
 
-    assert!(matches!(error, ImportError::InvalidPluginHeader { .. }));
-    assert_eq!(cfg, original_cfg);
+    assert_eq!(values(&cfg, "content"), &["Patch.esp".to_owned()]);
+    assert_eq!(
+        values(&cfg, "data"),
+        &[
+            configured_data_dir.to_string_lossy().into_owned(),
+            explicit_data_dir.to_string_lossy().into_owned(),
+        ]
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn sparse_game_file_indices_are_imported() {
+fn game_file_import_stops_at_first_missing_index() {
     let dir = unique_test_dir("game-files-sparse");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
@@ -603,6 +807,31 @@ fn sparse_game_file_indices_are_imported() {
 
     let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
     let ini = parse_ini_str("[Game Files]\nGameFile0=Base.esm\nGameFile2=Patch.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    let result = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+    assert!(result.warnings.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn game_file_import_matches_numbered_entries_case_insensitively() {
+    let dir = unique_test_dir("game-files-case-insensitive");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(data_dir.join("Patch.esp"), tes3_bytes(&["Base.esm"])).unwrap();
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str("[game files]\ngamefile0=Base.esm\nGAMEFILE1=Patch.esp\n");
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
         import_archives: false,
@@ -623,7 +852,10 @@ fn sparse_game_file_indices_are_imported() {
 #[test]
 fn game_file_indices_sort_numerically_and_preserve_duplicate_order() {
     let dir = unique_test_dir("game-files-numeric-order");
-    fs::create_dir_all(&dir).unwrap();
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Zero.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(data_dir.join("ZeroPatch.esp"), tes3_bytes(&["Zero.esm"])).unwrap();
 
     let mut cfg = MultiMap::new();
     let ini = parse_ini_str(concat!(
@@ -642,25 +874,15 @@ fn game_file_indices_sort_numerically_and_preserve_duplicate_order() {
         ..ImportOptions::default()
     });
 
-    let error = importer
+    let result = importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err();
+        .unwrap();
 
-    match error {
-        ImportError::MissingContentFiles { files, .. } => {
-            assert_eq!(
-                files,
-                vec![
-                    "Zero.esm".to_owned(),
-                    "ZeroPatch.esp".to_owned(),
-                    "Two.esp".to_owned(),
-                    "Ten.esp".to_owned(),
-                ]
-            );
-        }
-        other => panic!("unexpected error: {other}"),
-    }
-    assert_eq!(values(&cfg, "content"), &[] as &[String]);
+    assert_eq!(
+        values(&cfg, "content"),
+        &["Zero.esm".to_owned(), "ZeroPatch.esp".to_owned()]
+    );
+    assert!(result.warnings.is_empty());
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -758,14 +980,39 @@ fn archive_values_are_trimmed_and_match_suffix_case_insensitively() {
 }
 
 #[test]
-fn failed_game_file_import_leaves_cfg_unchanged() {
-    let dir = unique_test_dir("game-files-error-atomic");
-    fs::create_dir_all(&dir).unwrap();
+fn archive_import_matches_numbered_entries_case_insensitively_and_stops_at_gap() {
+    let dir = unique_test_dir("archives-case-insensitive-gap");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Morrowind.bsa"), []).unwrap();
+    fs::write(data_dir.join("Foo.bsa"), []).unwrap();
+    fs::write(data_dir.join("Skipped.bsa"), []).unwrap();
 
-    let mut cfg = parse_cfg_str("fallback=Old_Setting,old\nno-sound=0\n");
-    let original_cfg = cfg.clone();
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str("[archives]\narchive 0=Foo.bsa\nARCHIVE 2=Skipped.bsa\n");
+    let importer = IniImporter::new(ImportOptions::default());
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "fallback-archive"),
+        &["Morrowind.bsa".to_owned(), "Foo.bsa".to_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn missing_game_file_soft_stop_updates_existing_cfg_with_partial_content() {
+    let dir = unique_test_dir("game-files-soft-stop-updates-existing");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+
+    let mut cfg = parse_cfg_str("fallback=Old_Setting,old\nno-sound=0\ncontent=Old.esp\n");
     let ini = parse_ini_str(
-        "[General]\nDisable Audio=1\n[Weather]\nSunrise Time=6\n[Game Files]\nGameFile0=Missing.esm\n",
+        "[General]\nDisable Audio=1\n[Weather]\nSunrise Time=6\n[Game Files]\nGameFile0=Base.esm\nGameFile1=Missing.esm\n",
     );
     let importer = IniImporter::new(ImportOptions {
         import_game_files: true,
@@ -773,10 +1020,17 @@ fn failed_game_file_import_leaves_cfg_unchanged() {
         ..ImportOptions::default()
     });
 
-    importer
+    let result = importer
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(cfg, original_cfg);
+    assert_eq!(values(&cfg, "no-sound"), &["1".to_owned()]);
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
+    assert_eq!(
+        result.warnings,
+        vec![ImportWarning::MissingGameFile {
+            file: "Missing.esm".to_owned()
+        }]
+    );
     fs::remove_dir_all(dir).unwrap();
 }

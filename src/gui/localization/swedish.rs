@@ -108,6 +108,11 @@ pub(super) fn warning_title(warning: &ImportWarning) -> String {
         ImportWarning::MalformedIniLine { line } => {
             format!("Ignorerade felaktig INI-rad: {line}")
         }
+        ImportWarning::MissingGameFile { file } => {
+            format!(
+                "GameFile-post hittades inte: {file}. Senare GameFile-poster importerades inte."
+            )
+        }
     }
 }
 

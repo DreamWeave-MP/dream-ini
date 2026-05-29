@@ -107,6 +107,9 @@ pub(super) fn warning_title(warning: &ImportWarning) -> String {
             format!("Ignored empty value for key `{key}`.")
         }
         ImportWarning::MalformedIniLine { line } => format!("Malformed INI line ignored: {line}"),
+        ImportWarning::MissingGameFile { file } => {
+            format!("GameFile entry not found: {file}. Later GameFile entries were not imported.")
+        }
     }
 }
 

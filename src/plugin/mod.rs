@@ -7,6 +7,7 @@ use crate::{ImportError, PluginFormat, TextEncoding};
 mod load_order;
 mod tes3;
 
+#[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use load_order::{apply_morrowind_expansion_order, dependency_sort};
 pub use tes3::PluginHeader;
 
