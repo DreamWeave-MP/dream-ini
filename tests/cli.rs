@@ -46,7 +46,7 @@ fn default_data_files_search_imports_content_and_writes_data() {
 }
 
 #[test]
-fn missing_game_file_fails_without_writing_output() {
+fn missing_game_file_warns_and_writes_output() {
     let dir = unique_test_dir("missing-game-file");
     fs::create_dir_all(&dir).unwrap();
     let ini = dir.join("Morrowind.ini");
@@ -61,11 +61,12 @@ fn missing_game_file_fails_without_writing_output() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    assert!(!output_cfg.exists());
+    assert!(output.status.success());
+    assert!(output_cfg.exists());
+    let written = fs::read_to_string(&output_cfg).unwrap();
+    assert!(!written.contains("content="));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("content files not found: Missing.esp"));
-    assert!(stderr.contains("pass --data or add data=..."));
+    assert!(stderr.contains("Warning: GameFile entry not found: Missing.esp"));
 
     fs::remove_dir_all(dir).unwrap();
 }

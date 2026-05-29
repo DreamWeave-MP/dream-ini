@@ -152,7 +152,7 @@ impl IniImporter {
         ini_path: &Path,
         cfg_dir: Option<&Path>,
     ) -> Result<ImportReport, ImportError> {
-        let warnings = Vec::new();
+        let mut warnings = Vec::new();
         let mut events = Vec::new();
         let mut changed_keys = BTreeSet::new();
         let mut search_cfg = normalize_cfg(cfg, cfg_dir)?;
@@ -191,6 +191,7 @@ impl IniImporter {
             imported_cfg.insert("content".to_owned(), imported_content.content);
             changed_keys.insert("content".to_owned());
             events.extend(imported_content.events);
+            warnings.extend(imported_content.warnings);
         }
 
         if self.options.import_archives {

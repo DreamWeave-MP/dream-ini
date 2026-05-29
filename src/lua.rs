@@ -204,6 +204,11 @@ fn warning_to_table(lua: &Lua, warning: &crate::ImportWarning) -> LuaResult<Tabl
             table.set("line", line.as_str())?;
             table.set("message", warning.to_string())?;
         }
+        crate::ImportWarning::MissingGameFile { file } => {
+            table.set("kind", "missing_game_file")?;
+            table.set("file", file.as_str())?;
+            table.set("message", warning.to_string())?;
+        }
     }
     Ok(table)
 }

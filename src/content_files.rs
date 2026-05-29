@@ -6,13 +6,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::events::ImportEvent;
 use crate::plugin::{apply_morrowind_expansion_order, dependency_sort, read_plugin_header};
-use crate::{Game, ImportError, MultiMap, TextEncoding};
+use crate::{Game, ImportError, ImportWarning, MultiMap, TextEncoding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportedContentFiles {
     pub(crate) content: Vec<String>,
     pub(crate) data_dirs: Vec<DataDirToWrite>,
     pub(crate) events: Vec<ImportEvent>,
+    pub(crate) warnings: Vec<ImportWarning>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,8 +94,14 @@ pub(crate) fn import_content_files(
         request.write_resolved_data_dirs,
     );
     let mut events = Vec::new();
-    let mut content_files =
-        resolve_content_files(request.ini, &search_paths, request.verbose, &mut events)?;
+    let mut warnings = Vec::new();
+    let mut content_files = resolve_content_files(
+        request.ini,
+        &search_paths,
+        request.verbose,
+        &mut events,
+        &mut warnings,
+    )?;
 
     let data_dirs = used_data_dirs_to_write(request.cfg, request.cfg_dir, &content_files);
     for data_dir in &data_dirs {
@@ -123,6 +130,7 @@ pub(crate) fn import_content_files(
         content,
         data_dirs,
         events,
+        warnings,
     })
 }
 
@@ -240,9 +248,9 @@ fn resolve_content_files(
     search_paths: &[ContentSearchPath],
     verbose: bool,
     events: &mut Vec<ImportEvent>,
+    warnings: &mut Vec<ImportWarning>,
 ) -> Result<Vec<ResolvedContentFile>, ImportError> {
     let mut content_files = Vec::new();
-    let mut missing_content_files = Vec::new();
     for file in game_file_values(ini).into_iter().map(|file| file.trim()) {
         if !ends_with_ignore_ascii_case(file, ".esm") && !ends_with_ignore_ascii_case(file, ".esp")
         {
@@ -255,21 +263,14 @@ fn resolve_content_files(
         if let Some(entry) = resolve_content_file(file, search_paths, verbose, events) {
             content_files.push(entry);
         } else {
-            missing_content_files.push(file.to_owned());
+            warnings.push(ImportWarning::MissingGameFile {
+                file: file.to_owned(),
+            });
+            break;
         }
     }
 
-    if missing_content_files.is_empty() {
-        Ok(content_files)
-    } else {
-        Err(ImportError::MissingContentFiles {
-            files: missing_content_files,
-            searched_paths: search_paths
-                .iter()
-                .map(|search_path| search_path.path.clone())
-                .collect(),
-        })
-    }
+    Ok(content_files)
 }
 
 fn resolve_content_file(

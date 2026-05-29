@@ -6,6 +6,7 @@ use std::fmt;
 pub enum ImportWarning {
     IgnoredEmptyValue { key: String },
     MalformedIniLine { line: String },
+    MissingGameFile { file: String },
 }
 
 impl fmt::Display for ImportWarning {
@@ -14,6 +15,12 @@ impl fmt::Display for ImportWarning {
             Self::IgnoredEmptyValue { key } => write!(f, "ignored empty value for key '{key}'."),
             Self::MalformedIniLine { line } => {
                 write!(f, "ini file wrongly formatted ({line}). Line ignored.")
+            }
+            Self::MissingGameFile { file } => {
+                write!(
+                    f,
+                    "GameFile entry not found: {file}. Stopped importing later GameFile entries."
+                )
             }
         }
     }
