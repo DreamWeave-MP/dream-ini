@@ -618,6 +618,33 @@ fn game_file_import_stops_at_first_missing_index() {
 }
 
 #[test]
+fn game_file_import_matches_numbered_entries_case_insensitively() {
+    let dir = unique_test_dir("game-files-case-insensitive");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(data_dir.join("Patch.esp"), tes3_bytes(&["Base.esm"])).unwrap();
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str("[game files]\ngamefile0=Base.esm\nGAMEFILE1=Patch.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &["Base.esm".to_owned(), "Patch.esp".to_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn game_file_indices_sort_numerically_and_preserve_duplicate_order() {
     let dir = unique_test_dir("game-files-numeric-order");
     fs::create_dir_all(&dir).unwrap();
@@ -745,6 +772,30 @@ fn archive_values_are_trimmed_and_match_suffix_case_insensitively() {
     assert_eq!(
         values(&cfg, "fallback-archive"),
         &["Morrowind.bsa".to_owned(), "Tribunal.BSA".to_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn archive_import_matches_numbered_entries_case_insensitively_and_stops_at_gap() {
+    let dir = unique_test_dir("archives-case-insensitive-gap");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Morrowind.bsa"), []).unwrap();
+    fs::write(data_dir.join("Foo.bsa"), []).unwrap();
+    fs::write(data_dir.join("Skipped.bsa"), []).unwrap();
+
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str("[archives]\narchive 0=Foo.bsa\nARCHIVE 2=Skipped.bsa\n");
+    let importer = IniImporter::new(ImportOptions::default());
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "fallback-archive"),
+        &["Morrowind.bsa".to_owned(), "Foo.bsa".to_owned()]
     );
     fs::remove_dir_all(dir).unwrap();
 }

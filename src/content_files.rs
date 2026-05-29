@@ -165,7 +165,7 @@ fn resolve_archives(
 
 fn archive_values(ini: &MultiMap) -> Vec<String> {
     let mut archives = vec!["Morrowind.bsa".to_owned()];
-    archives.extend(sequential_ini_values(ini, "Archives:Archive ").cloned());
+    archives.extend(sequential_ini_values_ignore_ascii_case(ini, "Archives", "Archive ").cloned());
     archives
 }
 
@@ -303,16 +303,7 @@ fn resolve_content_file(
 }
 
 fn game_file_values(ini: &MultiMap) -> Vec<&String> {
-    let mut values = Vec::new();
-    for index in 0.. {
-        let key = format!("Game Files:GameFile{index}");
-        if let Some(entries) = ini.get(&key) {
-            values.extend(entries);
-        } else {
-            break;
-        }
-    }
-    values
+    sequential_ini_values_ignore_ascii_case(ini, "Game Files", "GameFile").collect()
 }
 
 fn is_plugin_filename(file: &str) -> bool {
@@ -403,11 +394,24 @@ fn used_archive_data_dirs_to_write(
     used_paths
 }
 
-fn sequential_ini_values<'a>(ini: &'a MultiMap, prefix: &str) -> impl Iterator<Item = &'a String> {
+fn sequential_ini_values_ignore_ascii_case<'a>(
+    ini: &'a MultiMap,
+    section: &str,
+    key_prefix: &str,
+) -> impl Iterator<Item = &'a String> {
     (0..)
-        .map(move |index| format!("{prefix}{index}"))
-        .map_while(move |key| ini.get(&key))
-        .flat_map(|values| values.iter())
+        .map(move |index| format!("{section}:{key_prefix}{index}"))
+        .map_while(move |key| ini_values_ignore_ascii_case(ini, &key))
+        .flatten()
+}
+
+fn ini_values_ignore_ascii_case<'a>(ini: &'a MultiMap, key: &str) -> Option<Vec<&'a String>> {
+    let values: Vec<&String> = ini
+        .iter()
+        .filter(|(entry_key, _)| entry_key.eq_ignore_ascii_case(key))
+        .flat_map(|(_, values)| values)
+        .collect();
+    (!values.is_empty()).then_some(values)
 }
 
 fn add_search_paths(
