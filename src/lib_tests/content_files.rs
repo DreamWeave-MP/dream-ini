@@ -594,7 +594,7 @@ fn duplicate_content_file_uses_first_search_path() {
 }
 
 #[test]
-fn sparse_game_file_indices_are_imported() {
+fn game_file_import_stops_at_first_missing_index() {
     let dir = unique_test_dir("game-files-sparse");
     let data_dir = dir.join("Data Files");
     fs::create_dir_all(&data_dir).unwrap();
@@ -613,10 +613,7 @@ fn sparse_game_file_indices_are_imported() {
         .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
         .unwrap();
 
-    assert_eq!(
-        values(&cfg, "content"),
-        &["Base.esm".to_owned(), "Patch.esp".to_owned()]
-    );
+    assert_eq!(values(&cfg, "content"), &["Base.esm".to_owned()]);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -650,12 +647,7 @@ fn game_file_indices_sort_numerically_and_preserve_duplicate_order() {
         ImportError::MissingContentFiles { files, .. } => {
             assert_eq!(
                 files,
-                vec![
-                    "Zero.esm".to_owned(),
-                    "ZeroPatch.esp".to_owned(),
-                    "Two.esp".to_owned(),
-                    "Ten.esp".to_owned(),
-                ]
+                vec!["Zero.esm".to_owned(), "ZeroPatch.esp".to_owned()]
             );
         }
         other => panic!("unexpected error: {other}"),

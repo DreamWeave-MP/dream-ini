@@ -304,18 +304,15 @@ fn resolve_content_file(
 
 fn game_file_values(ini: &MultiMap) -> Vec<&String> {
     let mut values = Vec::new();
-    for (key, entries) in ini {
-        if let Some(index) = key
-            .strip_prefix("Game Files:GameFile")
-            .and_then(|suffix| suffix.parse::<usize>().ok())
-        {
-            for (entry_index, entry) in entries.iter().enumerate() {
-                values.push((index, entry_index, entry));
-            }
+    for index in 0.. {
+        let key = format!("Game Files:GameFile{index}");
+        if let Some(entries) = ini.get(&key) {
+            values.extend(entries);
+        } else {
+            break;
         }
     }
-    values.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    values.into_iter().map(|(_, _, value)| value).collect()
+    values
 }
 
 fn is_plugin_filename(file: &str) -> bool {
