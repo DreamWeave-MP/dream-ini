@@ -19,7 +19,7 @@ impl fmt::Display for ImportWarning {
             Self::MissingGameFile { file } => {
                 write!(
                     f,
-                    "GameFile entry not found: {file}. Stopped importing later GameFile entries."
+                    "GameFile entry not found: {file}. Later GameFile entries were not imported."
                 )
             }
         }

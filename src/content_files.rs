@@ -100,24 +100,24 @@ pub(crate) fn import_content_files(
         &mut warnings,
     )?;
 
+    content_files.sort_by(|left, right| {
+        content_file_group(&left.name)
+            .cmp(&content_file_group(&right.name))
+            .then_with(|| left.sort_key.cmp(&right.sort_key))
+            .then_with(|| {
+                right
+                    .name
+                    .to_ascii_lowercase()
+                    .cmp(&left.name.to_ascii_lowercase())
+            })
+            .then_with(|| left.path.cmp(&right.path))
+    });
     let data_dirs = used_data_dirs_to_write(request.cfg, request.cfg_dir, &content_files);
     for data_dir in &data_dirs {
         events.push(ImportEvent::DataDirAddedForContent {
             path: data_dir.path.clone(),
         });
     }
-
-    content_files.sort_by(|left, right| {
-        content_file_group(&left.name)
-            .cmp(&content_file_group(&right.name))
-            .then_with(|| left.sort_key.cmp(&right.sort_key))
-            .then_with(|| {
-                left.name
-                    .to_ascii_lowercase()
-                    .cmp(&right.name.to_ascii_lowercase())
-            })
-            .then_with(|| left.path.cmp(&right.path))
-    });
     let content = content_files.into_iter().map(|file| file.name).collect();
 
     Ok(ImportedContentFiles {

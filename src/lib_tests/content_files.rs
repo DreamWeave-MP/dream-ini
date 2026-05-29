@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::fs::{self, FileTimes};
+use std::fs::{self, FileTimes, OpenOptions};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::test_support::{tes3_bytes, unique_test_dir, values};
@@ -12,7 +12,9 @@ use crate::{
 fn write_with_modified(path: &std::path::Path, bytes: &[u8], seconds: u64) {
     fs::write(path, bytes).unwrap();
     let time = UNIX_EPOCH + Duration::from_secs(seconds);
-    fs::File::open(path)
+    OpenOptions::new()
+        .write(true)
+        .open(path)
         .unwrap()
         .set_times(FileTimes::new().set_accessed(time).set_modified(time))
         .unwrap();
@@ -81,6 +83,43 @@ fn imports_game_files_sorting_each_extension_group_by_mtime() {
             "Newer.esm".to_owned(),
             "Older.esp".to_owned(),
             "Newer.esp".to_owned(),
+        ]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn imports_game_files_sorting_equal_mtime_by_reverse_name() {
+    let dir = unique_test_dir("game-files-equal-mtime-reverse-name");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    write_with_modified(&data_dir.join("Alpha.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("gamma.esp"), &tes3_bytes(&[]), 100);
+    write_with_modified(&data_dir.join("Beta.esp"), &tes3_bytes(&[]), 100);
+
+    let mut cfg = parse_cfg_str(&format!("data={}\n", data_dir.display()));
+    let ini = parse_ini_str(concat!(
+        "[Game Files]\n",
+        "GameFile0=Alpha.esp\n",
+        "GameFile1=gamma.esp\n",
+        "GameFile2=Beta.esp\n",
+    ));
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &[
+            "gamma.esp".to_owned(),
+            "Beta.esp".to_owned(),
+            "Alpha.esp".to_owned(),
         ]
     );
     fs::remove_dir_all(dir).unwrap();
@@ -267,6 +306,54 @@ fn repeated_explicit_data_dirs_use_search_order() {
     assert_eq!(
         values(&cfg, "data"),
         &[second_data_dir.to_string_lossy().into_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn generated_data_dirs_follow_sorted_content_order() {
+    let dir = unique_test_dir("game-files-data-dirs-sorted-content-order");
+    let newer_data_dir = dir.join("Newer Data");
+    let older_data_dir = dir.join("Older Data");
+    fs::create_dir_all(&newer_data_dir).unwrap();
+    fs::create_dir_all(&older_data_dir).unwrap();
+    write_with_modified(&newer_data_dir.join("Newer.esp"), &tes3_bytes(&[]), 200);
+    write_with_modified(&older_data_dir.join("Older.esp"), &tes3_bytes(&[]), 100);
+
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str("[Game Files]\nGameFile0=Newer.esp\nGameFile1=Older.esp\n");
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        data_dirs: vec![newer_data_dir.clone(), older_data_dir.clone()],
+        ..ImportOptions::default()
+    });
+
+    let result = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &["Older.esp".to_owned(), "Newer.esp".to_owned()]
+    );
+    assert_eq!(
+        values(&cfg, "data"),
+        &[
+            older_data_dir.to_string_lossy().into_owned(),
+            newer_data_dir.to_string_lossy().into_owned(),
+        ]
+    );
+    assert_eq!(
+        result.events,
+        vec![
+            ImportEvent::DataDirAddedForContent {
+                path: older_data_dir.clone(),
+            },
+            ImportEvent::DataDirAddedForContent {
+                path: newer_data_dir.clone(),
+            },
+        ]
     );
     fs::remove_dir_all(dir).unwrap();
 }
