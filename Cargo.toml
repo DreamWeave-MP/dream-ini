@@ -1,6 +1,6 @@
 [package]
 name = "dream-ini"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Import Morrowind.ini settings into OpenMW configuration files"
 license = "MIT OR Apache-2.0"
@@ -16,8 +16,8 @@ encoding_rs = "0.8"
 eframe = { version = "0.34", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui = { version = "0.34", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
-mlua = { version = "0.11", optional = true, features = ["luajit52", "vendored"] }
-openmw-config = "1.0.5"
+mlua = { version = "0.12.1", optional = true, default-features = false }
+openmw-config = "2.0"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_System_Com", "Win32_UI_Shell"] }
@@ -33,6 +33,7 @@ default = ["gui"]
 controller-support = ["dep:gilrs", "dep:libc"]
 gui = ["dep:eframe", "dep:egui", "dep:image", "controller-support"]
 lua = ["dep:mlua"]
+standalone-lua = ["lua", "mlua/luau"]
 portmaster-gui = ["dep:egui", "controller-support"]
 
 [dev-dependencies]

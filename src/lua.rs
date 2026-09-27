@@ -1,42 +1,85 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+//! Luau bindings for `dream-ini`.
+//!
+//! Enable the `lua` feature to build an `mlua` interface for embedding applications that choose an
+//! `mlua` runtime at their own top level. Enable `standalone-lua` only for this crate's tests and
+//! documentation builds; it selects `mlua`'s [Luau](https://luau.org) backend. `DreamWeave` hosts
+//! run Luau, and these bindings are tested against it. Building this crate with `lua` but no `mlua`
+//! runtime selected is intentionally incomplete.
+//!
+//! Version 0.3.0 moved the bindings from `LuaJIT` to Luau and renamed the Lua-facing surface to
+//! Luau conventions: functions, option fields, result fields, and `kind` values are camelCase
+//! (`importPaths`, `gameFiles`, `dataDirs`, `"contentFileResolved"`). The conventional global name
+//! is `dreamIni`.
+//!
+//! # Registration
+//!
+//! [`create_module`] returns a table; [`register`] assigns it to the `dreamIni` global. The crate
+//! does not export a C Lua module or install a `require` loader; embedders that want
+//! `require("@dreamIni")` register the table themselves.
+//!
+//! # Module shape
+//!
+//! - `version: string`: the crate version.
+//! - `parseIni(text, options?) -> { entries: multimap, warnings: { warning } }`
+//! - `parseCfg(text) -> multimap`
+//! - `serializeCfg(multimap) -> string`
+//! - `importMaps(cfg, ini, options?) -> { cfg: multimap, text: string, warnings: { warning }, events: { event } }`
+//! - `importPaths(options) -> { cfg: multimap, text: string, warnings: { warning }, events: { event } }`
+//!
+//! Multimaps are tables where each key maps to an array of strings, for example
+//! `{ encoding = { "win1252" }, content = { "Morrowind.esm" } }`. `parseIni` takes the INI's raw
+//! bytes as a Luau string and decodes them with `options.encoding` (default `"win1252"`). Option
+//! tables reject unknown fields, so a misspelled or `snake_case` option is an error instead of being
+//! silently ignored.
+//!
+//! Path strings are UTF-8. Hard failures (missing files, unsupported encodings, malformed multimaps,
+//! failed imports) raise Luau errors; recoverable problems are returned in `warnings`.
+
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mlua::{Error as LuaError, Lua, Result as LuaResult, String as LuaString, Table, Value};
+use mlua::{Error as LuaError, Lua, LuaString, Result as LuaResult, Table, Value};
 
 use crate::{
-    Game, ImportOptions, IniImporter, MultiMap, TextEncoding, parse_cfg_str,
-    parse_ini_bytes_with_warnings, serialize_cfg,
+    Game, ImportEvent, ImportOptions, ImportWarning, IniImporter, MultiMap, TextEncoding,
+    parse_cfg_str, parse_ini_bytes_with_warnings, serialize_cfg,
 };
 
-/// Creates a Lua table exposing the `dream-ini` embedding API.
+/// Option fields shared by `importMaps` and `importPaths`.
+const IMPORT_OPTIONS: &[&str] = &[
+    "game",
+    "gameFiles",
+    "fonts",
+    "archives",
+    "verbose",
+    "encoding",
+    "dataDirs",
+    "dataLocal",
+    "resources",
+    "userData",
+    "cfgDir",
+];
+
+/// Creates the `dreamIni` Luau module table.
 ///
-/// This is intended for Rust embedders. The crate does not provide a `cdylib` or `require` module;
-/// callers should assign the returned table into their Lua environment explicitly.
-///
-/// The table contains these functions:
-///
-/// - `parse_ini(text, opts) -> { entries = multimap, warnings = warning[] }`
-/// - `parse_cfg(text) -> multimap`
-/// - `serialize_cfg(multimap) -> string`
-/// - `import_maps(cfg, ini, opts) -> { cfg = multimap, text = string, warnings = warning[], events = event[] }`
-/// - `import_paths(opts) -> { cfg = multimap, text = string, warnings = warning[], events = event[] }`
-///
-/// Multimaps are represented as Lua tables where each key maps to an array of strings, for example
-/// `{ encoding = { "win1252" }, content = { "Morrowind.esm" } }`.
+/// See the [module documentation](self) for the table's shape. The crate does not provide a
+/// `cdylib` or `require` module; callers assign the returned table into their Lua environment.
 ///
 /// # Errors
 /// Returns a Lua error if module functions cannot be created.
 pub fn create_module(lua: &Lua) -> LuaResult<Table> {
     let module = lua.create_table()?;
+    module.set("version", env!("CARGO_PKG_VERSION"))?;
     module.set(
-        "parse_ini",
+        "parseIni",
         lua.create_function(|lua, (text, options): (LuaString, Option<Table>)| {
-            let options = options_from_table(options)?;
+            check_fields(options.as_ref(), "parseIni", &[&["encoding"]])?;
+            let options = options_from_table(options.as_ref())?;
             let parsed = parse_ini_bytes_with_warnings(
                 text.as_bytes().as_ref(),
-                effective_encoding(&options),
+                options.encoding.unwrap_or(TextEncoding::Win1252),
             );
             let result = lua.create_table()?;
             result.set("entries", multimap_to_table(lua, &parsed.entries)?)?;
@@ -45,20 +88,24 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
         })?,
     )?;
     module.set(
-        "parse_cfg",
+        "parseCfg",
         lua.create_function(|lua, text: String| multimap_to_table(lua, &parse_cfg_str(&text)))?,
     )?;
     module.set(
-        "serialize_cfg",
+        "serializeCfg",
         lua.create_function(|_, cfg: Table| Ok(serialize_cfg(&table_to_multimap(&cfg)?)))?,
     )?;
     module.set(
-        "import_maps",
+        "importMaps",
         lua.create_function(|lua, (cfg, ini, options): (Table, Table, Option<Table>)| {
-            let options_table = options.clone();
-            let options = options_from_table(options)?;
-            let ini_path = option_string(options_table.as_ref(), "ini_path")?
+            check_fields(
+                options.as_ref(),
+                "importMaps",
+                &[IMPORT_OPTIONS, &["iniPath"]],
+            )?;
+            let ini_path = option_string(options.as_ref(), "iniPath")?
                 .map_or_else(|| PathBuf::from("Morrowind.ini"), PathBuf::from);
+            let options = options_from_table(options.as_ref())?;
             let mut cfg = table_to_multimap(&cfg)?;
             let ini = table_to_multimap(&ini)?;
             let report = IniImporter::new(options)
@@ -68,11 +115,16 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
         })?,
     )?;
     module.set(
-        "import_paths",
+        "importPaths",
         lua.create_function(|lua, options: Table| {
+            check_fields(
+                Some(&options),
+                "importPaths",
+                &[IMPORT_OPTIONS, &["ini", "cfg"]],
+            )?;
             let ini_path = required_string(&options, "ini")?;
             let cfg_path = option_string(Some(&options), "cfg")?;
-            let mut import_options = options_from_table(Some(options))?;
+            let mut import_options = options_from_table(Some(&options))?;
             if !import_options.data_dirs.is_empty() {
                 import_options.data_dir_base = cfg_path
                     .as_deref()
@@ -90,19 +142,38 @@ pub fn create_module(lua: &Lua) -> LuaResult<Table> {
     Ok(module)
 }
 
-/// Registers the `dream_ini` table in Lua globals.
+/// Registers the module from [`create_module`] as the `dreamIni` global.
 ///
-/// This is a convenience wrapper around [`create_module`]. It does not modify Lua package loaders
-/// or enable `require("dream_ini")`.
+/// It does not modify package loaders or enable `require("@dreamIni")`.
 ///
 /// # Errors
 /// Returns a Lua error if the module cannot be created or assigned.
 pub fn register(lua: &Lua) -> LuaResult<()> {
     let module = create_module(lua)?;
-    lua.globals().set("dream_ini", module)
+    lua.globals().set("dreamIni", module)
 }
 
-fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
+/// Rejects option fields that aren't in any of the `allowed` lists.
+fn check_fields(table: Option<&Table>, function: &str, allowed: &[&[&str]]) -> LuaResult<()> {
+    let Some(table) = table else {
+        return Ok(());
+    };
+    for pair in table.pairs::<Value, Value>() {
+        let (key, _) = pair?;
+        let name = match &key {
+            Value::String(name) => name.to_string_lossy(),
+            other => other.to_string()?,
+        };
+        if !allowed.iter().any(|fields| fields.contains(&name.as_str())) {
+            return Err(LuaError::external(format!(
+                "{function}: unknown option '{name}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn options_from_table(table: Option<&Table>) -> LuaResult<ImportOptions> {
     let mut options = ImportOptions::default();
     let Some(table) = table else {
         return Ok(options);
@@ -115,7 +186,7 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
             return Err(LuaError::external(format!("unsupported game: {game}")));
         }
     }
-    if let Some(value) = table.get::<Option<bool>>("game_files")? {
+    if let Some(value) = table.get::<Option<bool>>("gameFiles")? {
         options.import_game_files = value;
     }
     if let Some(value) = table.get::<Option<bool>>("fonts")? {
@@ -130,22 +201,22 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
     if let Some(value) = table.get::<Option<String>>("encoding")? {
         options.encoding = Some(TextEncoding::parse(&value).map_err(LuaError::external)?);
     }
-    if let Some(data_dirs) = table.get::<Option<Table>>("data_dirs")? {
+    if let Some(data_dirs) = table.get::<Option<Table>>("dataDirs")? {
         options.data_dirs = data_dirs
             .sequence_values::<String>()
             .map(|value| value.map(PathBuf::from))
             .collect::<LuaResult<Vec<_>>>()?;
     }
-    if let Some(value) = table.get::<Option<String>>("data_local")? {
+    if let Some(value) = table.get::<Option<String>>("dataLocal")? {
         options.data_local = Some(PathBuf::from(value));
     }
     if let Some(value) = table.get::<Option<String>>("resources")? {
         options.resources = Some(PathBuf::from(value));
     }
-    if let Some(value) = table.get::<Option<String>>("user_data")? {
+    if let Some(value) = table.get::<Option<String>>("userData")? {
         options.user_data = Some(PathBuf::from(value));
     }
-    if let Some(value) = table.get::<Option<String>>("cfg_dir")? {
+    if let Some(value) = table.get::<Option<String>>("cfgDir")? {
         options.cfg_dir = Some(PathBuf::from(value));
     }
     if !options.data_dirs.is_empty() && options.data_dir_base.is_none() {
@@ -153,10 +224,6 @@ fn options_from_table(table: Option<Table>) -> LuaResult<ImportOptions> {
     }
 
     Ok(options)
-}
-
-fn effective_encoding(options: &ImportOptions) -> TextEncoding {
-    options.encoding.unwrap_or(TextEncoding::Win1252)
 }
 
 fn option_string(table: Option<&Table>, key: &str) -> LuaResult<Option<String>> {
@@ -172,8 +239,8 @@ fn required_string(table: &Table, key: &str) -> LuaResult<String> {
 fn import_result_to_table(
     lua: &Lua,
     cfg: &MultiMap,
-    warnings: &[crate::ImportWarning],
-    events: &[crate::ImportEvent],
+    warnings: &[ImportWarning],
+    events: &[ImportEvent],
 ) -> LuaResult<Table> {
     let result = lua.create_table()?;
     result.set("cfg", multimap_to_table(lua, cfg)?)?;
@@ -183,7 +250,7 @@ fn import_result_to_table(
     Ok(result)
 }
 
-fn warnings_to_array(lua: &Lua, warnings: &[crate::ImportWarning]) -> LuaResult<Table> {
+fn warnings_to_array(lua: &Lua, warnings: &[ImportWarning]) -> LuaResult<Table> {
     let table = lua.create_table()?;
     for (index, warning) in warnings.iter().enumerate() {
         table.set(index + 1, warning_to_table(lua, warning)?)?;
@@ -191,29 +258,27 @@ fn warnings_to_array(lua: &Lua, warnings: &[crate::ImportWarning]) -> LuaResult<
     Ok(table)
 }
 
-fn warning_to_table(lua: &Lua, warning: &crate::ImportWarning) -> LuaResult<Table> {
+fn warning_to_table(lua: &Lua, warning: &ImportWarning) -> LuaResult<Table> {
     let table = lua.create_table()?;
     match warning {
-        crate::ImportWarning::IgnoredEmptyValue { key } => {
-            table.set("kind", "ignored_empty_value")?;
+        ImportWarning::IgnoredEmptyValue { key } => {
+            table.set("kind", "ignoredEmptyValue")?;
             table.set("key", key.as_str())?;
-            table.set("message", warning.to_string())?;
         }
-        crate::ImportWarning::MalformedIniLine { line } => {
-            table.set("kind", "malformed_ini_line")?;
+        ImportWarning::MalformedIniLine { line } => {
+            table.set("kind", "malformedIniLine")?;
             table.set("line", line.as_str())?;
-            table.set("message", warning.to_string())?;
         }
-        crate::ImportWarning::MissingGameFile { file } => {
-            table.set("kind", "missing_game_file")?;
+        ImportWarning::MissingGameFile { file } => {
+            table.set("kind", "missingGameFile")?;
             table.set("file", file.as_str())?;
-            table.set("message", warning.to_string())?;
         }
     }
+    table.set("message", warning.to_string())?;
     Ok(table)
 }
 
-fn events_to_array(lua: &Lua, events: &[crate::ImportEvent]) -> LuaResult<Table> {
+fn events_to_array(lua: &Lua, events: &[ImportEvent]) -> LuaResult<Table> {
     let table = lua.create_table()?;
     for (index, event) in events.iter().enumerate() {
         table.set(index + 1, event_to_table(lua, event)?)?;
@@ -221,27 +286,19 @@ fn events_to_array(lua: &Lua, events: &[crate::ImportEvent]) -> LuaResult<Table>
     Ok(table)
 }
 
-fn event_to_table(lua: &Lua, event: &crate::ImportEvent) -> LuaResult<Table> {
+fn event_to_table(lua: &Lua, event: &ImportEvent) -> LuaResult<Table> {
     let table = lua.create_table()?;
-    match event {
-        crate::ImportEvent::ContentFileResolved { path, modified } => {
-            table.set("kind", "content_file_resolved")?;
-            table.set("path", path.to_string_lossy().as_ref())?;
+    let (kind, path) = match event {
+        ImportEvent::ContentFileResolved { path, modified } => {
             table.set("modified", system_time_seconds(*modified))?;
+            ("contentFileResolved", path)
         }
-        crate::ImportEvent::DataDirAddedForContent { path } => {
-            table.set("kind", "data_dir_added_for_content")?;
-            table.set("path", path.to_string_lossy().as_ref())?;
-        }
-        crate::ImportEvent::ArchiveResolved { path } => {
-            table.set("kind", "archive_resolved")?;
-            table.set("path", path.to_string_lossy().as_ref())?;
-        }
-        crate::ImportEvent::DataDirAddedForArchive { path } => {
-            table.set("kind", "data_dir_added_for_archive")?;
-            table.set("path", path.to_string_lossy().as_ref())?;
-        }
-    }
+        ImportEvent::DataDirAddedForContent { path } => ("dataDirAddedForContent", path),
+        ImportEvent::ArchiveResolved { path } => ("archiveResolved", path),
+        ImportEvent::DataDirAddedForArchive { path } => ("dataDirAddedForArchive", path),
+    };
+    table.set("kind", kind)?;
+    table.set("path", path.to_string_lossy().as_ref())?;
     Ok(table)
 }
 
@@ -298,7 +355,7 @@ mod tests {
 
         lua.load(
             r#"
-            local cfg = dream_ini.parse_cfg("key=one\nkey=two\n")
+            local cfg = dreamIni.parseCfg("key=one\nkey=two\n")
             assert(cfg.key[1] == "one")
             assert(cfg.key[2] == "two")
             "#,
@@ -313,7 +370,7 @@ mod tests {
         register(&lua).unwrap();
 
         let text: String = lua
-            .load(r#"return dream_ini.serialize_cfg({ key = { "one", "two" } })"#)
+            .load(r#"return dreamIni.serializeCfg({ key = { "one", "two" } })"#)
             .eval()
             .unwrap();
 
@@ -327,8 +384,8 @@ mod tests {
 
         lua.load(
             r#"
-            local result = dream_ini.parse_ini("[General]\nEmpty=\n", { encoding = "win1252" })
-            assert(result.warnings[1].kind == "ignored_empty_value")
+            local result = dreamIni.parseIni("[General]\nEmpty=\n", { encoding = "win1252" })
+            assert(result.warnings[1].kind == "ignoredEmptyValue")
             assert(result.warnings[1].key == "General:Empty")
             assert(result.warnings[1].message == "ignored empty value for key 'General:Empty'.")
             "#,
@@ -346,7 +403,7 @@ mod tests {
             r#"
             local cfg = { encoding = { "win1252" } }
             local ini = { ["General:Disable Audio"] = { "1" } }
-            local result = dream_ini.import_maps(cfg, ini, { archives = false })
+            local result = dreamIni.importMaps(cfg, ini, { archives = false })
             assert(result.cfg["no-sound"][1] == "1")
             assert(result.text:find("no%-sound=1\n") ~= nil)
             assert(#result.warnings == 0)
@@ -371,21 +428,21 @@ mod tests {
 
         let lua = Lua::new();
         register(&lua).unwrap();
-        let module = lua.globals().get::<Table>("dream_ini").unwrap();
+        let module = lua.globals().get::<Table>("dreamIni").unwrap();
         let options = lua.create_table().unwrap();
         options.set("ini", ini.to_string_lossy().as_ref()).unwrap();
         options.set("cfg", cfg.to_string_lossy().as_ref()).unwrap();
         options
-            .set("cfg_dir", dir.join("wrong-base").to_string_lossy().as_ref())
+            .set("cfgDir", dir.join("wrong-base").to_string_lossy().as_ref())
             .unwrap();
-        options.set("game_files", true).unwrap();
+        options.set("gameFiles", true).unwrap();
         options.set("archives", false).unwrap();
         let data_dirs = lua.create_table().unwrap();
         data_dirs.set(1, "Data Files").unwrap();
-        options.set("data_dirs", data_dirs).unwrap();
+        options.set("dataDirs", data_dirs).unwrap();
 
         let result: Table = module
-            .get::<mlua::Function>("import_paths")
+            .get::<mlua::Function>("importPaths")
             .unwrap()
             .call(options)
             .unwrap();
@@ -396,7 +453,7 @@ mod tests {
         let event: Table = events.get(1).unwrap();
         assert_eq!(
             event.get::<String>("kind").unwrap(),
-            "data_dir_added_for_content"
+            "dataDirAddedForContent"
         );
         assert_eq!(
             event.get::<String>("path").unwrap(),
@@ -422,7 +479,7 @@ mod tests {
 
         let lua = Lua::new();
         register(&lua).unwrap();
-        let module = lua.globals().get::<Table>("dream_ini").unwrap();
+        let module = lua.globals().get::<Table>("dreamIni").unwrap();
         let cfg = lua.create_table().unwrap();
         let data_local_values = lua.create_table().unwrap();
         data_local_values.set(1, "Local Data").unwrap();
@@ -438,17 +495,17 @@ mod tests {
         game_files.set(1, "Base.esm").unwrap();
         ini.set("Game Files:GameFile0", game_files).unwrap();
         let options = lua.create_table().unwrap();
-        options.set("game_files", true).unwrap();
+        options.set("gameFiles", true).unwrap();
         options.set("archives", false).unwrap();
         let option_data_dirs = lua.create_table().unwrap();
         option_data_dirs.set(1, "Data Files").unwrap();
-        options.set("data_dirs", option_data_dirs).unwrap();
+        options.set("dataDirs", option_data_dirs).unwrap();
         options
-            .set("cfg_dir", cfg_dir.to_string_lossy().as_ref())
+            .set("cfgDir", cfg_dir.to_string_lossy().as_ref())
             .unwrap();
 
         let result: Table = module
-            .get::<mlua::Function>("import_maps")
+            .get::<mlua::Function>("importMaps")
             .unwrap()
             .call((cfg, ini, options))
             .unwrap();
@@ -463,20 +520,44 @@ mod tests {
     }
 
     #[test]
-    fn lua_import_maps_ignores_legacy_userdata_key() {
+    fn lua_rejects_unknown_and_snake_case_options() {
         let lua = Lua::new();
         register(&lua).unwrap();
 
+        for (call, option) in [
+            (
+                r#"dreamIni.importMaps({}, {}, { archives = false, user_data = "x" })"#,
+                "importMaps: unknown option 'user_data'",
+            ),
+            (
+                r#"dreamIni.importPaths({ ini = "Morrowind.ini", game_files = true })"#,
+                "importPaths: unknown option 'game_files'",
+            ),
+            (
+                r#"dreamIni.parseIni("", { gameFiles = true })"#,
+                "parseIni: unknown option 'gameFiles'",
+            ),
+        ] {
+            let error = lua.load(call).exec().unwrap_err().to_string();
+            assert!(error.contains(option), "{error}");
+        }
+    }
+
+    #[test]
+    fn lua_module_reports_version_and_camel_case_kinds() {
+        let lua = Lua::new();
+        register(&lua).unwrap();
+        lua.globals()
+            .set("expectedVersion", env!("CARGO_PKG_VERSION"))
+            .unwrap();
+
         lua.load(
             r#"
-            local cfg = { encoding = { "win1252" } }
-            local ini = { ["General:Disable Audio"] = { "1" } }
-            local result = dream_ini.import_maps(cfg, ini, {
-                archives = false,
-                userdata = "legacy-user-data",
-            })
-            assert(result.cfg["user-data"] == nil)
-            assert(result.text:find("user%-data=legacy%-user%-data\n") == nil)
+            assert(dreamIni.version == expectedVersion)
+            local result = dreamIni.parseIni("[Game Files\n")
+            local warning: { kind: string, line: string?, message: string } = result.warnings[1]
+            assert(warning.kind == "malformedIniLine")
+            assert(warning.line == "[Game Files")
             "#,
         )
         .exec()
@@ -489,7 +570,7 @@ mod tests {
         register(&lua).unwrap();
 
         let error = lua
-            .load(r#"return dream_ini.serialize_cfg({ key = "value" })"#)
+            .load(r#"return dreamIni.serializeCfg({ key = "value" })"#)
             .eval::<String>()
             .unwrap_err()
             .to_string();

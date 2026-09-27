@@ -116,80 +116,75 @@ Path reminder: `Data Files directory` is the Morrowind content/archive search pa
 - Game-file timestamp sorting uses Rust's full `SystemTime` precision instead of C++ `time_t` seconds.
 - `--verbose` gates content-file timestamp messages. The C++ importer accepts `--verbose` but prints those messages unconditionally during game-file import.
 
-## Lua API
+## Luau API
 
-Enable the optional Lua embedding API with the `lua` feature. It uses `mlua` with vendored LuaJIT 2.1 in Lua 5.2 compatibility mode.
+The optional `lua` feature builds [Luau](https://luau.org) bindings on `mlua` 0.12. It leaves the runtime choice to the host application (enable `mlua/luau` there); the `standalone-lua` feature selects Luau for this crate's own tests:
 
 ```bash
-cargo test --features lua
+cargo test --features standalone-lua
 ```
 
-The crate does not build a Lua `require` module or `cdylib`. Lua support is embedding-only; embedders create or register the API table explicitly:
+The bindings are embedding-only: there is no `require` module or `cdylib`. Register the table yourself; `register` installs it as the global `dreamIni`:
 
 ```rust
 let lua = mlua::Lua::new();
-let module = dream_ini::lua::create_module(&lua)?;
-lua.globals().set("dream_ini", module)?;
+dream_ini::lua::register(&lua)?; // or: lua.globals().set("dreamIni", dream_ini::lua::create_module(&lua)?)?
 ```
 
-Lua usage:
+Luau usage:
 
-```lua
-local result = dream_ini.import_paths({
+```luau
+local result = dreamIni.importPaths({
   ini = "Morrowind.ini",
   cfg = "openmw.cfg",
-  game_files = true,
+  gameFiles = true,
   archives = true,
   fonts = false,
-  data_dirs = { "/games/Morrowind/Data Files" },
-  user_data = "/home/user/.local/share/openmw",
+  dataDirs = { "/games/Morrowind/Data Files" },
+  userData = "/home/user/.local/share/openmw",
   encoding = "win1252",
 })
 
 print(result.text)
-for _, warning in ipairs(result.warnings) do
+for _, warning in result.warnings do
   print(warning.message)
 end
-for _, event in ipairs(result.events) do
-  if event.kind == "content_file_resolved" then
+for _, event in result.events do
+  if event.kind == "contentFileResolved" then
     print(event.path, event.modified)
-  elseif event.kind == "data_dir_added_for_content" then
-    print(event.path)
-  elseif event.kind == "archive_resolved" then
-    print(event.path)
-  elseif event.kind == "data_dir_added_for_archive" then
+  elseif event.kind == "archiveResolved" then
     print(event.path)
   end
 end
 ```
 
-For `import_paths`, relative `data_dirs` are resolved from the `cfg` file's directory when `cfg` is supplied. `cfg_dir` is primarily for `import_maps`, where there is no cfg path to provide that context; for `import_paths` without `cfg`, `cfg_dir` supplies the cfg context.
+Functions, option fields, result fields, and `kind` values are camelCase. Option tables reject unknown fields, so a misspelled option is an error rather than silently ignored.
 
-Available functions:
+- `version`: the crate version.
+- `parseIni(text, options?)`: parses a Morrowind INI byte string (decoded with `options.encoding`, default `"win1252"`) and returns `{ entries = multimap, warnings = { ... } }`.
+- `parseCfg(text)`: parses OpenMW cfg text and returns a multimap.
+- `serializeCfg(multimap)`: serializes a multimap to normalized cfg text.
+- `importMaps(cfg, ini, options?)`: imports parsed multimap data and returns `{ cfg = multimap, text = string, warnings = { ... }, events = { ... } }`.
+- `importPaths(options)`: imports from `options.ini` and optional `options.cfg`, returning the same shape as `importMaps`.
 
-- `parse_ini(text, opts)`: parses a Morrowind INI byte string and returns `{ entries = multimap, warnings = { ... } }`.
-- `parse_cfg(text)`: parses OpenMW cfg text and returns a multimap.
-- `serialize_cfg(multimap)`: serializes a multimap to normalized cfg text.
-- `import_maps(cfg, ini, opts)`: imports parsed multimap data and returns `{ cfg = multimap, text = string, warnings = { ... }, events = { ... } }`.
-- `import_paths(opts)`: imports from `opts.ini` and optional `opts.cfg`, returning the same result shape as `import_maps`.
+Import options: `gameFiles`, `archives`, `fonts`, `encoding`, `dataDirs`, `dataLocal`, `userData`, and `cfgDir`. For `importPaths`, relative `dataDirs` resolve from the `cfg` file's folder when `cfg` is given; `cfgDir` supplies that context otherwise, and is mainly for `importMaps`.
 
-Warnings are returned in the `warnings` array. Hard failures such as missing required options, unsupported encodings, malformed multimap input, missing files, or failed imports are raised as Lua errors.
+Hard failures (missing required options, unknown options, unsupported encodings, malformed multimaps, missing files, failed imports) raise Luau errors. Recoverable problems come back in `warnings`, each with a formatted `message`:
 
-Import events are structured tables. Current event kinds are:
+- `{ kind = "ignoredEmptyValue", key = string, message = string }`
+- `{ kind = "malformedIniLine", line = string, message = string }`
+- `{ kind = "missingGameFile", file = string, message = string }`
 
-- `{ kind = "content_file_resolved", path = string, modified = unix_seconds }`
-- `{ kind = "data_dir_added_for_content", path = string }`
-- `{ kind = "archive_resolved", path = string }`
-- `{ kind = "data_dir_added_for_archive", path = string }`
+Import events:
 
-Import warnings are structured tables with a formatted `message`. Current warning kinds are:
+- `{ kind = "contentFileResolved", path = string, modified = unixSeconds }`
+- `{ kind = "dataDirAddedForContent", path = string }`
+- `{ kind = "archiveResolved", path = string }`
+- `{ kind = "dataDirAddedForArchive", path = string }`
 
-- `{ kind = "ignored_empty_value", key = string, message = string }`
-- `{ kind = "malformed_ini_line", line = string, message = string }`
+Multimaps map each key to an array of strings, preserving duplicate keys:
 
-Multimaps are represented as `key -> array of strings` to preserve duplicate keys:
-
-```lua
+```luau
 {
   encoding = { "win1252" },
   content = { "Morrowind.esm", "Tribunal.esm" },
