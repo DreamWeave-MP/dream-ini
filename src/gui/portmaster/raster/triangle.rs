@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::coverage::triangle_scanline_x_range;
 use super::math::{edge, f32_to_usize_ceil_clamped, f32_to_usize_floor_clamped, usize_to_f32};

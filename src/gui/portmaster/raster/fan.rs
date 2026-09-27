@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::math::{
     edge, edge_covers_pixel, edge_includes_boundary, edge_step_x, f32_to_usize_ceil_clamped,

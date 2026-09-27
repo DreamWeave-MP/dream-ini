@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 const TEXTURED_RECT_VECTOR_BLOCK_PX: usize = 16;
 const CONSTANT_TEXEL_TEXTURED_TRIANGLE_REPEATED_COLOR_BLOCK_PX: usize = 16;
