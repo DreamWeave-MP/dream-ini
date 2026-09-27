@@ -79,7 +79,7 @@ impl SoftwareSurface {
     }
 
     pub(super) fn clear(&mut self, color: [u8; 4]) {
-        for pixel in self.pixels.chunks_exact_mut(4) {
+        for pixel in self.pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&color);
         }
     }
@@ -119,7 +119,7 @@ impl SoftwareSurface {
 
     fn write_opaque_span_at_offset(&mut self, offset: usize, len: usize, color: [u8; 4]) {
         let end = offset + len * 4;
-        for pixel in self.pixels[offset..end].chunks_exact_mut(4) {
+        for pixel in self.pixels[offset..end].as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&color);
         }
     }
@@ -138,7 +138,7 @@ impl SoftwareSurface {
         let end = (y * self.width + end_x) * 4;
 
         if color[3] == u8::MAX {
-            for pixel in self.pixels[start..end].chunks_exact_mut(4) {
+            for pixel in self.pixels[start..end].as_chunks_mut::<4>().0 {
                 pixel.copy_from_slice(&color);
             }
             return;
@@ -166,7 +166,7 @@ fn blend_constant_premultiplied_span_rgba(span: &mut [u8], source: [u8; 4]) {
 
 fn blend_constant_premultiplied_span_rgba_scalar(span: &mut [u8], source: [u8; 4]) {
     let inverse_alpha = u8::MAX - source[3];
-    for pixel in span.chunks_exact_mut(4) {
+    for pixel in span.as_chunks_mut::<4>().0 {
         blend_translucent_premultiplied_over_opaque_destination_with_inverse_alpha(
             pixel,
             source,
@@ -387,7 +387,7 @@ mod tests {
         ]);
         let mut expected = surface.pixels.clone();
 
-        for pixel in expected[4..12].chunks_exact_mut(4) {
+        for pixel in expected[4..12].as_chunks_mut::<4>().0 {
             alpha_blend(pixel, color);
         }
         surface.blend_span(0, 1, 3, color);
@@ -508,7 +508,7 @@ mod tests {
 
     fn blend_constant_premultiplied_span_rgba_reference(span: &mut [u8], source: [u8; 4]) {
         let inverse_alpha = u16::from(u8::MAX - source[3]);
-        for pixel in span.chunks_exact_mut(4) {
+        for pixel in span.as_chunks_mut::<4>().0 {
             for channel in 0..3 {
                 let product = u16::from(pixel[channel]) * inverse_alpha;
                 let blend = (product + 127) / 255;

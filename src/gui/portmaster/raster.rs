@@ -3065,14 +3065,18 @@ mod tests {
 
     fn white_pixel_count(pixels: &[u8]) -> usize {
         pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[0] == 255 && pixel[1] == 255 && pixel[2] == 255)
             .count()
     }
 
     fn red_pixel_count(pixels: &[u8]) -> usize {
         pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[0] == 128 && pixel[1] == 0 && pixel[2] == 0)
             .count()
     }

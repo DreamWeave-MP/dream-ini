@@ -234,7 +234,7 @@ fn texture_alpha_lane_counts(texture: &TextureImage) -> (usize, usize, usize) {
     let mut transparent = 0;
     let mut translucent = 0;
     let mut opaque = 0;
-    for pixel in texture.pixels.chunks_exact(4) {
+    for pixel in texture.pixels.as_chunks::<4>().0 {
         match pixel[3] {
             0 => transparent += 1,
             255 => opaque += 1,

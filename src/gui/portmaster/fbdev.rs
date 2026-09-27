@@ -999,7 +999,12 @@ fn convert_rgba_row_to_bgrx_zero(destination: &mut [u8], source: &[u8]) {
 }
 
 fn convert_rgba_row_to_bgrx_zero_scalar(destination: &mut [u8], source: &[u8]) {
-    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+    for (source, destination) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<4>().0.iter_mut())
+    {
         destination[0] = source[2];
         destination[1] = source[1];
         destination[2] = source[0];
@@ -1025,7 +1030,12 @@ fn convert_rgba_row_to_bgra_opaque(destination: &mut [u8], source: &[u8]) {
 }
 
 fn convert_rgba_row_to_bgra_opaque_scalar(destination: &mut [u8], source: &[u8]) {
-    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+    for (source, destination) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<4>().0.iter_mut())
+    {
         destination[0] = source[2];
         destination[1] = source[1];
         destination[2] = source[0];
@@ -1088,7 +1098,12 @@ fn convert_rgba_row_to_rgbx_zero(destination: &mut [u8], source: &[u8]) {
 }
 
 fn convert_rgba_row_to_rgbx_zero_scalar(destination: &mut [u8], source: &[u8]) {
-    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+    for (source, destination) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<4>().0.iter_mut())
+    {
         destination[0] = source[0];
         destination[1] = source[1];
         destination[2] = source[2];
@@ -1114,7 +1129,12 @@ fn convert_rgba_row_to_rgba_opaque(destination: &mut [u8], source: &[u8]) {
 }
 
 fn convert_rgba_row_to_rgba_opaque_scalar(destination: &mut [u8], source: &[u8]) {
-    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+    for (source, destination) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<4>().0.iter_mut())
+    {
         destination[0] = source[0];
         destination[1] = source[1];
         destination[2] = source[2];
@@ -1159,7 +1179,12 @@ fn convert_rgba_row_to_byte_aligned(
     source: &[u8],
     format: Fast32ByteAlignedBlit,
 ) {
-    for (source, destination) in source.chunks_exact(4).zip(destination.chunks_exact_mut(4)) {
+    for (source, destination) in source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<4>().0.iter_mut())
+    {
         destination.fill(0);
         destination[format.red] = source[0];
         destination[format.green] = source[1];
@@ -1455,7 +1480,7 @@ mod tests {
             convert_rgba_row_to_bgrx_zero_scalar(&mut scalar, &source);
 
             assert_eq!(accelerated, scalar, "width {width}");
-            for pixel in accelerated.chunks_exact(4) {
+            for pixel in accelerated.as_chunks::<4>().0 {
                 assert_eq!(pixel[3], 0, "width {width}");
             }
         }
@@ -1472,7 +1497,7 @@ mod tests {
             convert_rgba_row_to_bgra_opaque_scalar(&mut scalar, &source);
 
             assert_eq!(accelerated, scalar, "width {width}");
-            for pixel in accelerated.chunks_exact(4) {
+            for pixel in accelerated.as_chunks::<4>().0 {
                 assert_eq!(pixel[3], u8::MAX, "width {width}");
             }
         }
@@ -1489,7 +1514,7 @@ mod tests {
             convert_rgba_row_to_rgbx_zero_scalar(&mut scalar, &source);
 
             assert_eq!(accelerated, scalar, "width {width}");
-            for pixel in accelerated.chunks_exact(4) {
+            for pixel in accelerated.as_chunks::<4>().0 {
                 assert_eq!(pixel[3], 0, "width {width}");
             }
         }
@@ -1506,7 +1531,7 @@ mod tests {
             convert_rgba_row_to_rgba_opaque_scalar(&mut scalar, &source);
 
             assert_eq!(accelerated, scalar, "width {width}");
-            for pixel in accelerated.chunks_exact(4) {
+            for pixel in accelerated.as_chunks::<4>().0 {
                 assert_eq!(pixel[3], u8::MAX, "width {width}");
             }
         }
@@ -1719,11 +1744,16 @@ mod tests {
             assert_eq!(mode, expected_mode);
         }
         assert_eq!(specialized, byte_shuffle);
-        for (source, destination) in source.chunks_exact(4).zip(specialized.chunks_exact(4)) {
+        for (source, destination) in source
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(specialized.as_chunks::<4>().0.iter())
+        {
             let color = (source[0], source[1], source[2]);
             let mut packed = [0; 4];
             write_pixel(&mut packed, 4, pack_color(&var, color));
-            assert_eq!(destination, packed);
+            assert_eq!(*destination, packed);
         }
     }
 

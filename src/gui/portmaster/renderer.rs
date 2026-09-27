@@ -1728,7 +1728,7 @@ mod tests {
         let mut surface = SoftwareSurface::default();
         surface.resize(12, 12).expect("surface");
         surface.clear([0, 0, 0, 255]);
-        for triangle in mesh.indices.chunks_exact(3) {
+        for triangle in mesh.indices.as_chunks::<3>().0 {
             let v0 = &mesh.vertices[usize::try_from(triangle[0]).expect("index")];
             let v1 = &mesh.vertices[usize::try_from(triangle[1]).expect("index")];
             let v2 = &mesh.vertices[usize::try_from(triangle[2]).expect("index")];

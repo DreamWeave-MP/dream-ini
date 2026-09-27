@@ -1334,7 +1334,7 @@ fn record_sampled_textured_rect_vector_block_alpha_stats(
             stats.record_alpha_px(u8::MAX, TEXTURED_RECT_VECTOR_BLOCK_PX);
         }
         SampledTexturedRectVectorBlockAlpha::Mixed => {
-            for pixel in source.chunks_exact(4) {
+            for pixel in source.as_chunks::<4>().0 {
                 let alpha = pixel[3];
                 stats.record_textured_rect_separable_direct_alpha_px(alpha, 1);
                 stats.record_alpha_px(alpha, 1);
@@ -1360,7 +1360,7 @@ fn record_sampled_textured_rect_modulated_vector_block_alpha_stats(
             stats.record_alpha_px(u8::MAX, block_px);
         }
         SampledTexturedRectVectorBlockAlpha::Mixed => {
-            for pixel in source.chunks_exact(4) {
+            for pixel in source.as_chunks::<4>().0 {
                 let alpha = if pixel[3] == 0 {
                     0
                 } else {
