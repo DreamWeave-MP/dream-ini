@@ -685,7 +685,11 @@ fn read_directory_paths(directory: &Path) -> Vec<PathBuf> {
 }
 
 fn parse_events(bytes: &[u8]) -> impl Iterator<Item = InputEvent> + '_ {
-    bytes.chunks_exact(input_event_size()).map(parse_event)
+    bytes
+        .as_chunks::<{ input_event_size() }>()
+        .0
+        .iter()
+        .map(|event| parse_event(event))
 }
 
 fn parse_event(bytes: &[u8]) -> InputEvent {
