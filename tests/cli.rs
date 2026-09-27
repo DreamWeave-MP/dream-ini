@@ -433,6 +433,55 @@ fn same_context_existing_cfg_output_preserves_absolute_symlink_cfg_path() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+// `openmw-config` records a relative `--cfg` as the current directory joined with it, keeping a
+// symlinked `PWD` spelling. That is neither the given path nor its canonical form, the same
+// mismatch Windows hits through `canonicalize`'s `\\?\` prefix.
+#[cfg(unix)]
+#[test]
+fn same_context_relative_cfg_under_symlinked_current_dir_preserves_comments() {
+    use std::os::unix::fs::symlink;
+
+    let dir = unique_test_dir("same-context-symlinked-cwd");
+    let real_dir = dir.join("real");
+    let link_dir = dir.join("link");
+    fs::create_dir_all(&real_dir).unwrap();
+    symlink(&real_dir, &link_dir).unwrap();
+    fs::write(
+        real_dir.join("Morrowind.ini"),
+        "[General]\nDisable Audio=1\n",
+    )
+    .unwrap();
+    fs::write(
+        real_dir.join("openmw.cfg"),
+        "# keep this comment\ndata=mods\n",
+    )
+    .unwrap();
+    fs::create_dir_all(real_dir.join("mods")).unwrap();
+
+    let output = Command::new(BIN)
+        .current_dir(&link_dir)
+        .env("PWD", &link_dir)
+        .args([
+            "--no-archives",
+            "--ini",
+            "Morrowind.ini",
+            "--cfg",
+            "openmw.cfg",
+            "--output",
+            "out.cfg",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let written = fs::read_to_string(real_dir.join("out.cfg")).unwrap();
+    assert!(written.contains("# keep this comment\n"), "{written}");
+    assert!(written.contains("data=mods\n"), "{written}");
+    assert!(written.contains("no-sound=1\n"), "{written}");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn relocated_existing_cfg_output_uses_resolved_paths() {
     let dir = unique_test_dir("relocated-existing-cfg");

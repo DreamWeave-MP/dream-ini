@@ -99,6 +99,12 @@ pub fn serialize_preserved_cfg_document(
         write_keys.insert("user-data".to_owned());
     }
     let user_config_path = config.user_config_path().join("openmw.cfg");
+    // `openmw-config` records each setting's source as the absolute path it loaded (for the root
+    // cfg, `root_config_file`), which is neither the possibly relative path we were given nor its
+    // canonical form on Windows, where `canonicalize` adds a `\\?\` prefix.
+    let root_config_path = config.root_config_file();
+    let root_is_source = canonical_source_path.is_some()
+        && fs::canonicalize(root_config_path).ok() == canonical_source_path;
     let mut document = String::new();
     for setting in config.settings_matching(|setting| {
         let source = setting.meta().source_config();
@@ -106,6 +112,7 @@ pub fn serialize_preserved_cfg_document(
             || canonical_source_path
                 .as_deref()
                 .is_some_and(|canonical_source_path| source == canonical_source_path)
+            || (root_is_source && source == root_config_path)
             || (source == user_config_path
                 && setting_key(setting).is_some_and(|key| write_keys.contains(&key)))
     }) {
