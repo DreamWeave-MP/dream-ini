@@ -44,6 +44,11 @@ criterion = "0.8"
 name = "round_trip"
 harness = false
 
+[[bench]]
+name = "luau_boundary"
+harness = false
+required-features = ["standalone-lua"]
+
 # Thin LTO in every release build. Where .cargo/config.toml passes -Clinker-plugin-lto (Linux,
 # Windows, PortMaster) lld runs it over the whole program's bitcode; on macOS and Android rustc
 # runs it over the Rust crates.
