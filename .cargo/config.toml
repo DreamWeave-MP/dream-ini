@@ -13,6 +13,11 @@
 CXX = "clang++"
 CXX_x86_64-pc-windows-msvc = "clang-cl"
 CXX_aarch64-pc-windows-msvc = "clang-cl"
+# clang-cl, unlike cl, refuses try/throw without an /EH flag, and cc passes none. Luau (the lua
+# feature, through mlua) raises its errors as C++ exceptions, including out of its extern "C" API,
+# so this is /EHs without the c that would let the compiler assume extern "C" never throws.
+CXXFLAGS_x86_64-pc-windows-msvc = "/EHs"
+CXXFLAGS_aarch64-pc-windows-msvc = "/EHs"
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
