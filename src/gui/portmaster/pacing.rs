@@ -168,13 +168,7 @@ pub(super) fn sleep_after_frame(
     next_deadline
 }
 
-pub(super) fn format_repaint_delay(repaint_delay: Duration) -> String {
-    if repaint_delay == Duration::MAX {
-        "none".to_owned()
-    } else {
-        format!("{repaint_delay:?}")
-    }
-}
+pub(super) use dream_soft_render::format_repaint_delay;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FrameScheduleAction {
@@ -352,12 +346,6 @@ mod tests {
             repaint_deadline(now, Duration::from_millis(25)),
             Some(now + Duration::from_millis(25))
         );
-    }
-
-    #[test]
-    fn repaint_delay_format_uses_idle_sentinel() {
-        assert_eq!(format_repaint_delay(Duration::MAX), "none");
-        assert_eq!(format_repaint_delay(Duration::from_millis(16)), "16ms");
     }
 
     #[test]

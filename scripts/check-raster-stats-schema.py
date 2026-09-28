@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-STATS_RS = REPO_ROOT / "src" / "gui" / "portmaster" / "raster" / "stats.rs"
+STATS_RS = REPO_ROOT / "dream-soft-render" / "src" / "raster" / "stats.rs"
 
 
 def extract_raster_stats_struct(source: str) -> str:
@@ -109,7 +109,7 @@ def main() -> int:
     value_source = extract_raster_stats_values(source)
 
     field_matches = re.findall(
-        r"pub\(in\s+crate::gui::portmaster\)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^,]+)",
+        r"pub(?:\([^)]*\))?\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^,]+)",
         struct_body,
     )
     fields = [name for name, _ in field_matches]

@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 use core::arch::aarch64::{uint8x16x4_t, vdupq_n_u8, vld4q_u8, vst4q_u8};
 
+use dream_soft_render::{RenderTimings, SoftwareRenderer, SoftwareSurface, TextureEvidence};
+
 use super::log::{SharedLog, write_log};
 use super::pacing::{DisplayTiming, format_repaint_delay};
-use super::renderer::SoftwareRenderer;
-use super::surface::SoftwareSurface;
-use super::{GuiFrame, GuiShell};
+use super::{GuiFrame, GuiShell, render_gui_frame};
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
 const FBIOGET_FSCREENINFO: libc::c_ulong = 0x4602;
@@ -207,7 +207,7 @@ impl Framebuffer {
         }
 
         let stage_start = log_timings.then(Instant::now);
-        let render_outcome = renderer.render(viewport.width, viewport.height, frame)?;
+        let render_outcome = render_gui_frame(renderer, viewport.width, viewport.height, frame)?;
         let repaint_delay = render_outcome.repaint_delay;
         let render_elapsed = elapsed_micros(stage_start);
 
@@ -1226,9 +1226,9 @@ struct HitchLogTimingFields {
     snapshot_elapsed: u128,
     var_refresh_elapsed: u128,
     validate_viewport_elapsed: u128,
-    renderer_timings: Option<super::renderer::RenderTimings>,
+    renderer_timings: Option<RenderTimings>,
     primitive_count: usize,
-    texture_evidence: super::renderer::TextureEvidence,
+    texture_evidence: TextureEvidence,
     repaint_delay: Duration,
 }
 
@@ -1297,7 +1297,7 @@ mod tests {
             validate_viewport_elapsed: 600,
             renderer_timings: None,
             primitive_count: 17,
-            texture_evidence: super::super::renderer::TextureEvidence {
+            texture_evidence: TextureEvidence {
                 count: 3,
                 bytes: 4_096,
                 set_count: 2,

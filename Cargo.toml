@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "config"]
 clap_complete = "4"
 clap_mangen = "0.3"
 clap = { version = "4", features = ["derive"] }
+dream-soft-render = { path = "dream-soft-render", version = "0.1", optional = true }
 encoding_rs = "0.8"
 eframe = { version = "0.34", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui = { version = "0.34", optional = true }
@@ -34,7 +35,7 @@ controller-support = ["dep:gilrs", "dep:libc"]
 gui = ["dep:eframe", "dep:egui", "dep:image", "controller-support"]
 lua = ["dep:mlua"]
 standalone-lua = ["lua", "mlua/luau"]
-portmaster-gui = ["dep:egui", "controller-support"]
+portmaster-gui = ["dep:dream-soft-render", "dep:egui", "controller-support"]
 
 [dev-dependencies]
 criterion = "0.8"

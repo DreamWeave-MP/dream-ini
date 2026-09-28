@@ -14,20 +14,14 @@ mod log;
 #[cfg(target_os = "linux")]
 mod pacing;
 #[cfg(target_os = "linux")]
-mod raster;
-#[cfg(target_os = "linux")]
-mod render_benchmark;
-#[cfg(target_os = "linux")]
-mod renderer;
-#[cfg(target_os = "linux")]
 mod shell;
-#[cfg(target_os = "linux")]
-mod surface;
-#[cfg(target_os = "linux")]
-mod texture;
 
 #[cfg(target_os = "linux")]
 use super::{GuiApp, GuiShell};
+#[cfg(target_os = "linux")]
+use dream_soft_render::{
+    RenderFrame, RenderOutcome, SampledRectModulatedWorkload, SoftwareRenderer,
+};
 #[cfg(target_os = "linux")]
 use fbdev::{
     DRAW_ENV_VAR, Framebuffer, FramebufferDrawOutcome, FramebufferSnapshot,
@@ -39,10 +33,6 @@ use pacing::{
     FrameScheduleAction, IDLE_POLL_INTERVAL, REFRESH_ENV_VAR, earliest_repaint_deadline,
     frame_schedule_action, repaint_deadline, select_refresh_rate, sleep_for_frame_schedule,
 };
-#[cfg(target_os = "linux")]
-use render_benchmark::SampledRectModulatedWorkload;
-#[cfg(target_os = "linux")]
-use renderer::SoftwareRenderer;
 #[cfg(target_os = "linux")]
 use shell::PortMasterGuiShell;
 
@@ -772,6 +762,39 @@ struct GuiFrame<'a, S: GuiShell> {
     frame_index: u64,
     repaint_request_due_before_frame: bool,
     render_benchmark: Option<&'a mut RenderBenchmarkState>,
+}
+
+// Adapts the app-side frame (GUI state, shared log, benchmark config) to the renderer crate.
+#[cfg(target_os = "linux")]
+fn render_gui_frame<S: GuiShell>(
+    renderer: &mut SoftwareRenderer,
+    width: usize,
+    height: usize,
+    frame: &mut GuiFrame<'_, S>,
+) -> io::Result<RenderOutcome> {
+    let synthetic_workload = match frame.render_benchmark.as_deref_mut() {
+        Some(benchmark) if benchmark.kind().uses_synthetic_workload() => Some(
+            benchmark
+                .sampled_rect_modulated_workload(width, height, frame.log)
+                .ok_or_else(|| io::Error::other("missing sampled rect benchmark workload"))?,
+        ),
+        _ => None,
+    };
+    let log = frame.log;
+    let write_render_log = move |line: &str| write_log(log, line);
+    let render_frame = RenderFrame {
+        context: frame.context,
+        log: log.is_some().then_some(&write_render_log as &dyn Fn(&str)),
+        log_frame: frame.log_frame,
+        log_render_stats: frame.log_render_stats,
+        hitch_log_threshold: frame.hitch_log_threshold,
+        frame_index: frame.frame_index,
+        repaint_request_due_before_frame: frame.repaint_request_due_before_frame,
+        synthetic_workload,
+    };
+    let app = &mut *frame.app;
+    let shell = &mut *frame.shell;
+    renderer.render(width, height, &render_frame, |ui| app.ui(ui, shell))
 }
 
 #[cfg(not(target_os = "linux"))]

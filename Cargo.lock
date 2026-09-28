@@ -686,6 +686,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "criterion",
+ "dream-soft-render",
  "eframe",
  "egui",
  "encoding_rs",
@@ -695,6 +696,13 @@ dependencies = [
  "mlua",
  "openmw-config",
  "windows",
+]
+
+[[package]]
+name = "dream-soft-render"
+version = "0.1.0"
+dependencies = [
+ "egui",
 ]
 
 [[package]]
