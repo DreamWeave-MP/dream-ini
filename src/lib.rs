@@ -29,7 +29,8 @@
 //! # }
 //! ```
 //!
-//! Enable the `lua` feature to expose an embedding-oriented Lua API via [`lua::create_module`].
+//! Enable the `luau` feature for the `dream.ini` Luau extension ([`luau::IniExtension`]), which
+//! composes into an `l3i` runtime plan as the module `@dream/ini`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -42,8 +43,8 @@ mod content_files;
 mod events;
 mod fallback_keys;
 mod importer;
-#[cfg(feature = "lua")]
-pub mod lua;
+#[cfg(feature = "luau")]
+pub mod luau;
 mod openmw_cfg;
 mod parser;
 mod plugin;

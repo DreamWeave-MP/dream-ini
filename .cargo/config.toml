@@ -1,35 +1,25 @@
-# Build and link through clang and lld, the DreamWeave clang toolchain policy (l3i's
-# TOOLCHAIN.md, in dream-binder): the Rust side emits bitcode and lld runs one thin LTO over it.
-# StroggForge CI installs a clang and lld matching rustc's LLVM for every build; locally, install
-# the same LLVM major rustc reports (`rustc -vV`). Environment variables override every entry here.
-#
-# aarch64-unknown-linux-gnu is left out on purpose: that is the PortMaster cross build, which
-# StroggForge sets up entirely through the environment, with these flags plus its EL9 sysroot.
-# Android builds use the NDK's toolchain.
-
-# dream-ini has no C++ of its own; these keep any C++ a dependency builds on clang, as l3i's
-# dependents are expected to (dream-binder/TOOLCHAIN.md).
+# The verified toolchain (TOOLCHAIN.md): clang compiles Luau, the Rust side emits bitcode, and
+# lld runs one thin LTO over both languages. build.rs refuses anything else unless
+# L3I_UNVERIFIED_TOOLCHAIN is set (docs.rs is exempt). Environment variables override every
+# entry here. Linux is the measured configuration; the macOS and Windows entries follow the
+# same shape (Homebrew or release LLVM on macOS, clang-cl plus lld-link on MSVC) and are what
+# CI runs.
 [env]
 CXX = "clang++"
 CXX_x86_64-pc-windows-msvc = "clang-cl"
 CXX_aarch64-pc-windows-msvc = "clang-cl"
-# clang-cl, unlike cl, refuses try/throw without an /EH flag, and cc passes none. Luau (the lua
-# feature, through mlua) raises its errors as C++ exceptions, including out of its extern "C" API,
-# so this is /EHs without the c that would let the compiler assume extern "C" never throws.
-CXXFLAGS_x86_64-pc-windows-msvc = "/EHs"
-CXXFLAGS_aarch64-pc-windows-msvc = "/EHs"
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
 
-# No -Clinker-plugin-lto on Apple targets: rustc passes that flag's GNU `-plugin-opt` arguments to
-# the linker, and ld64.lld rejects them. clang and lld still link, and the release profile's thin
-# LTO runs in rustc instead.
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
+
 [target.x86_64-apple-darwin]
-rustflags = ["-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
 
 [target.aarch64-apple-darwin]
-rustflags = ["-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-Clinker-plugin-lto", "-Clinker=lld-link"]

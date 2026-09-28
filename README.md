@@ -106,7 +106,7 @@ Path reminder: `Data Files directory` is the Morrowind content/archive search pa
 - Relative `--data` with `--output`, `--cfg`, or `--in-place` is interpreted relative to that cfg context and written as supplied. Relative `--data` with stdout and no `--cfg` is interpreted relative to the current directory and written as an absolute path.
 - Explicit singleton options (`--data-local`, `--resources`, and `--user-data`) are output-only and are applied after content/archive resolution. Use `--data` to add an importer search path.
 - Directory-valued keys read from an existing cfg are interpreted by `openmw-config` for filesystem lookup. Their authored spelling is not rewritten for normal cfg output.
-- Config, Lua, and event path values are UTF-8 text. Non-UTF-8 operating-system paths are outside the supported API contract and may be represented lossy when converted for cfg/Lua output.
+- Config, Luau, and event path values are UTF-8 text. Non-UTF-8 operating-system paths are outside the supported API contract and may be represented lossy when converted for cfg/Lua output.
 
 ## Deliberate Differences From OpenMW's C++ Importer
 
@@ -118,23 +118,35 @@ Path reminder: `Data Files directory` is the Morrowind content/archive search pa
 
 ## Luau API
 
-The optional `lua` feature builds [Luau](https://luau.org) bindings on `mlua` 0.12. It leaves the runtime choice to the host application (enable `mlua/luau` there); the `standalone-lua` feature selects Luau for this crate's own tests:
-
-```bash
-cargo test --features standalone-lua
-```
-
-The bindings are embedding-only: there is no `require` module or `cdylib`. Register the table yourself; `register` installs it as the global `dreamIni`:
+The optional `luau` feature (`lua` is the former spelling) builds the `dream.ini` extension for
+[l3i](https://github.com/DreamWeave-MP/dream-binder), the DreamWeave Luau binder. The crate never
+creates a VM: the host composes `dream_ini::luau::IniExtension` into an l3i `RuntimePlan`, and
+every runtime made from that plan has the module `@dream/ini`. Whether it is also a global is the
+host's policy:
 
 ```rust
-let lua = mlua::Lua::new();
-dream_ini::lua::register(&lua)?; // or: lua.globals().set("dreamIni", dream_ini::lua::create_module(&lua)?)?
+use l3i::extension::{RuntimePlan, RuntimePolicy};
+use l3i::Runtime;
+
+let plan = RuntimePlan::builder()
+    .policy(RuntimePolicy::new().compat_global(dream_ini::luau::MODULE, "dreamIni"))
+    .extension(dream_ini::luau::IniExtension)
+    .finalize()?;
+let runtime = Runtime::from_plan(&plan)?;
+runtime.exec("local ini = require('@dream/ini') print(ini.version)")?;
 ```
+
+The extension declares no userdata and takes no tags: the surface is tables. Its full Luau type
+is part of the plan (`plan.type_definitions()` renders the `.d.luau`, and `plan.check_definitions()`
+proves it with Luau's own frontend), so strict scripts type check against `require("@dream/ini")`
+without hand-kept declarations.
 
 Luau usage:
 
 ```luau
-local result = dreamIni.importPaths({
+local ini = require("@dream/ini")
+
+local result = ini.importPaths({
   ini = "Morrowind.ini",
   cfg = "openmw.cfg",
   gameFiles = true,
@@ -158,18 +170,26 @@ for _, event in result.events do
 end
 ```
 
-Functions, option fields, result fields, and `kind` values are camelCase. Option tables reject unknown fields, so a misspelled option is an error rather than silently ignored.
+Functions, option fields, result fields, and `kind` values are camelCase. Option tables are
+strict: an unknown or misspelled key is an error that names the known keys.
 
 - `version`: the crate version.
-- `parseIni(text, options?)`: parses a Morrowind INI byte string (decoded with `options.encoding`, default `"win1252"`) and returns `{ entries = multimap, warnings = { ... } }`.
+- `parseIni(text, options?)`: parses a Morrowind INI's raw bytes (a string or a `buffer`, decoded
+  with `options.encoding`, default `"win1252"`) and returns `{ entries = multimap, warnings = { ... } }`.
 - `parseCfg(text)`: parses OpenMW cfg text and returns a multimap.
 - `serializeCfg(multimap)`: serializes a multimap to normalized cfg text.
 - `importMaps(cfg, ini, options?)`: imports parsed multimap data and returns `{ cfg = multimap, text = string, warnings = { ... }, events = { ... } }`.
 - `importPaths(options)`: imports from `options.ini` and optional `options.cfg`, returning the same shape as `importMaps`.
 
-Import options: `gameFiles`, `archives`, `fonts`, `encoding`, `dataDirs`, `dataLocal`, `userData`, and `cfgDir`. For `importPaths`, relative `dataDirs` resolve from the `cfg` file's folder when `cfg` is given; `cfgDir` supplies that context otherwise, and is mainly for `importMaps`.
+Import options: `game`, `gameFiles`, `archives`, `fonts`, `verbose`, `encoding`, `dataDirs`,
+`dataLocal`, `resources`, `userData`, and `cfgDir`; `importMaps` adds `iniPath` (default
+`"Morrowind.ini"`, which locates the fallback `Data Files` folder). For `importPaths`, relative
+`dataDirs` resolve from the `cfg` file's folder when `cfg` is given; `cfgDir` supplies that context
+otherwise, and is mainly for `importMaps`.
 
-Hard failures (missing required options, unknown options, unsupported encodings, malformed multimaps, missing files, failed imports) raise Luau errors. Recoverable problems come back in `warnings`, each with a formatted `message`:
+Hard failures (missing required options, unknown options, unsupported encodings, malformed
+multimaps, missing files, failed imports) raise Luau errors; import errors are prefixed
+`dream.ini:`. Recoverable problems come back in `warnings`, each with a formatted `message`:
 
 - `{ kind = "ignoredEmptyValue", key = string, message = string }`
 - `{ kind = "malformedIniLine", line = string, message = string }`
@@ -182,7 +202,8 @@ Import events:
 - `{ kind = "archiveResolved", path = string }`
 - `{ kind = "dataDirAddedForArchive", path = string }`
 
-Multimaps map each key to an array of strings, preserving duplicate keys:
+Multimaps map each key to an array of strings, preserving duplicate keys. Every value must be a
+string; nothing is coerced:
 
 ```luau
 {
@@ -190,6 +211,16 @@ Multimaps map each key to an array of strings, preserving duplicate keys:
   content = { "Morrowind.esm", "Tribunal.esm" },
 }
 ```
+
+### Changes from the mlua bindings (0.3)
+
+- The module is reached through `require("@dream/ini")`; `dreamIni` exists only when the host
+  policy exposes it. `dream_ini::lua::{create_module, register}` are gone.
+- Multimap values must be strings (mlua coerced numbers).
+- Option errors carry the function's context and list the known keys
+  (`ini.importMaps: unknown option 'user_data'; known options are ...`); import errors read
+  `dream.ini: <message>` with no `runtime error:` prefix.
+- `parseIni` also accepts a Luau `buffer`.
 
 ## Rust API
 
@@ -199,7 +230,7 @@ Generate crate documentation with:
 cargo doc --open
 ```
 
-The library exposes the same multimap model used by the CLI and Lua API. Start with `IniImporter`, `ImportOptions`, `ImportEvent`, `ImportWarning`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`. Path values serialized into cfg text, Lua tables, or import events are UTF-8 strings.
+The library exposes the same multimap model used by the CLI and Luau API. Start with `IniImporter`, `ImportOptions`, `ImportEvent`, `ImportWarning`, `parse_cfg_str`, `parse_ini_bytes_with_warnings`, and `serialize_cfg`. Path values serialized into cfg text, Luau tables, or import events are UTF-8 strings.
 
 ## Development
 
@@ -210,12 +241,13 @@ cargo test
 cargo bench
 ```
 
-Lua feature checks:
+Luau feature checks (l3i's toolchain policy applies: clang, lld, and cross-language thin LTO,
+set by `.cargo/config.toml`):
 
 ```bash
-cargo clippy --all-targets --features lua -- -W clippy::pedantic -D warnings
-cargo test --features lua
-cargo bench --no-run --features lua
+cargo clippy --all-targets --features luau -- -W clippy::pedantic -D warnings
+cargo test --features luau
+cargo bench --no-run --features luau
 ```
 
 The Criterion benchmark measures a large synthetic parse/import/serialize round trip. It does not include plugin header IO from `--game-files`. Use `cargo bench --no-run` to verify the benchmark builds without running measurements.

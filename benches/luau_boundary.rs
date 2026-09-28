@@ -13,7 +13,10 @@ use std::fs;
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use mlua::{Function, Lua};
+use dream_ini::luau::{IniExtension, MODULE};
+use l3i::Runtime;
+use l3i::extension::RuntimePlan;
+use l3i::value::{Function, Value};
 use support::Fixture;
 
 /// `(name, factory source)`; the factory takes `(ini, iniPath, cfgPath, iniText, cfgText)`.
@@ -60,27 +63,51 @@ fn luau_boundary(c: &mut Criterion) {
     let ini_path = fixture.ini.to_string_lossy().into_owned();
     let cfg_path = fixture.cfg.to_string_lossy().into_owned();
 
-    let lua = Lua::new();
-    let module = dream_ini::lua::create_module(&lua).expect("create the dreamIni module");
+    let plan = RuntimePlan::builder()
+        .extension(IniExtension)
+        .finalize()
+        .expect("finalize the plan");
+    let runtime = Runtime::from_plan(&plan).expect("create the runtime");
+    // Loading leases the root stack itself, so nothing holds it until the closures exist.
+    let module: Value = runtime
+        .load_function(&format!("return function() return require('{MODULE}') end"))
+        .expect("load the module getter")
+        .invoke(&runtime.stack(), ())
+        .expect("require the module");
+    let bodies: Vec<(&str, Function)> = SCRIPTS
+        .iter()
+        .map(|(name, source)| {
+            let factory = runtime
+                .load_function(source)
+                .expect("load the benchmark script");
+            let body: Function = factory
+                .invoke(
+                    &runtime.stack(),
+                    (
+                        module.clone(),
+                        ini_path.as_str(),
+                        cfg_path.as_str(),
+                        ini_text.as_str(),
+                        cfg_text.as_str(),
+                    ),
+                )
+                .expect("build the benchmark closure");
+            (*name, body)
+        })
+        .collect();
 
     let mut group = c.benchmark_group("luau_boundary");
     group
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(4))
         .sample_size(30);
-    for (name, source) in SCRIPTS {
-        let factory: Function = lua.load(*source).eval().expect("load the benchmark script");
-        let body: Function = factory
-            .call((
-                module.clone(),
-                ini_path.as_str(),
-                cfg_path.as_str(),
-                ini_text.as_str(),
-                cfg_text.as_str(),
-            ))
-            .expect("build the benchmark closure");
+    let stack = runtime.stack();
+    for (name, body) in &bodies {
         group.bench_function(*name, |b| {
-            b.iter(|| body.call::<()>(()).expect("run the benchmark closure"));
+            b.iter(|| {
+                body.invoke::<(), ()>(&stack, ())
+                    .expect("run the benchmark closure");
+            });
         });
     }
     group.finish();

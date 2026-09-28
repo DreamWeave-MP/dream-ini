@@ -17,7 +17,8 @@ encoding_rs = "0.8"
 eframe = { version = "0.34", optional = true, default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui = { version = "0.34", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
-mlua = { version = "0.12.1", optional = true, default-features = false }
+# The Luau binder behind the `luau` feature; a path dependency for the migration campaign.
+l3i = { path = "../dream-binder", optional = true }
 openmw-config = "2.0"
 
 [target.'cfg(windows)'.dependencies]
@@ -33,12 +34,19 @@ gilrs = { version = "0.11", optional = true }
 default = ["gui"]
 controller-support = ["dep:gilrs", "dep:libc"]
 gui = ["dep:eframe", "dep:egui", "dep:image", "controller-support"]
-lua = ["dep:mlua"]
-standalone-lua = ["lua", "mlua/luau"]
+# The `dream.ini` Luau extension (`luau` module); `lua` is the former spelling.
+luau = ["dep:l3i"]
+lua = ["luau"]
 portmaster-gui = ["dep:dream-soft-render", "dep:egui", "controller-support"]
 
 [dev-dependencies]
 criterion = "0.8"
+# The tests prove the declared Luau types with Luau's own frontend.
+l3i = { path = "../dream-binder", features = ["analysis"] }
+
+[[test]]
+name = "luau"
+required-features = ["luau"]
 
 [[bench]]
 name = "round_trip"
@@ -47,7 +55,7 @@ harness = false
 [[bench]]
 name = "luau_boundary"
 harness = false
-required-features = ["standalone-lua"]
+required-features = ["luau"]
 
 # Thin LTO in every release build. Where .cargo/config.toml passes -Clinker-plugin-lto (Linux,
 # Windows, PortMaster) lld runs it over the whole program's bitcode; on macOS and Android rustc
