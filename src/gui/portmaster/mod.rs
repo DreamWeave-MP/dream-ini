@@ -164,6 +164,10 @@ struct FramebufferGuiRuntime<'a> {
 impl<'a> FramebufferGuiRuntime<'a> {
     fn new(log: Option<&'a SharedLog>, frame_interval: Duration) -> Self {
         let egui_context = egui::Context::default();
+        // Feathering anti-aliases every shape edge with an extra strip of translucent
+        // triangles, the costliest thing the software renderer draws per frame on handhelds.
+        // Text keeps its own anti-aliasing in the font atlas.
+        egui_context.tessellation_options_mut(|options| options.feathering = false);
         let pending_repaint_delay = Arc::new(Mutex::new(None));
         install_repaint_callback(&egui_context, &pending_repaint_delay);
         let app = GuiApp::new(egui_context.clone());
