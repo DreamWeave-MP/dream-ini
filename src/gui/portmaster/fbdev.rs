@@ -40,7 +40,19 @@ pub(super) struct Framebuffer {
     var: FbVarScreeninfo,
     memory: NonNull<u8>,
     memory_len: NonZeroUsize,
+    last_present: Option<LastPresent>,
 }
+
+// What the framebuffer is known to hold, so an unchanged surface need not be blitted again.
+#[derive(Debug)]
+struct LastPresent {
+    viewport: VisibleViewport,
+    format: BlitFormat,
+    at: Instant,
+}
+
+// Re-blit an unchanged surface at least this often, in case something else drew over it.
+const UNCHANGED_SURFACE_REBLIT_INTERVAL: Duration = Duration::from_secs(1);
 
 impl Framebuffer {
     pub(super) fn open() -> io::Result<Self> {
@@ -95,6 +107,7 @@ impl Framebuffer {
             var,
             memory,
             memory_len,
+            last_present: None,
         })
     }
 
@@ -216,10 +229,26 @@ impl Framebuffer {
         let snapshot_elapsed = elapsed_micros(stage_start);
 
         let stage_start = log_timings.then(Instant::now);
-        let blit_format = self.blit_rgba_surface(renderer.surface(), &viewport)?;
+        let reusable_present = self.last_present.as_ref().filter(|present| {
+            !render_outcome.surface_changed
+                && present.viewport == viewport
+                && present.at.elapsed() < UNCHANGED_SURFACE_REBLIT_INTERVAL
+        });
+        let blit_skipped = reusable_present.is_some();
+        let blit_format = if let Some(present) = reusable_present {
+            present.format
+        } else {
+            let format = self.blit_rgba_surface(renderer.surface(), &viewport)?;
+            self.last_present = Some(LastPresent {
+                viewport: viewport.clone(),
+                format,
+                at: Instant::now(),
+            });
+            format
+        };
         let blit_elapsed = elapsed_micros(stage_start);
         let total_elapsed = elapsed_micros(total_start);
-        if frame.log_render_stats {
+        if frame.log_render_stats && !blit_skipped {
             log_present_stats(
                 frame.log,
                 frame.frame_index,
@@ -235,7 +264,7 @@ impl Framebuffer {
             write_log(
                 frame.log,
                 format!(
-                    "framebuffer draw timings frame={} blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} repaint_delay={repaint_delay} total_us={total_elapsed}",
+                    "framebuffer draw timings frame={} blit_format={blit_format_name} var_refresh_us={var_refresh_elapsed} validate_viewport_us={validate_viewport_elapsed} render_us={render_elapsed} snapshot_us={snapshot_elapsed} blit_us={blit_elapsed} blit_skipped={blit_skipped} repaint_delay={repaint_delay} total_us={total_elapsed}",
                     frame.frame_index,
                 ),
             );
