@@ -1,0 +1,30 @@
+# Build and link through clang and lld, the DreamWeave clang toolchain policy (l3i's
+# TOOLCHAIN.md, in dream-binder): the Rust side emits bitcode and lld runs one thin LTO over it.
+# CI installs a clang and lld matching rustc's LLVM through StroggForge's llvm_toolchain input;
+# locally, install the same LLVM major rustc reports (`rustc -vV`). Environment variables
+# override every entry here.
+#
+# aarch64-unknown-linux-gnu is left out on purpose: that is the PortMaster cross build, which
+# StroggForge links against its own AlmaLinux 8 sysroot. Android builds use the NDK's toolchain.
+
+# dream-ini has no C++ of its own; these keep any C++ a dependency builds on clang, as l3i's
+# dependents are expected to (dream-binder/TOOLCHAIN.md).
+[env]
+CXX = "clang++"
+CXX_x86_64-pc-windows-msvc = "clang-cl"
+CXX_aarch64-pc-windows-msvc = "clang-cl"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=lld-link"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-Clinker-plugin-lto", "-Clinker=lld-link"]
