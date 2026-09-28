@@ -19,9 +19,8 @@ mod shell;
 #[cfg(target_os = "linux")]
 use super::{GuiApp, GuiShell};
 #[cfg(target_os = "linux")]
-use dream_soft_render::{
-    RenderFrame, RenderOutcome, SampledRectModulatedWorkload, SoftwareRenderer,
-};
+use dream_soft_render::SoftwareRenderer;
+use dream_soft_render::egui_adapter::{RenderFrame, RenderOutcome, SampledRectModulatedWorkload};
 #[cfg(target_os = "linux")]
 use fbdev::{
     DRAW_ENV_VAR, Framebuffer, FramebufferDrawOutcome, FramebufferSnapshot,
@@ -798,7 +797,7 @@ fn render_gui_frame<S: GuiShell>(
     };
     let app = &mut *frame.app;
     let shell = &mut *frame.shell;
-    renderer.render(width, height, &render_frame, |ui| app.ui(ui, shell))
+    renderer.render_egui(width, height, &render_frame, |ui| app.ui(ui, shell))
 }
 
 #[cfg(not(target_os = "linux"))]

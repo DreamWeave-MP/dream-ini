@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 use core::arch::aarch64::{uint8x16x4_t, vdupq_n_u8, vld4q_u8, vst4q_u8};
 
-use dream_soft_render::{RenderTimings, SoftwareRenderer, SoftwareSurface, TextureEvidence};
+use dream_soft_render::egui_adapter::{RenderTimings, TextureEvidence};
+use dream_soft_render::{SoftwareRenderer, SoftwareSurface};
 
 use super::log::{SharedLog, write_log};
 use super::pacing::{DisplayTiming, format_repaint_delay};

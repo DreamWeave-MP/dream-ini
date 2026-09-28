@@ -168,7 +168,7 @@ pub(super) fn sleep_after_frame(
     next_deadline
 }
 
-pub(super) use dream_soft_render::format_repaint_delay;
+pub(super) use dream_soft_render::egui_adapter::format_repaint_delay;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FrameScheduleAction {
