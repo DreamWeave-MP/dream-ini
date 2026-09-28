@@ -611,7 +611,9 @@ fn fb_id(fix: &FbFixScreeninfo) -> String {
         .unwrap_or(fix.id.len());
     let bytes = fix.id[..nul]
         .iter()
-        .map(|character| u8::try_from(*character).unwrap_or(b'?'))
+        // c_char is i8 on x86 and u8 on AArch64; widening first keeps one spelling for both,
+        // and negative (non-ASCII) i8 bytes still become '?'.
+        .map(|character| u8::try_from(i16::from(*character)).unwrap_or(b'?'))
         .collect::<Vec<_>>();
     String::from_utf8_lossy(&bytes).into_owned()
 }
@@ -1084,8 +1086,10 @@ unsafe fn convert_rgba_row_to_bgrx_zero_neon(destination: &mut [u8], source: &[u
 
     let zero = unsafe { vdupq_n_u8(0) };
     for (source, destination) in source
-        .chunks_exact(FAST32_NEON_PIXELS * 4)
-        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
+        .as_chunks::<{ FAST32_NEON_PIXELS * 4 }>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<{ FAST32_NEON_PIXELS * 4 }>().0)
     {
         let rgba = unsafe { vld4q_u8(source.as_ptr()) };
         let bgrx = uint8x16x4_t(rgba.2, rgba.1, rgba.0, zero);
@@ -1100,8 +1104,10 @@ unsafe fn convert_rgba_row_to_bgra_opaque_neon(destination: &mut [u8], source: &
 
     let alpha = unsafe { vdupq_n_u8(u8::MAX) };
     for (source, destination) in source
-        .chunks_exact(FAST32_NEON_PIXELS * 4)
-        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
+        .as_chunks::<{ FAST32_NEON_PIXELS * 4 }>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<{ FAST32_NEON_PIXELS * 4 }>().0)
     {
         let rgba = unsafe { vld4q_u8(source.as_ptr()) };
         let bgra = uint8x16x4_t(rgba.2, rgba.1, rgba.0, alpha);
@@ -1178,11 +1184,13 @@ unsafe fn convert_rgba_row_to_rgbx_zero_neon(destination: &mut [u8], source: &[u
 
     let zero = unsafe { vdupq_n_u8(0) };
     for (source, destination) in source
-        .chunks_exact(FAST32_NEON_PIXELS * 4)
-        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
+        .as_chunks::<{ FAST32_NEON_PIXELS * 4 }>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<{ FAST32_NEON_PIXELS * 4 }>().0)
     {
-        let rgba = unsafe { vld4q_u8(source.as_ptr()) };
-        let rgbx = uint8x16x4_t(rgba.0, rgba.1, rgba.2, zero);
+        let pixels = unsafe { vld4q_u8(source.as_ptr()) };
+        let rgbx = uint8x16x4_t(pixels.0, pixels.1, pixels.2, zero);
         unsafe { vst4q_u8(destination.as_mut_ptr(), rgbx) };
     }
 }
@@ -1194,8 +1202,10 @@ unsafe fn convert_rgba_row_to_rgba_opaque_neon(destination: &mut [u8], source: &
 
     let alpha = unsafe { vdupq_n_u8(u8::MAX) };
     for (source, destination) in source
-        .chunks_exact(FAST32_NEON_PIXELS * 4)
-        .zip(destination.chunks_exact_mut(FAST32_NEON_PIXELS * 4))
+        .as_chunks::<{ FAST32_NEON_PIXELS * 4 }>()
+        .0
+        .iter()
+        .zip(destination.as_chunks_mut::<{ FAST32_NEON_PIXELS * 4 }>().0)
     {
         let rgba = unsafe { vld4q_u8(source.as_ptr()) };
         let opaque = uint8x16x4_t(rgba.0, rgba.1, rgba.2, alpha);
