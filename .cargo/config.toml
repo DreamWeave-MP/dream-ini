@@ -1,11 +1,11 @@
 # Build and link through clang and lld, the DreamWeave clang toolchain policy (l3i's
 # TOOLCHAIN.md, in dream-binder): the Rust side emits bitcode and lld runs one thin LTO over it.
-# CI installs a clang and lld matching rustc's LLVM through StroggForge's llvm_toolchain input;
-# locally, install the same LLVM major rustc reports (`rustc -vV`). Environment variables
-# override every entry here.
+# StroggForge CI installs a clang and lld matching rustc's LLVM for every build; locally, install
+# the same LLVM major rustc reports (`rustc -vV`). Environment variables override every entry here.
 #
 # aarch64-unknown-linux-gnu is left out on purpose: that is the PortMaster cross build, which
-# StroggForge links against its own AlmaLinux 8 sysroot. Android builds use the NDK's toolchain.
+# StroggForge sets up entirely through the environment, with these flags plus its EL9 sysroot.
+# Android builds use the NDK's toolchain.
 
 # dream-ini has no C++ of its own; these keep any C++ a dependency builds on clang, as l3i's
 # dependents are expected to (dream-binder/TOOLCHAIN.md).
