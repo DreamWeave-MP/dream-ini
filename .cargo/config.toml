@@ -18,7 +18,8 @@ CXX_aarch64-pc-windows-msvc = "clang-cl"
 rustflags = ["-Clinker-plugin-lto", "-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
 
 # No -Clinker-plugin-lto on Apple targets: rustc passes that flag's GNU `-plugin-opt` arguments to
-# the linker, and ld64.lld rejects them. clang and lld still do the linking.
+# the linker, and ld64.lld rejects them. clang and lld still link, and the release profile's thin
+# LTO runs in rustc instead.
 [target.x86_64-apple-darwin]
 rustflags = ["-Clinker=clang", "-Clink-arg=-fuse-ld=lld"]
 

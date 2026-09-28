@@ -43,3 +43,9 @@ criterion = "0.8"
 [[bench]]
 name = "round_trip"
 harness = false
+
+# Thin LTO in every release build. Where .cargo/config.toml passes -Clinker-plugin-lto (Linux,
+# Windows, PortMaster) lld runs it over the whole program's bitcode; on macOS and Android rustc
+# runs it over the Rust crates.
+[profile.release]
+lto = "thin"
