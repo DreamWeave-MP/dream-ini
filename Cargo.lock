@@ -700,7 +700,9 @@ dependencies = [
 
 [[package]]
 name = "dream-soft-render"
-version = "0.1.0"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77cfb5e928da15f9baaea82bd581e2ff20a4ba8f6aee2baaaee5ae4bd5147326"
 dependencies = [
  "egui",
 ]
