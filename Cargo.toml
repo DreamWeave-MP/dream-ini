@@ -18,7 +18,7 @@ eframe = { version = "0.34", optional = true, default-features = false, features
 egui = { version = "0.34", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 # The Luau binder behind the `luau` feature; a path dependency for the migration campaign.
-l3i = { version = "1.0.0", path = "../dream-binder", optional = true }
+l3i = { version = "1.0.0", optional = true }
 openmw-config = "2.0"
 
 [target.'cfg(windows)'.dependencies]
