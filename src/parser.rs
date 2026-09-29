@@ -29,36 +29,29 @@ pub fn parse_ini_str_with_warnings(text: &str) -> ParsedIni {
     let mut section = String::new();
     let mut map = MultiMap::new();
     let mut warnings = Vec::new();
+    // `Section:Key`, rebuilt in place per line; the map copies it only for a new key.
+    let mut key = String::new();
 
     // Lines end at '\n' and lose exactly one trailing '\r', as the C++ importer's `getline`
     // loop does; `str::lines` would also strip a second one from `\r\r\n`.
     for raw_line in text.split('\n') {
-        let mut line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
 
         if line.is_empty() {
             continue;
         }
 
         if line.starts_with('[') {
-            let Some(end) = line.find(']') else {
-                warnings.push(ImportWarning::MalformedIniLine {
+            match line.find(']') {
+                Some(end) if end >= 2 => line[1..end].clone_into(&mut section),
+                _ => warnings.push(ImportWarning::MalformedIniLine {
                     line: line.to_owned(),
-                });
-                continue;
-            };
-            if end < 2 {
-                warnings.push(ImportWarning::MalformedIniLine {
-                    line: line.to_owned(),
-                });
-                continue;
+                }),
             }
-            line[1..end].clone_into(&mut section);
             continue;
         }
 
-        if let Some(comment) = line.find(';') {
-            line = &line[..comment];
-        }
+        let line = line.find(';').map_or(line, |comment| &line[..comment]);
 
         let Some(equals) = line.find('=') else {
             continue;
@@ -67,13 +60,16 @@ pub fn parse_ini_str_with_warnings(text: &str) -> ParsedIni {
             continue;
         }
 
-        let key = format!("{}:{}", section, &line[..equals]);
+        key.clear();
+        key.push_str(&section);
+        key.push(':');
+        key.push_str(&line[..equals]);
         let value = &line[equals + 1..];
         if value.is_empty() {
-            warnings.push(ImportWarning::IgnoredEmptyValue { key });
+            warnings.push(ImportWarning::IgnoredEmptyValue { key: key.clone() });
             continue;
         }
-        insert_multimap(&mut map, key, value.to_owned());
+        push_value(&mut map, &key, value);
     }
 
     ParsedIni {
@@ -101,9 +97,7 @@ pub fn parse_cfg_str(text: &str) -> MultiMap {
             continue;
         }
 
-        let key = line[..equals].trim().to_owned();
-        let value = line[equals + 1..].trim().to_owned();
-        insert_multimap(&mut map, key, value);
+        push_value(&mut map, line[..equals].trim(), line[equals + 1..].trim());
     }
 
     map
@@ -111,7 +105,16 @@ pub fn parse_cfg_str(text: &str) -> MultiMap {
 
 #[must_use]
 pub fn serialize_cfg(cfg: &MultiMap) -> String {
-    let mut output = String::new();
+    let length = cfg
+        .iter()
+        .map(|(key, values)| {
+            values
+                .iter()
+                .map(|value| key.len() + value.len() + 2)
+                .sum::<usize>()
+        })
+        .sum();
+    let mut output = String::with_capacity(length);
     for (key, values) in cfg {
         for value in values {
             output.push_str(key);
@@ -121,6 +124,15 @@ pub fn serialize_cfg(cfg: &MultiMap) -> String {
         }
     }
     output
+}
+
+/// Appends `value` under `key`, copying the key only when it is new to the map.
+fn push_value(map: &mut MultiMap, key: &str, value: &str) {
+    if let Some(values) = map.get_mut(key) {
+        values.push(value.to_owned());
+    } else {
+        map.insert(key.to_owned(), vec![value.to_owned()]);
+    }
 }
 
 pub(crate) fn insert_multimap(map: &mut MultiMap, key: String, value: String) {
