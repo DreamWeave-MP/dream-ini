@@ -1,0 +1,156 @@
+# dream-ini. Structured facts only: the name and summary are `title` and `description` in
+# index.md. Every key is explained at
+# https://dreamweave-mp.github.io/DreamWeave-Mod-Template/guide/mod-toml/
+
+# Permanent identity. Never changes, whatever the program is called or wherever it is hosted.
+id = "b3efde19-438b-4325-bf94-fae56bf1d458"
+
+# The slug names the project on this site. Release tags are bare versions, like Cargo's: 0.4.0.
+slug = "dream_ini"
+type = "tool"
+status = "active"
+license = "MIT OR Apache-2.0"
+
+[[maintainers]]
+name = "DreamWeave"
+url = "https://github.com/DreamWeave-MP"
+
+[links]
+documentation = "@/docs/_index.md"
+donate = "https://ko-fi.com/magicaldave"
+
+# A program: StroggForge's Rust workflow (.github/workflows/release.yml) builds it once per
+# [[platforms]] entry and publishes each release. It is also on crates.io, so the page offers
+# cargo install.
+[package]
+format = "binary"
+binary = "dream-ini"
+crate = "dream-ini"
+
+[[platforms]]
+os = "windows"
+arch = "x86_64"
+
+[[platforms]]
+os = "macos"
+arch = "aarch64"
+
+[[platforms]]
+os = "macos"
+arch = "x86_64"
+
+[[platforms]]
+os = "linux"
+arch = "x86_64"
+
+# The command line only: no GUI on Android.
+[[platforms]]
+os = "android"
+arch = "aarch64"
+
+# The framebuffer GUI for handhelds.
+[[platforms]]
+os = "linux"
+arch = "aarch64"
+variant = "portmaster"
+
+# The same build, packed with the files in Dream INI/ as a muOS app.
+[[platforms]]
+os = "linux"
+arch = "aarch64"
+variant = "muos"
+
+[install]
+notes = """
+Unzip the archive anywhere and run `dream-ini`. With no arguments the desktop builds open the
+GUI; with `--ini` they import from the command line. The Android build is the command line only.
+
+On muOS, copy `dream-ini-Portmaster-ARM64.muxapp` to the `ARCHIVE` folder on your SD card and
+install it from the Archive Manager. It appears in Applications as Dream INI.
+
+[Start here](@/docs/start-here.md) walks through a first import.
+"""
+post_install = """
+On Linux and Windows, `dream-ini install-launcher` adds Dream INI to your application menu, with
+its icon.
+"""
+
+[[credits]]
+name = "OpenMW"
+role = "mwiniimporter, the C++ importer dream-ini reimplements"
+url = "https://openmw.org"
+
+[[credits]]
+name = "G7"
+role = "Morrowind.exe's rules for GameFile order, gaps and missing files, which dream-ini follows"
+
+# Every published version, oldest first. To release, add the next one here with the day you
+# publish it, set the same version in Cargo.toml, commit, and push its tag: git tag 0.4.0.
+# StroggForge builds and publishes it, then records it in mod.lock beside this file.
+
+[[releases]]
+version = "0.1.0"
+date = 2026-05-28
+summary = "First release: import Morrowind.ini into openmw.cfg from the command line, a desktop GUI or a handheld."
+added = [
+    "The importer: fallback settings, `no-sound`, archives and, with `--game-files`, content files, from `--ini` into a new cfg, a copy of `--cfg`, or `--cfg` updated in place.",
+    "A desktop GUI with controller navigation, opened by running `dream-ini` with no arguments.",
+    "A framebuffer GUI for PortMaster handhelds, a muOS app, and a command-line build for Android.",
+    "`install-launcher`, shell completions and a manual page.",
+    "The importer as a Rust library, and Lua bindings through `mlua` and LuaJIT behind the `lua` feature.",
+]
+
+[[releases]]
+version = "0.2.0"
+date = 2026-05-29
+summary = "Content files load in the order Morrowind.exe gives them."
+changed = [
+    "Master files come first, then plugins, each group oldest first by modification time, as in Morrowind.exe. Plugin headers are no longer read to sort by dependency.",
+    "The GameFile list ends at the first missing number, and GameFile and Archive keys match whatever their case.",
+    "A GameFile that is not found stops the list with a warning, as Morrowind.exe does, instead of failing the import.",
+]
+
+# 0.3.0 was tagged but never published; 0.3.1 carries its changes.
+[[releases]]
+version = "0.3.1"
+date = 2026-09-27
+summary = "The Lua API runs on Luau with camelCase names, and dream-ini is MIT OR Apache-2.0."
+breaking = [
+    "The Lua API targets Luau through `mlua` 0.12, with `standalone-lua` building a vendored Luau, and every Lua name is camelCase: `importPaths`, `gameFiles`, `dataDirs`. Unknown options are errors.",
+]
+changed = ["dream-ini is licensed MIT OR Apache-2.0, at your option, instead of GPL-3.0-only."]
+fixed = [
+    "Updating a cfg keeps its existing settings when openmw-config records the file's path in another spelling, as on Windows.",
+    "Dependencies updated past the crossbeam-epoch, quick-xml and webbrowser security advisories.",
+]
+
+# Declared ahead of its tag: the page lists it as unreleased until 0.4.0 is pushed. Set the date
+# to the day you publish it.
+[[releases]]
+version = "0.4.0"
+date = 2026-09-28
+summary = "The Luau API is an l3i extension providing @dream/ini, and a large import takes milliseconds instead of a fifth of a second."
+breaking = [
+    "The `luau` feature (`lua` still works) makes the crate an l3i extension, `luau::IniExtension`, providing the module `@dream/ini`. `lua::create_module` and `lua::register` are gone with `mlua`.",
+    "Multimap values from Luau must be strings; numbers are no longer converted.",
+    "Building with the `luau` feature needs l3i's toolchain: clang, lld and cross-language thin LTO.",
+]
+added = [
+    "`parseIni` accepts a Luau `buffer`, and an unknown option's error names the function and lists the known keys.",
+    "Every `@dream/ini` function has a Luau type, part of the plan's generated definitions.",
+]
+changed = [
+    "Only search paths that are directories are probed, and the cfg's `data=` directories are resolved once per import: the benchmark install imports in 4.9 ms instead of 206 ms.",
+    "The PortMaster GUI renders through dream-soft-render without shape anti-aliasing, and skips drawing frames that did not change.",
+    "Release builds use thin LTO on every platform.",
+]
+fixed = [
+    "An update of a cfg that sets `resources=` no longer adds a `data=` line for `resources/vfs`, one more on every import.",
+    "Each INI line loses exactly one trailing carriage return, as in the C++ importer.",
+    "`importMaps`, and `import_maps` in Rust, write `encoding=` as a path import does, so the Luau `encoding` option is no longer ignored.",
+]
+migration = """
+Compose `dream_ini::luau::IniExtension` into the host's l3i `RuntimePlan`. A host that still wants
+the `dreamIni` global adds `RuntimePolicy::compat_global("@dream/ini", "dreamIni")`. Scripts that
+pass numbers in multimaps must pass strings. [Embedding Luau](@/docs/luau-hosts.md) has the setup.
+"""

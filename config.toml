@@ -1,0 +1,65 @@
+# Site configuration. This file is about the website; facts about the program live in
+# content/home/mod.toml. Zola reads this file; so does CI.
+
+# Where the site lives. On GitHub Pages the workflow substitutes the real Pages URL, so this
+# value matters for local previews.
+base_url = "https://DreamWeave-MP.github.io/dream-ini"
+title = "dream-ini"
+description = "Import Morrowind.ini into openmw.cfg: a command line, a desktop and handheld GUI, and a Rust and Luau library."
+
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+taxonomies = [{ name = "tags", feed = false }]
+
+[search]
+index_format = "fuse_json"
+include_title = true
+include_description = true
+include_content = true
+truncate_content_length = 400
+
+[markdown]
+highlighting = { theme = "dracula-soft" }
+insert_anchor_links = "right"
+smart_punctuation = true
+
+[slugify]
+paths = "safe"
+
+[link_checker]
+skip_prefixes = ["https://github.com/", "https://www.nexusmods.com/", "https://crates.io/", "https://docs.rs/"]
+
+[extra]
+# The repository that builds and publishes this site. CI refuses to build anywhere else.
+github_username = "DreamWeave-MP"
+github_project = "dream-ini"
+
+logo_text = "dream-ini"
+footer_text = "dream-ini · MIT OR Apache-2.0 · DreamWeave contributors"
+# The program's own icon, the one install-launcher puts in the application menu.
+favicon = "img/dream-ini.png"
+
+palette = "gold"
+
+# Oxanium, square like the traces on the program's icon, for titles. The docs are read, so their
+# text stays in the system font.
+font_override = "oxanium"
+font_override_titles_only = true
+
+menu_items = [
+    { name = "Overview", url = "@/home/index.md" },
+    { name = "Guide", url = "@/docs/_index.md" },
+    { name = "Command line", url = "@/docs/cli.md" },
+    { name = "Rust API", url = "@/docs/api/_index.md" },
+    { name = "Luau API", url = "@/docs/luau/_index.md" },
+]
+
+# DreamWeave's own page-view counter: this is DreamWeave's site.
+goatcounter = "dreamweave-mp"
+
+# GitHub Discussions on this repository, through giscus. The ids are looked up at build time.
+[extra.comments]
+enabled = true
+category = "General"

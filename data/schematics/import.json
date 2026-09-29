@@ -1,0 +1,20 @@
+{
+  "id": "import",
+  "title": "One import, three ways in",
+  "description": "The command line, the GUI and the library all run the same importer: Morrowind.ini and an optional openmw.cfg in, an openmw.cfg out.",
+  "mode": "flow",
+  "direction": "horizontal",
+  "nodes": [
+    { "id": "ini", "kind": "source", "title": "Morrowind.ini", "detail": "The load order, the archives, the weather, the fonts: the settings Morrowind.exe reads at startup." },
+    { "id": "import", "kind": "tool", "title": "dream-ini", "detail": "Finds every archive and content file in your Data Files, orders the content as Morrowind.exe does, and rewrites only the keys it imports." },
+    { "id": "cfg", "kind": "result", "title": "openmw.cfg", "detail": "content=, fallback-archive=, fallback= and data= lines, written into your existing cfg with its comments kept." },
+    { "id": "base", "kind": "input", "role": "support", "title": "Your openmw.cfg", "detail": "Optional. Read first; everything dream-ini does not import stays as it was." },
+    { "id": "ways", "kind": "service", "role": "support", "title": "CLI, GUI, library", "detail": "A command line, a desktop and handheld GUI, and the importer as a Rust crate and a Luau module." }
+  ],
+  "edges": [
+    { "from": "ini", "to": "import" },
+    { "from": "import", "to": "cfg" },
+    { "from": "base", "to": "import", "kind": "support", "label": "--cfg" },
+    { "from": "ways", "to": "import", "kind": "support", "label": "runs" }
+  ]
+}

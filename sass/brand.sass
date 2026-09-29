@@ -1,0 +1,30 @@
+// dream-ini. This file belongs to dream-ini: the template never changes it, and it loads last.
+// The gold palette does the heavy lifting; this adds the program's one idea to the hero.
+
+// The hero's empty right column shows what an import does: Morrowind.ini lines, and the
+// openmw.cfg line each becomes. It is decoration, so its alternative text is empty.
+.dw-hero
+  overflow: hidden
+  isolation: isolate
+
+  &::after
+    content: "[Game Files]\A GameFile0=Morrowind.esm\A  \2192  content=Morrowind.esm\A\A [Archives]\A Archive 0=Tribunal.bsa\A  \2192  fallback-archive=Tribunal.bsa\A\A [Weather]\A Sunrise Time=6\A  \2192  fallback=Weather_Sunrise_Time,6\A\A [General]\A Disable Audio=0\A  \2192  no-sound=0" / ""
+    position: absolute
+    z-index: -1
+    top: 50%
+    right: max(2rem, calc((100vw - var(--dw-width-page)) / 2 + 2rem))
+    transform: translateY(-50%)
+    border-left: 2px solid color-mix(in oklab, var(--dw-accent) 45%, transparent)
+    padding: .9rem 0 .9rem 1.2rem
+    color: var(--dw-text-faint)
+    font-family: var(--dw-font-mono)
+    font-size: .78rem
+    line-height: 1.6
+    white-space: pre
+    opacity: .65
+    pointer-events: none
+    mask-image: linear-gradient(90deg, #000 75%, transparent)
+
+  @media (max-width: 1180px)
+    &::after
+      display: none
