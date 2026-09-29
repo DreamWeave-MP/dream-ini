@@ -191,15 +191,14 @@ impl FromOptions for ImportPathsOptions {
 /// The fields `importMaps` and `importPaths` share.
 fn read_import_options(o: &mut Options<'_, '_>) -> Result<ImportOptions> {
     let mut options = ImportOptions::default();
-    if let Some(game) = o.optional::<String>("game")? {
+    if let Some(game) = o.optional_str("game", |game| {
         if game.eq_ignore_ascii_case("morrowind") {
-            options.game = Game::Morrowind;
+            Ok(Game::Morrowind)
         } else {
-            return Err(Error::runtime(format!(
-                "{}.game: unsupported game: {game}",
-                o.context()
-            )));
+            Err(Error::runtime(format!("unsupported game: {game}")))
         }
+    })? {
+        options.game = game;
     }
     options.import_game_files = o.or("gameFiles", options.import_game_files)?;
     options.import_fonts = o.or("fonts", options.import_fonts)?;
@@ -217,13 +216,11 @@ fn read_import_options(o: &mut Options<'_, '_>) -> Result<ImportOptions> {
     Ok(options)
 }
 
+/// The optional `encoding` label, parsed in place: the option reader names the field on error.
 fn read_encoding(o: &mut Options<'_, '_>) -> Result<Option<TextEncoding>> {
-    match o.optional::<String>("encoding")? {
-        Some(label) => TextEncoding::parse(&label)
-            .map(Some)
-            .map_err(|error| Error::runtime(format!("{}.encoding: {error}", o.context()))),
-        None => Ok(None),
-    }
+    o.optional_str("encoding", |label| {
+        TextEncoding::parse(label).map_err(|error| Error::runtime(error.to_string()))
+    })
 }
 
 /// An optional array of path strings.
