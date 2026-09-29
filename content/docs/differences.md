@@ -21,7 +21,8 @@ side was checked against OpenMW's source in September 2026.
 | `GameFile` key case | Exact | Any |
 | Which names count | Any name ending in the letters `esm` or `esp` | Names ending in `.esm` or `.esp`. A path instead of a file name fails the import |
 
-The rules Morrowind.exe follows for its `GameFile` list are G7's research. Following them means an
+The rules Morrowind.exe follows for its `GameFile` list are
+[Greatness7](https://github.com/Greatness7)'s research. Following them means an
 install imports into the load order it already had in Morrowind, whatever its plugin headers say.
 
 ## Finding files

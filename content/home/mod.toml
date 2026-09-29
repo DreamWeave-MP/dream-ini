@@ -81,8 +81,9 @@ role = "mwiniimporter, the C++ importer dream-ini reimplements"
 url = "https://openmw.org"
 
 [[credits]]
-name = "G7"
+name = "Greatness7"
 role = "Morrowind.exe's rules for GameFile order, gaps and missing files, which dream-ini follows"
+url = "https://github.com/Greatness7"
 
 # Every published version, oldest first. To release, add the next one here with the day you
 # publish it, set the same version in Cargo.toml, commit, and push its tag: git tag 0.4.0.
