@@ -100,5 +100,17 @@ one quiet machine, release build:
 0.4.0 is faster because it no longer probes search paths that are not folders, and resolves the
 cfg's `data=` folders once per import instead of once per file found.
 
-The same install through Luau's `importPaths` takes 4.87 ms; the `@dream/ini` boundary adds little.
-`cargo bench --features luau --bench luau_boundary` measures each function from a script.
+From Luau, `cargo bench --features luau --bench luau_boundary` runs each function from a frozen
+script on the same install. Medians, against the `mlua` binding it replaced in 0.4.0, both over
+0.3.1's importer:
+
+| Call | mlua, 0.3.1 | l3i |
+|---|---:|---:|
+| `importPaths` | 205.9 ms | 208.8 ms |
+| `importMaps` | 2.277 ms | 2.126 ms |
+| `parseIni` | 2.816 ms | 2.452 ms |
+| `parseCfg` | 131.9 µs | 141.7 µs |
+| `serializeCfg` | 54.4 µs | 55.0 µs |
+
+The binding costs about what it did; the import is what got faster. With 0.4.0's importer,
+`importPaths` on this install takes 4.87 ms.
