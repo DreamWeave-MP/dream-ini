@@ -125,25 +125,26 @@ fixed = [
     "Dependencies updated past the crossbeam-epoch, quick-xml and webbrowser security advisories.",
 ]
 
-# Declared ahead of its tag: the page lists it as unreleased until 0.4.0 is pushed. Set the date
-# to the day you publish it.
 [[releases]]
-version = "0.4.0"
-date = 2026-09-28
-summary = "The Luau API is an l3i extension providing @dream/ini, and a large import takes milliseconds instead of a fifth of a second."
+version = "1.0.0"
+date = 2026-09-29
+summary = "First stable release: the Luau API is an l3i extension providing @dream/ini, a large import takes milliseconds instead of a fifth of a second, and the Rust and Luau APIs are under semver."
 breaking = [
     "The `luau` feature (`lua` still works) makes the crate an l3i extension, `luau::IniExtension`, providing the module `@dream/ini`. `lua::create_module` and `lua::register` are gone with `mlua`.",
     "Multimap values from Luau must be strings; numbers are no longer converted.",
     "Building with the `luau` feature needs l3i's toolchain: clang, lld and cross-language thin LTO.",
+    "Rust 1.92.",
 ]
 added = [
     "`parseIni` accepts a Luau `buffer`, and an unknown option's error names the function and lists the known keys.",
-    "Every `@dream/ini` function has a Luau type, part of the plan's generated definitions.",
+    "Every `@dream/ini` function has a Luau type, part of the plan's generated definitions; the definitions check and the strict script build behind the test-only `luau-analysis` feature.",
 ]
 changed = [
     "Only search paths that are directories are probed, and the cfg's `data=` directories are resolved once per import: the benchmark install imports in 4.9 ms instead of 206 ms.",
+    "`dataDirs` and every multimap argument are walked in place through l3i's table option reader and array visitor, one element on the stack at a time and nothing pinned, and the `game` and `encoding` options are inspected without a copy. A `dataDirs` element that is not a string is reported as `ini.importMaps.dataDirs[2]: expected a string, got number`, and a `dataDirs` that is not a table as `ini.importMaps.dataDirs: expected an array of strings, got string`.",
     "The PortMaster GUI renders through dream-soft-render without shape anti-aliasing, and skips drawing frames that did not change.",
     "Release builds use thin LTO on every platform.",
+    "l3i 1.0.0 comes from crates.io.",
 ]
 fixed = [
     "An update of a cfg that sets `resources=` no longer adds a `data=` line for `resources/vfs`, one more on every import.",
@@ -155,40 +156,3 @@ Compose `dream_ini::luau::IniExtension` into the host's l3i `RuntimePlan`. A hos
 the `dreamIni` global adds `RuntimePolicy::compat_global("@dream/ini", "dreamIni")`. Scripts that
 pass numbers in multimaps must pass strings. [Embedding Luau](@/docs/luau-hosts.md) has the setup.
 """
-
-# Declared ahead of its tag, like 0.4.0.
-[[releases]]
-version = "0.4.1"
-date = 2026-09-28
-summary = "The Luau binding adopts l3i's borrowed option fields and bulk stack reservations; the typed tests build the analysis frontend only when asked."
-changed = [
-    "Multimap and `dataDirs` arrays are read from Luau in batches behind one stack reservation instead of a frame per element, and the `game` and `encoding` options are inspected in place without a copy. Every Luau and Rust API, including every error text, is unchanged.",
-    "The test-only `luau-analysis` feature (`luau` plus l3i's `analysis`) gates the definitions check and the strict script in `tests/luau_typed.rs`, so `cargo test` and `cargo test --features luau` no longer build Luau's analysis frontend.",
-]
-
-# Declared ahead of its tag, like 0.4.1.
-[[releases]]
-version = "0.4.2"
-date = 2026-09-29
-summary = "The Luau binding walks table options and arrays through l3i's in-place visitors; the dataDirs errors take the option reader's wording."
-changed = [
-    "`dataDirs` and every multimap argument are walked in place through l3i's table option reader and array visitor, one element on the stack at a time and nothing pinned; the batching helper is gone and the boundary benchmark is unchanged within noise.",
-    "A `dataDirs` that holds a non-string or is not a table is reported by l3i's option reader like every other option field: `ini.importMaps.dataDirs: dataDirs[2]: expected a string, got number` and `ini.importMaps.dataDirs: Lua stack index 4: expected table, got string` (previously `ini.importMaps.dataDirs[2]: expected a string, got number` and `ini.importMaps.dataDirs: expected an array of strings, got string`). Every other error text and every Luau and Rust API are unchanged.",
-]
-
-# Declared ahead of its tag, like 0.4.2.
-[[releases]]
-version = "0.4.3"
-date = 2026-09-29
-summary = "The dataDirs errors read as in 0.4.1 again, through l3i's option reader."
-changed = [
-    "A `dataDirs` element that is not a string is reported as `ini.importMaps.dataDirs[2]: expected a string, got number` and a `dataDirs` that is not a table as `ini.importMaps.dataDirs: expected an array of strings, got string`, the 0.4.1 texts: the element error spells the field's full path and l3i's option reader (ae0a57d) passes it through without prefixing it again, and the table option states its expectation in its own words instead of naming a Lua stack slot. Every other error text and every Luau and Rust API are unchanged.",
-]
-
-[[releases]]
-version = "1.0.0"
-date = 2026-09-29
-summary = "First stable release: the l3i binding is the crate's Luau surface, and the Rust and Luau APIs are now under semver."
-changed = [
-    "Version 1.0.0 with no code change since 0.4.3: `@dream/ini` on the l3i binder, strict option tables, the typed definitions gate, and the error texts documented on the module page are the stable contract. Declared ahead of its tag, like 0.4.3.",
-]
