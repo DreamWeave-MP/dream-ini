@@ -105,20 +105,45 @@ pub fn serialize_preserved_cfg_document(
     let root_config_path = config.root_config_file();
     let root_is_source = canonical_source_path.is_some()
         && fs::canonicalize(root_config_path).ok() == canonical_source_path;
+    let injected_vfs = usize::from(starts_with_injected_resources_vfs(config));
     let mut document = String::new();
-    for setting in config.settings_matching(|setting| {
-        let source = setting.meta().source_config();
-        source == source_path.as_path()
-            || canonical_source_path
-                .as_deref()
-                .is_some_and(|canonical_source_path| source == canonical_source_path)
-            || (root_is_source && source == root_config_path)
-            || (source == user_config_path
-                && setting_key(setting).is_some_and(|key| write_keys.contains(&key)))
-    }) {
+    for setting in config
+        .settings_matching(|_| true)
+        .skip(injected_vfs)
+        .filter(|setting| {
+            let source = setting.meta().source_config();
+            source == source_path.as_path()
+                || canonical_source_path
+                    .as_deref()
+                    .is_some_and(|canonical_source_path| source == canonical_source_path)
+                || (root_is_source && source == root_config_path)
+                || (source == user_config_path
+                    && setting_key(setting).is_some_and(|key| write_keys.contains(&key)))
+        })
+    {
         document.push_str(&setting.to_string());
     }
     document
+}
+
+/// Whether `config` starts with the `data=` entry `openmw-config` 2 inserts for `<resources>/vfs`
+/// when it loads a cfg that sets `resources=`. The entry is attributed to the file that sets
+/// `resources=`, so writing that file back would turn it into a real `data=` line, and add one
+/// more on every import.
+fn starts_with_injected_resources_vfs(config: &OpenMWConfiguration) -> bool {
+    let Some(resources) = config.resources() else {
+        return false;
+    };
+    let first_is_data_dir = config
+        .settings_matching(|_| true)
+        .next()
+        .and_then(setting_key)
+        .is_some_and(|key| key == "data");
+    first_is_data_dir
+        && config
+            .data_directories_iter()
+            .next()
+            .is_some_and(|data_dir| data_dir.parsed() == resources.parsed().join("vfs"))
 }
 
 fn setting_key(setting: &impl ToString) -> Option<String> {

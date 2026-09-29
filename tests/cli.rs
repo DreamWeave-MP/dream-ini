@@ -707,6 +707,46 @@ fn in_place_writes_back_to_cfg() {
 }
 
 #[test]
+fn in_place_does_not_persist_composed_resource_vfs_data_dir() {
+    let dir = unique_test_dir("in-place-resource-vfs");
+    let resources = dir.join("resources");
+    fs::create_dir_all(resources.join("vfs")).unwrap();
+    let ini = dir.join("Morrowind.ini");
+    let cfg = dir.join("openmw.cfg");
+    fs::write(&ini, "[General]\nDisable Audio=1\n").unwrap();
+    fs::write(&cfg, "# The engine's resources\nresources=resources\n").unwrap();
+    let import = |extra: &[&str]| {
+        Command::new(BIN)
+            .args(["--no-archives", "--ini"])
+            .arg(&ini)
+            .args(["--cfg"])
+            .arg(&cfg)
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+
+    let preview = import(&[]);
+    assert!(preview.status.success());
+    assert!(!String::from_utf8(preview.stdout).unwrap().contains("vfs"));
+
+    assert!(import(&["--in-place"]).status.success());
+    let first = fs::read_to_string(&cfg).unwrap();
+    assert_eq!(
+        first,
+        "# The engine's resources\nresources=resources\nencoding=win1252\nno-sound=1\n"
+    );
+    assert!(import(&["--in-place"]).status.success());
+    assert_eq!(
+        fs::read_to_string(&cfg).unwrap(),
+        first,
+        "a second import changes nothing"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn output_conflicts_with_in_place() {
     let output = Command::new(BIN)
         .args([
