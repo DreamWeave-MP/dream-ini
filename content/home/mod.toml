@@ -184,3 +184,11 @@ summary = "The dataDirs errors read as in 0.4.1 again, through l3i's option read
 changed = [
     "A `dataDirs` element that is not a string is reported as `ini.importMaps.dataDirs[2]: expected a string, got number` and a `dataDirs` that is not a table as `ini.importMaps.dataDirs: expected an array of strings, got string`, the 0.4.1 texts: the element error spells the field's full path and l3i's option reader (ae0a57d) passes it through without prefixing it again, and the table option states its expectation in its own words instead of naming a Lua stack slot. Every other error text and every Luau and Rust API are unchanged.",
 ]
+
+[[releases]]
+version = "1.0.0"
+date = 2026-09-29
+summary = "First stable release: the l3i binding is the crate's Luau surface, and the Rust and Luau APIs are now under semver."
+changed = [
+    "Version 1.0.0 with no code change since 0.4.3: `@dream/ini` on the l3i binder, strict option tables, the typed definitions gate, and the error texts documented on the module page are the stable contract. Declared ahead of its tag, like 0.4.3.",
+]
