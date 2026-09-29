@@ -29,9 +29,3 @@ rustflags = ["-Clinker-plugin-lto", "-Clinker=lld-link"]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-Clinker-plugin-lto", "-Clinker=lld-link"]
-
-# Local overrides until these DreamWeave crates are on crates.io at the versions the manifest
-# names: the campaign builds against the sibling checkouts. Delete this table once the registry
-# releases are authoritative; the manifest never changes.
-[patch.crates-io]
-l3i = { path = "../dream-binder" }
