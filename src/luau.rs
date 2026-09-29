@@ -221,15 +221,18 @@ fn read_encoding(o: &mut Options<'_, '_>) -> Result<Option<TextEncoding>> {
     })
 }
 
-/// An optional array of path strings, walked in place through the reader's frame; the reader
-/// prefixes every error with the field's path (`ini.importMaps.dataDirs: ...`).
+/// An optional array of path strings, walked in place through the reader's frame. An element
+/// error spells the field's full path (`ini.importMaps.dataDirs[2]: expected a string, got
+/// number`), which the reader passes through unprefixed; a non-table is the reader's own error
+/// (`ini.importMaps.dataDirs: expected table, got string`).
 fn read_paths(o: &mut Options<'_, '_>, key: &str) -> Result<Vec<PathBuf>> {
+    let path = format!("{}.{key}", o.context());
     let paths = o.optional_table(key, |frame, table| {
         let mut paths = Vec::with_capacity(table.raw_len());
         table.for_each_array(frame, |_, index, value| {
             let text = value
                 .read::<&str>()
-                .map_err(|_| value.field_type_error(&format!("{key}[{index}]"), "a string"))?;
+                .map_err(|_| value.field_type_error(&format!("{path}[{index}]"), "a string"))?;
             paths.push(PathBuf::from(text));
             Ok(())
         })?;

@@ -268,7 +268,7 @@ fn options_are_strict_and_name_the_known_keys() {
         ),
         (
             r#"ini.importPaths({ ini = "Morrowind.ini", game_files = true })"#,
-            "ini.importPaths: unknown option 'game_files'",
+            "ini.importPaths: unknown option 'game_files'; known options are archives, cfg, cfgDir, dataDirs, dataLocal, encoding, fonts, game, gameFiles, ini, resources, userData, verbose",
         ),
         (
             r#"ini.parseIni("", { gameFiles = true })"#,
@@ -286,33 +286,30 @@ fn options_are_strict_and_name_the_known_keys() {
             r#"ini.importMaps({}, {}, { game = "oblivion" })"#,
             "ini.importMaps.game: unsupported game: oblivion",
         ),
-        // Table options are walked in place by l3i's option reader, which prefixes the field's
-        // path to whatever the walk reports: an element names its index, a non-table names the
-        // slot.
+        // Table options are walked in place by l3i's option reader: an element error spells the
+        // field's full path and passes through flat, a non-table is the reader's own wording.
         (
             r#"ini.importMaps({}, {}, { dataDirs = { "a", 2 } })"#,
-            "ini.importMaps.dataDirs: dataDirs[2]: expected a string, got number",
+            "ini.importMaps.dataDirs[2]: expected a string, got number",
         ),
         (
             r#"ini.importMaps({}, {}, { dataDirs = "a" })"#,
-            "ini.importMaps.dataDirs: Lua stack index",
-        ),
-        (
-            r#"ini.importMaps({}, {}, { dataDirs = "a" })"#,
-            "expected table, got string",
+            "ini.importMaps.dataDirs: expected table, got string",
         ),
         (
             r"ini.importMaps({}, {}, 5)",
             "ini.importMaps: options must be a table, got number",
         ),
-        (
-            r#"ini.importPaths({ ini = "/nonexistent/Morrowind.ini" })"#,
-            "dream.ini: /nonexistent/Morrowind.ini: ",
-        ),
     ] {
-        let error = error_of(&runtime, call);
-        assert!(error.contains(expected), "{call}: {error}");
+        assert_eq!(error_of(&runtime, call), expected, "{call}");
     }
+    // The system's words follow the path, so only the prefix is ours to assert.
+    let call = r#"ini.importPaths({ ini = "/nonexistent/Morrowind.ini" })"#;
+    let error = error_of(&runtime, call);
+    assert!(
+        error.starts_with("dream.ini: /nonexistent/Morrowind.ini: "),
+        "{call}: {error}"
+    );
 }
 
 #[test]
@@ -340,8 +337,7 @@ fn multimaps_must_be_tables_of_string_arrays() {
             "ini.importMaps: expected a multimap table, got number",
         ),
     ] {
-        let error = error_of(&runtime, call);
-        assert!(error.contains(expected), "{call}: {error}");
+        assert_eq!(error_of(&runtime, call), expected, "{call}");
     }
 }
 
