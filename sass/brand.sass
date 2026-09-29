@@ -1,30 +1,62 @@
 // dream-ini. This file belongs to dream-ini: the template never changes it, and it loads last.
-// The gold palette does the heavy lifting; this adds the program's one idea to the hero.
+// The gold palette does the heavy lifting; this makes room for the hero's art and places it.
 
-// The hero's empty right column shows what an import does: Morrowind.ini lines, and the
-// openmw.cfg line each becomes. It is decoration, so its alternative text is empty.
-.dw-hero
-  overflow: hidden
-  isolation: isolate
-
-  &::after
-    content: "[Game Files]\A GameFile0=Morrowind.esm\A  \2192  content=Morrowind.esm\A\A [Archives]\A Archive 0=Tribunal.bsa\A  \2192  fallback-archive=Tribunal.bsa\A\A [Weather]\A Sunrise Time=6\A  \2192  fallback=Weather_Sunrise_Time,6\A\A [General]\A Disable Audio=0\A  \2192  no-sound=0" / ""
+// The hero's art is static/js/dream-ini-hero.js: the program's icon as the importer, with
+// Morrowind.ini on its left and the openmw.cfg it writes on its right. Until the first frame, and
+// without WebGL, the script shows a still of the scene in the same place. Without JavaScript the
+// still stands beside the text, or above it on a phone.
+.dw-hero__art
+  > .dini-hero__canvas
     position: absolute
-    z-index: -1
-    top: 50%
-    right: max(2rem, calc((100vw - var(--dw-width-page)) / 2 + 2rem))
-    transform: translateY(-50%)
-    border-left: 2px solid color-mix(in oklab, var(--dw-accent) 45%, transparent)
-    padding: .9rem 0 .9rem 1.2rem
-    color: var(--dw-text-faint)
-    font-family: var(--dw-font-mono)
-    font-size: .78rem
-    line-height: 1.6
-    white-space: pre
-    opacity: .65
-    pointer-events: none
-    mask-image: linear-gradient(90deg, #000 75%, transparent)
+    inset: 0
+    width: 100%
+    height: 100%
+    opacity: 0
+    transition: opacity .6s var(--dw-ease)
 
-  @media (max-width: 1180px)
-    &::after
-      display: none
+  > .dini-hero__still
+    position: absolute
+    width: auto
+    height: auto
+    object-fit: contain
+    opacity: 0
+    transition: opacity .6s var(--dw-ease)
+    pointer-events: none
+
+  &.is-placed > .dini-hero__still
+    opacity: 1
+
+  &.is-live > .dini-hero__canvas
+    opacity: 1
+
+  &.is-live > .dini-hero__still
+    opacity: 0
+
+html:not(.dw-js) .dw-hero--art .dw-hero__art::before
+  content: ""
+  position: absolute
+  top: 50%
+  right: max(1.5rem, calc((100% - var(--dw-width-page)) / 2 + 1rem))
+  width: min(40rem, 46%)
+  aspect-ratio: 1.88
+  transform: translateY(-50%)
+  background: url("img/dream-ini-hero.webp") center / contain no-repeat
+
+// A wide screen gives the scene the height of a tall hero; the text sits in the middle of it.
+@media (min-width: 1151px)
+  .dw-hero--art .dw-hero__text
+    display: flex
+    flex-direction: column
+    justify-content: center
+    min-height: clamp(19rem, 26vw, 25rem)
+
+// On a phone or a tablet the text needs the width, so the scene stands above it.
+@media (max-width: 1150px)
+  .dw-hero--art .dw-hero__text
+    padding-top: clamp(11.5rem, 34vw, 17rem)
+
+  html:not(.dw-js) .dw-hero--art .dw-hero__art::before
+    top: 1rem
+    right: 50%
+    width: min(36rem, calc(100% - 2rem))
+    transform: translateX(50%)
