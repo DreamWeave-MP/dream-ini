@@ -174,3 +174,12 @@ changed = [
     "`dataDirs` and every multimap argument are walked in place through l3i's table option reader and array visitor, one element on the stack at a time and nothing pinned; the batching helper is gone and the boundary benchmark is unchanged within noise.",
     "A `dataDirs` that holds a non-string or is not a table is reported by l3i's option reader like every other option field: `ini.importMaps.dataDirs: dataDirs[2]: expected a string, got number` and `ini.importMaps.dataDirs: Lua stack index 4: expected table, got string` (previously `ini.importMaps.dataDirs[2]: expected a string, got number` and `ini.importMaps.dataDirs: expected an array of strings, got string`). Every other error text and every Luau and Rust API are unchanged.",
 ]
+
+# Declared ahead of its tag, like 0.4.2.
+[[releases]]
+version = "0.4.3"
+date = 2026-09-29
+summary = "The dataDirs element error reads flat again, through l3i's option reader."
+changed = [
+    "A `dataDirs` element that is not a string is reported as `ini.importMaps.dataDirs[2]: expected a string, got number`, the 0.4.1 text: the element error spells the field's full path and l3i's option reader (c2f68d6) passes it through without prefixing it again. A `dataDirs` that is not a table reads `ini.importMaps.dataDirs: expected table, got string`, the reader's own wording, no longer naming a Lua stack slot. Every other error text and every Luau and Rust API are unchanged.",
+]
