@@ -59,6 +59,15 @@ fn parses_ini_crlf_lines() {
 }
 
 #[test]
+fn ini_lines_lose_exactly_one_trailing_carriage_return() {
+    // The C++ importer strips one '\r' per line, whatever ends the file.
+    let parsed = parse_ini_str("[General]\r\nName=a\r\r\nLast=b\r");
+
+    assert_eq!(values(&parsed, "General:Name"), &["a\r".to_owned()]);
+    assert_eq!(values(&parsed, "General:Last"), &["b".to_owned()]);
+}
+
+#[test]
 fn old_mac_carriage_returns_are_not_ini_line_breaks() {
     let parsed = parse_ini_str("[General]\rDisable Audio=1\r[Movies]\rNew Game=intro.bik\r");
 

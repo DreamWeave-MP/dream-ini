@@ -30,11 +30,10 @@ pub fn parse_ini_str_with_warnings(text: &str) -> ParsedIni {
     let mut map = MultiMap::new();
     let mut warnings = Vec::new();
 
-    for raw_line in text.lines() {
-        let mut line = raw_line;
-        if let Some(stripped) = line.strip_suffix('\r') {
-            line = stripped;
-        }
+    // Lines end at '\n' and lose exactly one trailing '\r', as the C++ importer's `getline`
+    // loop does; `str::lines` would also strip a second one from `\r\r\n`.
+    for raw_line in text.split('\n') {
+        let mut line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
 
         if line.is_empty() {
             continue;
