@@ -225,6 +225,21 @@ fn import_maps_returns_cfg_text_and_report() {
 }
 
 #[test]
+fn import_maps_writes_the_requested_encoding() {
+    exec(
+        &runtime(),
+        r#"
+        local imported = ini.importMaps({}, {}, { archives = false })
+        assert(imported.cfg.encoding[1] == "win1252")
+        local cyrillic = ini.importMaps({ encoding = { "win1252" } }, {}, { archives = false, encoding = "win1251" })
+        assert(cyrillic.cfg.encoding[1] == "win1251")
+        assert(cyrillic.text:find("encoding=win1251\n", 1, true) ~= nil)
+        "#,
+    )
+    .unwrap();
+}
+
+#[test]
 fn import_paths_uses_explicit_data_dirs() {
     let dir = unique_test_dir("import-paths");
     let cfg_dir = dir.join("config");

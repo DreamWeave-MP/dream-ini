@@ -106,13 +106,7 @@ impl IniImporter {
         };
         let cfg_dir = cfg_path.and_then(cfg_parent_dir);
 
-        let mut changed_keys = BTreeSet::new();
         let encoding = self.effective_encoding(&cfg)?;
-        if self.options.encoding.is_some() || !cfg.contains_key("encoding") {
-            changed_keys.insert("encoding".to_owned());
-        }
-        set_single_value(&mut cfg, "encoding", encoding.as_label().to_owned());
-
         let ini_bytes = read_bytes(ini_path)?;
         let parsed_ini = parse_ini_bytes_with_warnings(&ini_bytes, encoding);
         let mut report = self.import_maps_with_cfg_dir(
@@ -122,20 +116,22 @@ impl IniImporter {
             cfg_dir.as_deref(),
         )?;
         report.warnings.splice(0..0, parsed_ini.warnings);
-        changed_keys.extend(report.changed_keys);
         Ok(ImportResult {
             cfg,
             warnings: report.warnings,
             events: report.events,
-            changed_keys,
+            changed_keys: report.changed_keys,
         })
     }
 
     /// Imports already parsed maps into the lightweight map model.
     ///
+    /// `cfg` gets the `encoding` a path import writes: the option, else the cfg's own, else
+    /// win1252. On error, `cfg` is left unchanged.
+    ///
     /// # Errors
-    /// Returns [`ImportError`] when content or archive names are invalid, fallback archives cannot
-    /// be resolved, or cfg normalization fails.
+    /// Returns [`ImportError`] when the encoding is unsupported, content or archive names are
+    /// invalid, fallback archives cannot be resolved, or cfg normalization fails.
     pub fn import_maps(
         &self,
         cfg: &mut MultiMap,
@@ -155,6 +151,10 @@ impl IniImporter {
         let mut warnings = Vec::new();
         let mut events = Vec::new();
         let mut changed_keys = BTreeSet::new();
+        let encoding = self.effective_encoding(cfg)?;
+        if self.options.encoding.is_some() || !cfg.contains_key("encoding") {
+            changed_keys.insert("encoding".to_owned());
+        }
         let mut search_cfg = normalize_cfg(cfg, cfg_dir)?;
         let mut imported_cfg = cfg.clone();
 
@@ -212,6 +212,11 @@ impl IniImporter {
         }
 
         self.apply_singleton_path_overrides(&mut imported_cfg, &mut changed_keys);
+        set_single_value(
+            &mut imported_cfg,
+            "encoding",
+            encoding.as_label().to_owned(),
+        );
 
         *cfg = imported_cfg;
         Ok(ImportReport {

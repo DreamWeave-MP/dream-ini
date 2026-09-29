@@ -221,7 +221,41 @@ fn missing_archive_import_leaves_cfg_unchanged() {
         other => panic!("unexpected error: {other}"),
     }
     assert_eq!(values(&cfg, "fallback-archive"), &["old.bsa".to_owned()]);
+    assert!(!cfg.contains_key("encoding"));
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn import_maps_sets_encoding_like_a_path_import() {
+    let ini = parse_ini_str("[General]\nDisable Audio=1\n");
+    let quiet = ImportOptions {
+        import_archives: false,
+        ..ImportOptions::default()
+    };
+
+    let mut cfg = MultiMap::new();
+    let report = IniImporter::new(quiet.clone())
+        .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
+        .unwrap();
+    assert_eq!(values(&cfg, "encoding"), &["win1252".to_owned()]);
+    assert!(report.changed_keys.contains("encoding"));
+
+    let mut cfg = parse_cfg_str("encoding=win1250\n");
+    let report = IniImporter::new(quiet.clone())
+        .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
+        .unwrap();
+    assert_eq!(values(&cfg, "encoding"), &["win1250".to_owned()]);
+    assert!(!report.changed_keys.contains("encoding"));
+
+    let cyrillic = ImportOptions {
+        encoding: Some(crate::TextEncoding::Win1251),
+        ..quiet
+    };
+    let report = IniImporter::new(cyrillic)
+        .import_maps(&mut cfg, &ini, Path::new("Morrowind.ini"))
+        .unwrap();
+    assert_eq!(values(&cfg, "encoding"), &["win1251".to_owned()]);
+    assert!(report.changed_keys.contains("encoding"));
 }
 
 #[test]
