@@ -16,7 +16,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use dream_ini::luau::{IniExtension, MODULE};
 use l3i::Runtime;
 use l3i::extension::RuntimePlan;
-use l3i::value::{Function, Value};
+use l3i::value::{Function, Table};
 use support::Fixture;
 
 /// `(name, factory source)`; the factory takes `(ini, iniPath, cfgPath, iniText, cfgText)`.
@@ -68,11 +68,10 @@ fn luau_boundary(c: &mut Criterion) {
         .finalize()
         .expect("finalize the plan");
     let runtime = Runtime::from_plan(&plan).expect("create the runtime");
-    // Loading leases the root stack itself, so nothing holds it until the closures exist.
-    let module: Value = runtime
-        .load_function(&format!("return function() return require('{MODULE}') end"))
-        .expect("load the module getter")
-        .invoke(&runtime.stack(), ())
+    // Evaluating and loading lease the root stack themselves, so nothing holds it until the
+    // closures exist.
+    let module: Table = runtime
+        .eval(&format!("return require('{MODULE}')"))
         .expect("require the module");
     let bodies: Vec<(&str, Function)> = SCRIPTS
         .iter()
