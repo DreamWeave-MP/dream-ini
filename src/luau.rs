@@ -43,6 +43,7 @@
 //! multimaps, failed imports) raise Luau errors prefixed `dream.ini:`; recoverable problems are
 //! returned in `warnings`.
 
+use std::ffi::c_int;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -51,7 +52,7 @@ use l3i::convert::BytesView;
 use l3i::extension::{Extension, ExtensionDescriptor};
 use l3i::options::{FromOptions, Options};
 use l3i::source::CompileConstant;
-use l3i::stack::{Frame, Scope, ValueView};
+use l3i::stack::{Frame, Scope, TableView, ValueView};
 use l3i::value::Value;
 use l3i::{Error, Result};
 
@@ -239,21 +240,17 @@ fn read_paths(o: &mut Options<'_, '_>, key: &str) -> Result<Vec<PathBuf>> {
                 view.type_of().name()
             ))
         })?;
-        let count = table.raw_len();
-        let mut paths = Vec::with_capacity(count);
-        for index in 1..=count {
-            frame.with_frame(|inner| {
-                let value = table.raw_get_index(inner, index_key(index)?)?;
-                let text = value.read::<&str>().map_err(|_| {
-                    Error::runtime(format!(
-                        "{context}[{index}]: expected a string, got {}",
-                        value.type_of().name()
-                    ))
-                })?;
-                paths.push(PathBuf::from(text));
-                Ok(())
+        let mut paths = Vec::with_capacity(table.raw_len());
+        for_each_array_value(frame, &table, |index, value| {
+            let text = value.read::<&str>().map_err(|_| {
+                Error::runtime(format!(
+                    "{context}[{index}]: expected a string, got {}",
+                    value.type_of().name()
+                ))
             })?;
-        }
+            paths.push(PathBuf::from(text));
+            Ok(())
+        })?;
         Ok(paths)
     })
 }
@@ -338,6 +335,34 @@ fn import_error(error: &ImportError) -> Error {
 /// A 1-based array index as Luau's raw integer key.
 fn index_key(index: usize) -> Result<i64> {
     i64::try_from(index).map_err(|_| Error::logic("Table index exceeds the supported range"))
+}
+
+/// Array values read per stack reservation: one nested frame and one `lua_checkstack` per
+/// batch instead of a frame per element, bounded so a long array never exhausts Luau's stack.
+const ARRAY_BATCH: usize = 64;
+
+/// Visits `table[1]..table[#table]` in order; each value's view lives for its visit only.
+fn for_each_array_value(
+    frame: &Frame<'_>,
+    table: &TableView<'_>,
+    mut visit: impl FnMut(usize, ValueView<'_>) -> Result<()>,
+) -> Result<()> {
+    let count = table.raw_len();
+    let mut first = 1;
+    while first <= count {
+        let batch = ARRAY_BATCH.min(count - first + 1);
+        frame.with_frame(|inner| {
+            inner.check(
+                c_int::try_from(batch).map_err(|_| Error::logic("Array batch exceeds c_int"))?,
+            )?;
+            for index in first..first + batch {
+                visit(index, table.raw_get_index(inner, index_key(index)?)?)?;
+            }
+            Ok(())
+        })?;
+        first += batch;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -449,21 +474,17 @@ fn multimap_from_view(scope: &impl Scope, view: ValueView<'_>, context: &str) ->
                     value.type_of().name()
                 ))
             })?;
-            let count = values.raw_len();
-            let mut strings = Vec::with_capacity(count);
-            for index in 1..=count {
-                step.with_frame(|inner| {
-                    let value = values.raw_get_index(inner, index_key(index)?)?;
-                    let text = value.read::<&str>().map_err(|_| {
-                        Error::runtime(format!(
-                            "{context}: expected a string at key '{key}' index {index}, got {}",
-                            value.type_of().name()
-                        ))
-                    })?;
-                    strings.push(text.to_owned());
-                    Ok(())
+            let mut strings = Vec::with_capacity(values.raw_len());
+            for_each_array_value(step, &values, |index, value| {
+                let text = value.read::<&str>().map_err(|_| {
+                    Error::runtime(format!(
+                        "{context}: expected a string at key '{key}' index {index}, got {}",
+                        value.type_of().name()
+                    ))
                 })?;
-            }
+                strings.push(text.to_owned());
+                Ok(())
+            })?;
             map.insert(key.to_owned(), strings);
             Ok(())
         })
