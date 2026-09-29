@@ -222,6 +222,31 @@ string; nothing is coerced:
   `dream.ini: <message>` with no `runtime error:` prefix.
 - `parseIni` also accepts a Luau `buffer`.
 
+### Measured
+
+`cargo bench --features luau --bench luau_boundary` runs the frozen scripts of
+`benches/luau_boundary.rs` on the fixture `benches/round_trip.rs` uses (4226 INI entries in
+1543 sections, 514 cfg entries, 129 archives, 256 stale `data=` dirs). Medians, release with thin
+LTO, one machine: "mlua" is the 0.3.1 binding at the commit that added the bench, "l3i" the port
+with the importer untouched, "0.4.0" this version. The 0.4.0 column was taken while other
+builds shared the machine (load average 12 to 89); only `importPaths` had a quiet window, and
+the binding did not change between the l3i and 0.4.0 columns, so the l3i column is the
+per-call cost to expect.
+
+| script       | mlua 0.3.1 | l3i (port only) | 0.4.0                      |
+|--------------|-----------:|----------------:|---------------------------:|
+| importPaths  | 205.9 ms   | 208.8 ms        | 4.87 ms                    |
+| importMaps   | 2.277 ms   | 2.126 ms        | 7.2 ms (5.4 to 8.9, loaded) |
+| parseIni     | 2.816 ms   | 2.452 ms        | 4.9 ms (4.3 to 5.7, loaded) |
+| parseCfg     | 131.9 µs   | 141.7 µs        | 234 µs (loaded)            |
+| serializeCfg | 54.4 µs    | 55.0 µs         | 71 µs (loaded)             |
+
+The importer is where the time went (`cargo bench --bench round_trip`, quiet machine):
+`large_ini_round_trip` 198.5 ms to 4.97 ms (search paths that are not directories are never
+probed, and the cfg's `data=` dirs are canonicalised once per import instead of once per resolved
+file), `parse_ini_str` 1.465 ms to 1.029 ms, `parse_cfg_str` 68.3 µs to 58.1 µs,
+`serialize_cfg` 3.20 µs unchanged within noise.
+
 ## Rust API
 
 Generate crate documentation with:
