@@ -86,7 +86,8 @@ fn main() -> l3i::Result<()> {
 Every function carries a Luau signature. `plan.type_definitions()` returns the `.d.luau` text for
 everything in the plan, `@dream/ini` included, ready to save for an editor's language server.
 With l3i's `analysis` feature, `plan.check_definitions()` type-checks those definitions; dream-ini's
-tests run it, and type-check a strict script against the module. The
+tests run it under the `luau-analysis` feature (`cargo test --features luau-analysis`), and
+type-check a strict script against the module. The
 [module page](@/docs/luau/module.md#type-definitions) shows what it generates.
 
 ## What scripts get

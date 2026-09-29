@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `dream.ini` extension through an l3i runtime plan: the declared types check in Luau's own
-//! frontend, a strict script over `require("@dream/ini")` type checks, and the module behaves.
+//! The `dream.ini` extension through an l3i runtime plan: the plan composes, every member is
+//! typed, and the module behaves. `tests/luau_typed.rs` proves the types in Luau's frontend.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -11,9 +10,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use dream_ini::luau::{EXTENSION_ID, IniExtension, MODULE};
 use l3i::Runtime;
-use l3i::analysis::{
-    Analysis, AnalysisOptions, Definitions, Mode, ModuleConfig, SourceCode, SourceProvider,
-};
 use l3i::extension::{RuntimePlan, RuntimePolicy};
 
 fn plan() -> Rc<RuntimePlan> {
@@ -36,52 +32,14 @@ fn error_of(runtime: &Runtime, script: &str) -> String {
     exec(runtime, script).unwrap_err().to_string()
 }
 
-struct Scripts(HashMap<&'static str, String>);
-
-impl SourceProvider for Scripts {
-    fn read_source(&self, name: &str) -> Option<SourceCode> {
-        self.0.get(name).map(|text| SourceCode {
-            text: text.clone(),
-            is_script: true,
-        })
-    }
-    fn resolve_module(&self, _requirer: &str, _required: &str) -> Option<String> {
-        None
-    }
-    fn module_config(&self, _name: &str) -> ModuleConfig {
-        ModuleConfig {
-            mode: Mode::Strict,
-            ..ModuleConfig::default()
-        }
-    }
-}
-
-const STRICT_SCRIPT: &str = "--!strict
-local ini = require('@dream/ini')
-local parsed = ini.parseIni('[General]\\nDisable Audio=1\\n', { encoding = 'win1252' })
-local entries: { [string]: { string } } = parsed.entries
-local first: string? = if #parsed.warnings > 0 then parsed.warnings[1].message else nil
-local cfg = ini.parseCfg('content=Morrowind.esm\\n')
-local text: string = ini.serializeCfg(cfg)
-local imported = ini.importMaps(cfg, entries, { archives = false, fonts = true, iniPath = 'Morrowind.ini' })
-local fromDisk = ini.importPaths({ ini = 'Morrowind.ini', cfg = 'openmw.cfg', gameFiles = true, dataDirs = { 'Data Files' } })
-for _, event in fromDisk.events do
-    local stamp: number? = event.modified
-    print(event.kind, event.path, stamp)
-end
-local version: string = ini.version
-print(first, text, imported.text, imported.cfg['no-sound'], #imported.warnings, version)
-";
-
 #[test]
-fn the_plan_declares_a_typed_module_and_a_strict_script_type_checks() {
+fn the_plan_declares_a_typed_module() {
     let plan = plan();
     assert_eq!(plan.installation_order(), [EXTENSION_ID, "dream.net"]);
     assert!(
         plan.userdata().iter().all(|u| u.owner != EXTENSION_ID),
         "the surface is tables: no userdata, no tags"
     );
-    plan.check_definitions().unwrap();
     let definitions = plan.type_definitions();
     assert!(
         definitions.contains("export type Module__dream_ini = {"),
@@ -97,32 +55,6 @@ fn the_plan_declares_a_typed_module_and_a_strict_script_type_checks() {
             "every member is typed:\n{definitions}"
         );
     }
-    let sources = plan.analysis_sources(Scripts(HashMap::from([(
-        "ini_script",
-        STRICT_SCRIPT.to_owned(),
-    )])));
-    let options = AnalysisOptions {
-        definitions: vec![Definitions {
-            name: "dream-ini.d.luau".to_owned(),
-            source: definitions.clone(),
-        }],
-        ..AnalysisOptions::default()
-    };
-    let analysis = Analysis::new(sources, options).unwrap_or_else(|error| panic!("{error}"));
-    let report = analysis.check("ini_script", false);
-    let text: Vec<String> = report
-        .diagnostics
-        .iter()
-        .map(|d| {
-            format!(
-                "ini_script:{}:{}: {}",
-                d.span.begin_line + 1,
-                d.span.begin_column + 1,
-                d.text
-            )
-        })
-        .collect();
-    assert!(report.is_clean(), "{}\n---\n{definitions}", text.join("\n"));
 }
 
 #[test]

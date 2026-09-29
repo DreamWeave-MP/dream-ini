@@ -37,16 +37,21 @@ gui = ["dep:eframe", "dep:egui", "dep:image", "controller-support"]
 # The `dream.ini` Luau extension (`luau` module); `lua` is the former spelling.
 luau = ["dep:l3i"]
 lua = ["luau"]
+# Test-only: proves the declared Luau types with Luau's own frontend (`tests/luau_typed.rs`).
+# Cargo has no optional dev-dependencies, so plain `cargo test` skips the analysis build.
+luau-analysis = ["luau", "l3i/analysis"]
 portmaster-gui = ["dep:dream-soft-render", "dep:egui", "controller-support"]
 
 [dev-dependencies]
 criterion = "0.8"
-# The tests prove the declared Luau types with Luau's own frontend.
-l3i = { path = "../dream-binder", features = ["analysis"] }
 
 [[test]]
 name = "luau"
 required-features = ["luau"]
+
+[[test]]
+name = "luau_typed"
+required-features = ["luau-analysis"]
 
 [[bench]]
 name = "round_trip"

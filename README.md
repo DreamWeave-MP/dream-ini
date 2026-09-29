@@ -73,7 +73,8 @@ cargo test --all-features
 ```
 
 The `luau` feature needs l3i's toolchain, clang, lld and cross-language thin LTO, which
-`.cargo/config.toml` sets. The site in `content/` is a
+`.cargo/config.toml` sets; the test-only `luau-analysis` feature adds l3i's analysis frontend for
+`tests/luau_typed.rs`, so `cargo test --features luau` builds without it. The site in `content/` is a
 [DreamWeave Mod Template](https://github.com/DreamWeave-MP/DreamWeave-Mod-Template) site; preview it
 with `zola serve`.
 
