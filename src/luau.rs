@@ -43,7 +43,6 @@
 //! multimaps, failed imports) raise Luau errors prefixed `dream.ini:`; recoverable problems are
 //! returned in `warnings`.
 
-use std::ffi::c_int;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -349,9 +348,7 @@ fn for_each_array_value(
     while first <= count {
         let batch = ARRAY_BATCH.min(count - first + 1);
         frame.with_frame(|inner| {
-            inner.check(
-                c_int::try_from(batch).map_err(|_| Error::logic("Array batch exceeds c_int"))?,
-            )?;
+            inner.check(batch)?;
             for index in first..first + batch {
                 visit(index, table.raw_get_index(inner, index_key(index)?)?)?;
             }
