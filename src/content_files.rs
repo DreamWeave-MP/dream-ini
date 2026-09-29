@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,7 +66,12 @@ pub(crate) fn import_archives(
     );
     let mut events = Vec::new();
     let archives = resolve_archives(request.ini, &search_paths, request.verbose, &mut events)?;
-    let data_dirs = used_archive_data_dirs_to_write(request.cfg, request.cfg_dir, &archives);
+    let data_dirs = used_data_dirs_to_write(
+        request.cfg,
+        request.cfg_dir,
+        &search_paths,
+        archives.iter().map(|archive| archive.search_path),
+    );
     for data_dir in &data_dirs {
         events.push(ImportEvent::DataDirAddedForArchive {
             path: data_dir.path.clone(),
@@ -105,15 +111,15 @@ pub(crate) fn import_content_files(
         content_file_group(&left.name)
             .cmp(&content_file_group(&right.name))
             .then_with(|| left.sort_key.cmp(&right.sort_key))
-            .then_with(|| {
-                right
-                    .name
-                    .to_ascii_lowercase()
-                    .cmp(&left.name.to_ascii_lowercase())
-            })
+            .then_with(|| right.lower_name.cmp(&left.lower_name))
             .then_with(|| left.path.cmp(&right.path))
     });
-    let data_dirs = used_data_dirs_to_write(request.cfg, request.cfg_dir, &content_files);
+    let data_dirs = used_data_dirs_to_write(
+        request.cfg,
+        request.cfg_dir,
+        &search_paths,
+        content_files.iter().map(|file| file.search_path),
+    );
     for data_dir in &data_dirs {
         events.push(ImportEvent::DataDirAddedForContent {
             path: data_dir.path.clone(),
@@ -166,9 +172,10 @@ fn resolve_archives(
     }
 }
 
-fn archive_values(ini: &MultiMap) -> Vec<String> {
-    let mut archives = vec!["Morrowind.bsa".to_owned()];
-    archives.extend(sequential_ini_values_ignore_ascii_case(ini, "Archives", "Archive ").cloned());
+/// `Morrowind.bsa` first, then the INI's `[Archives]` in `Archive N` order.
+fn archive_values(ini: &MultiMap) -> Vec<&str> {
+    let mut archives = vec!["Morrowind.bsa"];
+    archives.extend(sequential_ini_values(ini, "Archives", "Archive "));
     archives
 }
 
@@ -178,18 +185,20 @@ fn resolve_archive(
     verbose: bool,
     events: &mut Vec<ImportEvent>,
 ) -> Option<ResolvedArchive> {
-    for search_path in search_paths {
+    for (index, search_path) in search_paths.iter().enumerate() {
+        if !search_path.searchable {
+            continue;
+        }
         let candidate = search_path.path.join(file);
         if fs::metadata(&candidate).is_ok() {
-            let path = fs::canonicalize(&candidate).unwrap_or(candidate);
             if verbose {
+                // The canonical path only feeds the event.
+                let path = fs::canonicalize(&candidate).unwrap_or(candidate);
                 events.push(ImportEvent::ArchiveResolved { path });
             }
             return Some(ResolvedArchive {
                 name: file.to_owned(),
-                data_path: search_path.path.clone(),
-                data_cfg_value: search_path.cfg_value.clone(),
-                search_path_origin: search_path.origin,
+                search_path: index,
             });
         }
     }
@@ -216,11 +225,7 @@ fn build_search_paths(
         } else {
             path.to_string_lossy().into_owned()
         };
-        ContentSearchPath {
-            path: search_path,
-            cfg_value,
-            origin: SearchPathOrigin::Explicit,
-        }
+        ContentSearchPath::new(search_path, cfg_value, SearchPathOrigin::Explicit)
     }));
     if let Some(paths) = cfg.get("data") {
         add_search_paths(&mut search_paths, paths, cfg_dir, SearchPathOrigin::Config);
@@ -230,11 +235,12 @@ fn build_search_paths(
         .unwrap_or_else(|| Path::new(""))
         .join("Data Files");
     let default_data_path = fs::canonicalize(&default_data_path).unwrap_or(default_data_path);
-    search_paths.push(ContentSearchPath {
-        cfg_value: default_data_path.to_string_lossy().into_owned(),
-        path: default_data_path,
-        origin: SearchPathOrigin::Default,
-    });
+    let cfg_value = default_data_path.to_string_lossy().into_owned();
+    search_paths.push(ContentSearchPath::new(
+        default_data_path,
+        cfg_value,
+        SearchPathOrigin::Default,
+    ));
     search_paths
 }
 
@@ -246,7 +252,8 @@ fn resolve_content_files(
     warnings: &mut Vec<ImportWarning>,
 ) -> Result<Vec<ResolvedContentFile>, ImportError> {
     let mut content_files = Vec::new();
-    for file in game_file_values(ini).into_iter().map(|file| file.trim()) {
+    for file in sequential_ini_values(ini, "Game Files", "GameFile") {
+        let file = file.trim();
         if !ends_with_ignore_ascii_case(file, ".esm") && !ends_with_ignore_ascii_case(file, ".esp")
         {
             continue;
@@ -274,7 +281,10 @@ fn resolve_content_file(
     verbose: bool,
     events: &mut Vec<ImportEvent>,
 ) -> Option<ResolvedContentFile> {
-    for search_path in search_paths {
+    for (index, search_path) in search_paths.iter().enumerate() {
+        if !search_path.searchable {
+            continue;
+        }
         let candidate = search_path.path.join(file);
         if let Ok(metadata) = fs::metadata(&candidate) {
             let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
@@ -287,20 +297,15 @@ fn resolve_content_file(
             }
             return Some(ResolvedContentFile {
                 name: file.to_owned(),
+                lower_name: file.to_ascii_lowercase(),
                 sort_key: system_time_key(modified),
                 path,
-                data_path: search_path.path.clone(),
-                data_cfg_value: search_path.cfg_value.clone(),
-                search_path_origin: search_path.origin,
+                search_path: index,
             });
         }
     }
 
     None
-}
-
-fn game_file_values(ini: &MultiMap) -> Vec<&String> {
-    sequential_ini_values_ignore_ascii_case(ini, "Game Files", "GameFile").collect()
 }
 
 fn is_plugin_filename(file: &str) -> bool {
@@ -324,92 +329,118 @@ struct ContentSearchPath {
     path: PathBuf,
     cfg_value: String,
     origin: SearchPathOrigin,
+    /// Whether `path` is a directory on disk. Nothing resolves inside anything else, so probing
+    /// skips the rest; error messages still list every search path.
+    searchable: bool,
+}
+
+impl ContentSearchPath {
+    fn new(path: PathBuf, cfg_value: String, origin: SearchPathOrigin) -> Self {
+        let searchable = path.is_dir();
+        ContentSearchPath {
+            path,
+            cfg_value,
+            origin,
+            searchable,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedContentFile {
     name: String,
+    lower_name: String,
     sort_key: u128,
     path: PathBuf,
-    data_path: PathBuf,
-    data_cfg_value: String,
-    search_path_origin: SearchPathOrigin,
+    /// Index of the search path the file was resolved from.
+    search_path: usize,
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedArchive {
     name: String,
-    data_path: PathBuf,
-    data_cfg_value: String,
-    search_path_origin: SearchPathOrigin,
+    search_path: usize,
 }
 
+/// The search paths that resolved a file and are neither cfg `data=` entries nor equivalent to
+/// one (or to an earlier written path), in first-hit order. Each search path is decided once,
+/// and the cfg's `data=` values are canonicalised once, on first need.
 fn used_data_dirs_to_write(
     cfg: &MultiMap,
     cfg_dir: Option<&Path>,
-    content_files: &[ResolvedContentFile],
+    search_paths: &[ContentSearchPath],
+    hits: impl Iterator<Item = usize>,
 ) -> Vec<DataDirToWrite> {
-    let mut used_paths: Vec<DataDirToWrite> = Vec::new();
-    for content_file in content_files {
-        if content_file.search_path_origin == SearchPathOrigin::Config {
+    let mut used: Vec<DataDirToWrite> = Vec::new();
+    let mut used_canonical: Vec<PathBuf> = Vec::new();
+    let mut decided = vec![false; search_paths.len()];
+    let mut cfg_dirs: Option<Vec<PathBuf>> = None;
+    for index in hits {
+        let search_path = &search_paths[index];
+        if search_path.origin == SearchPathOrigin::Config || decided[index] {
             continue;
         }
-        if !has_equivalent_data_path(cfg, cfg_dir, &content_file.data_path)
-            && !used_paths
-                .iter()
-                .any(|path| equivalent_paths(path.path.as_path(), &content_file.data_path))
-        {
-            used_paths.push(DataDirToWrite {
-                path: content_file.data_path.clone(),
-                cfg_value: content_file.data_cfg_value.clone(),
-            });
-        }
-    }
-    used_paths
-}
-
-fn used_archive_data_dirs_to_write(
-    cfg: &MultiMap,
-    cfg_dir: Option<&Path>,
-    archives: &[ResolvedArchive],
-) -> Vec<DataDirToWrite> {
-    let mut used_paths: Vec<DataDirToWrite> = Vec::new();
-    for archive in archives {
-        if archive.search_path_origin == SearchPathOrigin::Config {
+        decided[index] = true;
+        let canonical = canonical_or_self(&search_path.path);
+        let cfg_dirs = cfg_dirs.get_or_insert_with(|| {
+            cfg.get("data").map_or_else(Vec::new, |values| {
+                values
+                    .iter()
+                    .map(|value| canonical_or_self(&resolve_cfg_path(unquote_path(value), cfg_dir)))
+                    .collect()
+            })
+        });
+        if cfg_dirs.contains(&canonical) || used_canonical.contains(&canonical) {
             continue;
         }
-        if !has_equivalent_data_path(cfg, cfg_dir, &archive.data_path)
-            && !used_paths
-                .iter()
-                .any(|path| equivalent_paths(path.path.as_path(), &archive.data_path))
-        {
-            used_paths.push(DataDirToWrite {
-                path: archive.data_path.clone(),
-                cfg_value: archive.data_cfg_value.clone(),
-            });
+        used.push(DataDirToWrite {
+            path: search_path.path.clone(),
+            cfg_value: search_path.cfg_value.clone(),
+        });
+        used_canonical.push(canonical);
+    }
+    used
+}
+
+/// The values of `{section}:{key_prefix}{N}` for `N = 0, 1, ...` up to the first index with no
+/// values, keys compared ASCII case-insensitively, in one pass over the map. Several spellings
+/// of one index contribute their values in map order, and only a canonical decimal (`7`, never
+/// `07` or `+7`) is an index, as the C++ importer formats the keys it looks up.
+fn sequential_ini_values<'a>(ini: &'a MultiMap, section: &str, key_prefix: &str) -> Vec<&'a str> {
+    let prefix = format!("{section}:{key_prefix}");
+    let mut indexed: BTreeMap<usize, Vec<&'a str>> = BTreeMap::new();
+    for (key, values) in ini {
+        let Some((head, tail)) = key.split_at_checked(prefix.len()) else {
+            continue;
+        };
+        if values.is_empty() || !head.eq_ignore_ascii_case(&prefix) {
+            continue;
+        }
+        if let Some(index) = canonical_index(tail) {
+            indexed
+                .entry(index)
+                .or_default()
+                .extend(values.iter().map(String::as_str));
         }
     }
-    used_paths
+    let mut sequence = Vec::new();
+    for index in 0.. {
+        match indexed.remove(&index) {
+            Some(values) => sequence.extend(values),
+            None => break,
+        }
+    }
+    sequence
 }
 
-fn sequential_ini_values_ignore_ascii_case<'a>(
-    ini: &'a MultiMap,
-    section: &str,
-    key_prefix: &str,
-) -> impl Iterator<Item = &'a String> {
-    (0..)
-        .map(move |index| format!("{section}:{key_prefix}{index}"))
-        .map_while(move |key| ini_values_ignore_ascii_case(ini, &key))
-        .flatten()
-}
-
-fn ini_values_ignore_ascii_case<'a>(ini: &'a MultiMap, key: &str) -> Option<Vec<&'a String>> {
-    let values: Vec<&String> = ini
-        .iter()
-        .filter(|(entry_key, _)| entry_key.eq_ignore_ascii_case(key))
-        .flat_map(|(_, values)| values)
-        .collect();
-    (!values.is_empty()).then_some(values)
+/// `text` as the index `usize::to_string` would print, else `None`.
+fn canonical_index(text: &str) -> Option<usize> {
+    let canonical = match text.as_bytes() {
+        [b'0'] => true,
+        [b'1'..=b'9', rest @ ..] => rest.iter().all(u8::is_ascii_digit),
+        _ => false,
+    };
+    if canonical { text.parse().ok() } else { None }
 }
 
 fn add_search_paths(
@@ -419,11 +450,11 @@ fn add_search_paths(
     origin: SearchPathOrigin,
 ) {
     for path in input {
-        output.push(ContentSearchPath {
-            path: resolve_cfg_path(unquote_path(path), cfg_dir),
-            cfg_value: path.clone(),
+        output.push(ContentSearchPath::new(
+            resolve_cfg_path(unquote_path(path), cfg_dir),
+            path.clone(),
             origin,
-        });
+        ));
     }
 }
 
@@ -454,18 +485,8 @@ fn unquote_path(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-fn has_equivalent_data_path(cfg: &MultiMap, cfg_dir: Option<&Path>, path: &Path) -> bool {
-    cfg.get("data").is_some_and(|values| {
-        values
-            .iter()
-            .any(|value| equivalent_paths(&resolve_cfg_path(unquote_path(value), cfg_dir), path))
-    })
-}
-
-fn equivalent_paths(left: &Path, right: &Path) -> bool {
-    let left = fs::canonicalize(left).unwrap_or_else(|_| left.to_owned());
-    let right = fs::canonicalize(right).unwrap_or_else(|_| right.to_owned());
-    left == right
+fn canonical_or_self(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_owned())
 }
 
 fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {

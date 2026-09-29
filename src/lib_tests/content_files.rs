@@ -1034,3 +1034,122 @@ fn missing_game_file_soft_stop_updates_existing_cfg_with_partial_content() {
     );
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn game_file_indices_are_canonical_decimals() {
+    let dir = unique_test_dir("game-files-canonical-index");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Zero.esm"), tes3_bytes(&[])).unwrap();
+    fs::write(data_dir.join("One.esp"), tes3_bytes(&["Zero.esm"])).unwrap();
+    fs::write(data_dir.join("Padded.esp"), tes3_bytes(&["Zero.esm"])).unwrap();
+
+    let mut cfg = MultiMap::new();
+    // `GameFile01` and `GameFile+1` are not the key the C++ importer formats for index 1.
+    let ini = parse_ini_str(concat!(
+        "[Game Files]\n",
+        "GameFile0=Zero.esm\n",
+        "GameFile01=Padded.esp\n",
+        "GameFile+1=Padded.esp\n",
+        "GameFile1=One.esp\n",
+        "GameFile02=Padded.esp\n",
+    ));
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    assert_eq!(
+        values(&cfg, "content"),
+        &["Zero.esm".to_owned(), "One.esp".to_owned()]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn game_file_index_spellings_contribute_values_in_key_order() {
+    let dir = unique_test_dir("game-files-index-spellings");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Base.esm"), tes3_bytes(&[])).unwrap();
+    for name in ["Lower.esp", "Upper.esp", "Mixed.esp"] {
+        fs::write(data_dir.join(name), tes3_bytes(&["Base.esm"])).unwrap();
+    }
+
+    let mut cfg = MultiMap::new();
+    let ini = parse_ini_str(concat!(
+        "[Game Files]\n",
+        "GameFile0=Base.esm\n",
+        "gamefile1=Lower.esp\n",
+        "[GAME FILES]\n",
+        "GAMEFILE1=Upper.esp\n",
+        "[Game Files]\n",
+        "GameFile1=Mixed.esp\n",
+    ));
+    let importer = IniImporter::new(ImportOptions {
+        import_game_files: true,
+        import_archives: false,
+        ..ImportOptions::default()
+    });
+
+    let result = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+
+    // Equal mtimes and the esp group: reverse case-insensitive name order decides, so the
+    // ordering proves only that every spelling was imported.
+    let mut content = values(&cfg, "content").to_vec();
+    content.sort();
+    assert_eq!(content, ["Base.esm", "Lower.esp", "Mixed.esp", "Upper.esp"]);
+    assert!(result.warnings.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unusable_cfg_data_entries_never_resolve_but_stay_in_the_error() {
+    let dir = unique_test_dir("archives-unusable-data");
+    let data_dir = dir.join("Data Files");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::write(data_dir.join("Morrowind.bsa"), []).unwrap();
+    let missing_dir = dir.join("missing");
+    let not_a_dir = dir.join("not-a-dir");
+    fs::write(&not_a_dir, "a file, not a data directory").unwrap();
+
+    let mut cfg = parse_cfg_str(&format!(
+        "data={}\ndata={}\n",
+        missing_dir.display(),
+        not_a_dir.display()
+    ));
+    let ini = parse_ini_str("[Archives]\nArchive 0=Absent.bsa\n");
+    let importer = IniImporter::new(ImportOptions::default());
+
+    let error = importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap_err();
+    let ImportError::MissingArchives {
+        files,
+        searched_paths,
+    } = error
+    else {
+        panic!("expected missing archives, got {error}");
+    };
+    assert_eq!(files, ["Absent.bsa"]);
+    assert_eq!(searched_paths, [missing_dir, not_a_dir, data_dir.clone()]);
+
+    // The archive next to the INI still resolves through the unusable entries.
+    let ini = parse_ini_str("[Archives]\n");
+    importer
+        .import_maps(&mut cfg, &ini, &dir.join("Morrowind.ini"))
+        .unwrap();
+    assert_eq!(
+        values(&cfg, "fallback-archive"),
+        &["Morrowind.bsa".to_owned()]
+    );
+    assert_eq!(values(&cfg, "data").len(), 3);
+    fs::remove_dir_all(dir).unwrap();
+}
