@@ -287,14 +287,14 @@ fn options_are_strict_and_name_the_known_keys() {
             "ini.importMaps.game: unsupported game: oblivion",
         ),
         // Table options are walked in place by l3i's option reader: an element error spells the
-        // field's full path and passes through flat, a non-table is the reader's own wording.
+        // field's full path and passes through flat, a non-table is worded in the option's terms.
         (
             r#"ini.importMaps({}, {}, { dataDirs = { "a", 2 } })"#,
             "ini.importMaps.dataDirs[2]: expected a string, got number",
         ),
         (
             r#"ini.importMaps({}, {}, { dataDirs = "a" })"#,
-            "ini.importMaps.dataDirs: expected table, got string",
+            "ini.importMaps.dataDirs: expected an array of strings, got string",
         ),
         (
             r"ini.importMaps({}, {}, 5)",

@@ -180,7 +180,7 @@ changed = [
 [[releases]]
 version = "0.4.3"
 date = 2026-09-29
-summary = "The dataDirs element error reads flat again, through l3i's option reader."
+summary = "The dataDirs errors read as in 0.4.1 again, through l3i's option reader."
 changed = [
-    "A `dataDirs` element that is not a string is reported as `ini.importMaps.dataDirs[2]: expected a string, got number`, the 0.4.1 text: the element error spells the field's full path and l3i's option reader (c2f68d6) passes it through without prefixing it again. A `dataDirs` that is not a table reads `ini.importMaps.dataDirs: expected table, got string`, the reader's own wording, no longer naming a Lua stack slot. Every other error text and every Luau and Rust API are unchanged.",
+    "A `dataDirs` element that is not a string is reported as `ini.importMaps.dataDirs[2]: expected a string, got number` and a `dataDirs` that is not a table as `ini.importMaps.dataDirs: expected an array of strings, got string`, the 0.4.1 texts: the element error spells the field's full path and l3i's option reader (ae0a57d) passes it through without prefixing it again, and the table option states its expectation in its own words instead of naming a Lua stack slot. Every other error text and every Luau and Rust API are unchanged.",
 ]

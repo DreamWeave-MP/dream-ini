@@ -223,11 +223,11 @@ fn read_encoding(o: &mut Options<'_, '_>) -> Result<Option<TextEncoding>> {
 
 /// An optional array of path strings, walked in place through the reader's frame. An element
 /// error spells the field's full path (`ini.importMaps.dataDirs[2]: expected a string, got
-/// number`), which the reader passes through unprefixed; a non-table is the reader's own error
-/// (`ini.importMaps.dataDirs: expected table, got string`).
+/// number`), which the reader passes through unprefixed; a non-table is worded by the reader in
+/// the option's own terms (`ini.importMaps.dataDirs: expected an array of strings, got string`).
 fn read_paths(o: &mut Options<'_, '_>, key: &str) -> Result<Vec<PathBuf>> {
     let path = format!("{}.{key}", o.context());
-    let paths = o.optional_table(key, |frame, table| {
+    let paths = o.optional_table_expecting(key, "an array of strings", |frame, table| {
         let mut paths = Vec::with_capacity(table.raw_len());
         table.for_each_array(frame, |_, index, value| {
             let text = value
