@@ -51,8 +51,7 @@ use l3i::convert::BytesView;
 use l3i::extension::{Extension, ExtensionDescriptor};
 use l3i::options::{FromOptions, Options};
 use l3i::source::CompileConstant;
-use l3i::stack::{Frame, Scope, TableView, ValueView};
-use l3i::value::Value;
+use l3i::stack::{Frame, Scope, ValueView};
 use l3i::{Error, Result};
 
 use crate::{
@@ -222,33 +221,21 @@ fn read_encoding(o: &mut Options<'_, '_>) -> Result<Option<TextEncoding>> {
     })
 }
 
-/// An optional array of path strings.
+/// An optional array of path strings, walked in place through the reader's frame; the reader
+/// prefixes every error with the field's path (`ini.importMaps.dataDirs: ...`).
 fn read_paths(o: &mut Options<'_, '_>, key: &str) -> Result<Vec<PathBuf>> {
-    let Some(list) = o.optional::<Value>(key)? else {
-        return Ok(Vec::new());
-    };
-    let context = format!("{}.{key}", o.context());
-    o.frame().with_frame(|frame| {
-        let view = list.push_to(frame)?;
-        let table = view.as_table().map_err(|_| {
-            Error::runtime(format!(
-                "{context}: expected an array of strings, got {}",
-                view.type_of().name()
-            ))
-        })?;
+    let paths = o.optional_table(key, |frame, table| {
         let mut paths = Vec::with_capacity(table.raw_len());
-        for_each_array_value(frame, &table, |index, value| {
-            let text = value.read::<&str>().map_err(|_| {
-                Error::runtime(format!(
-                    "{context}[{index}]: expected a string, got {}",
-                    value.type_of().name()
-                ))
-            })?;
+        table.for_each_array(frame, |_, index, value| {
+            let text = value
+                .read::<&str>()
+                .map_err(|_| value.field_type_error(&format!("{key}[{index}]"), "a string"))?;
             paths.push(PathBuf::from(text));
             Ok(())
         })?;
         Ok(paths)
-    })
+    })?;
+    Ok(paths.unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -331,32 +318,6 @@ fn import_error(error: &ImportError) -> Error {
 /// A 1-based array index as Luau's raw integer key.
 fn index_key(index: usize) -> Result<i64> {
     i64::try_from(index).map_err(|_| Error::logic("Table index exceeds the supported range"))
-}
-
-/// Array values read per stack reservation: one nested frame and one `lua_checkstack` per
-/// batch instead of a frame per element, bounded so a long array never exhausts Luau's stack.
-const ARRAY_BATCH: usize = 64;
-
-/// Visits `table[1]..table[#table]` in order; each value's view lives for its visit only.
-fn for_each_array_value(
-    frame: &Frame<'_>,
-    table: &TableView<'_>,
-    mut visit: impl FnMut(usize, ValueView<'_>) -> Result<()>,
-) -> Result<()> {
-    let count = table.raw_len();
-    let mut first = 1;
-    while first <= count {
-        let batch = ARRAY_BATCH.min(count - first + 1);
-        frame.with_frame(|inner| {
-            inner.check(batch)?;
-            for index in first..first + batch {
-                visit(index, table.raw_get_index(inner, index_key(index)?)?)?;
-            }
-            Ok(())
-        })?;
-        first += batch;
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -446,42 +407,33 @@ fn system_time_seconds(time: SystemTime) -> u64 {
 }
 
 /// Reads `{ [string] = { string... } }` into a [`MultiMap`], naming the offending key on error.
+/// Each value array is walked with one element on the stack at a time.
 fn multimap_from_view(scope: &impl Scope, view: ValueView<'_>, context: &str) -> Result<MultiMap> {
-    let Ok(table) = view.as_table() else {
-        return Err(Error::runtime(format!(
-            "{context}: expected a multimap table, got {}",
-            view.type_of().name()
-        )));
-    };
+    let table = view
+        .as_table()
+        .map_err(|_| view.field_type_error(context, "a multimap table"))?;
     let mut map = MultiMap::new();
-    scope.with_frame(|frame| {
-        table.for_each(frame, |step, key, value| {
-            let key = key.read::<&str>().map_err(|_| {
-                Error::runtime(format!(
-                    "{context}: multimap keys must be strings, got {}",
-                    key.type_of().name()
-                ))
+    let frame = scope.frame();
+    table.for_each(&frame, |step, key, value| {
+        let key = key.read::<&str>().map_err(|_| {
+            Error::runtime(format!(
+                "{context}: multimap keys must be strings, got {}",
+                key.type_of().name()
+            ))
+        })?;
+        let values = value.as_table().map_err(|_| {
+            value.field_type_error(context, &format!("array of strings for key '{key}'"))
+        })?;
+        let mut strings = Vec::with_capacity(values.raw_len());
+        values.for_each_array(step, |_, index, value| {
+            let text = value.read::<&str>().map_err(|_| {
+                value.field_type_error(context, &format!("a string at key '{key}' index {index}"))
             })?;
-            let values = value.as_table().map_err(|_| {
-                Error::runtime(format!(
-                    "{context}: expected array of strings for key '{key}', got {}",
-                    value.type_of().name()
-                ))
-            })?;
-            let mut strings = Vec::with_capacity(values.raw_len());
-            for_each_array_value(step, &values, |index, value| {
-                let text = value.read::<&str>().map_err(|_| {
-                    Error::runtime(format!(
-                        "{context}: expected a string at key '{key}' index {index}, got {}",
-                        value.type_of().name()
-                    ))
-                })?;
-                strings.push(text.to_owned());
-                Ok(())
-            })?;
-            map.insert(key.to_owned(), strings);
+            strings.push(text.to_owned());
             Ok(())
-        })
+        })?;
+        map.insert(key.to_owned(), strings);
+        Ok(())
     })?;
     Ok(map)
 }

@@ -286,13 +286,20 @@ fn options_are_strict_and_name_the_known_keys() {
             r#"ini.importMaps({}, {}, { game = "oblivion" })"#,
             "ini.importMaps.game: unsupported game: oblivion",
         ),
+        // Table options are walked in place by l3i's option reader, which prefixes the field's
+        // path to whatever the walk reports: an element names its index, a non-table names the
+        // slot.
         (
             r#"ini.importMaps({}, {}, { dataDirs = { "a", 2 } })"#,
-            "ini.importMaps.dataDirs[2]: expected a string, got number",
+            "ini.importMaps.dataDirs: dataDirs[2]: expected a string, got number",
         ),
         (
             r#"ini.importMaps({}, {}, { dataDirs = "a" })"#,
-            "ini.importMaps.dataDirs: expected an array of strings, got string",
+            "ini.importMaps.dataDirs: Lua stack index",
+        ),
+        (
+            r#"ini.importMaps({}, {}, { dataDirs = "a" })"#,
+            "expected table, got string",
         ),
         (
             r"ini.importMaps({}, {}, 5)",
