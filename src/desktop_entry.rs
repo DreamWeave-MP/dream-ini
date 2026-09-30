@@ -4,7 +4,9 @@ use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(target_os = "linux", feature = "gui", test))]
 pub(crate) const APP_ID: &str = "io.github.DreamWeave-MP.dream-ini";
+#[cfg(any(target_os = "linux", windows, feature = "gui", test))]
 pub(crate) const APP_NAME: &str = "Dream INI";
 #[cfg(any(target_os = "linux", windows, test))]
 const APP_COMMENT: &str = "Import Morrowind.ini settings into OpenMW configuration files";
