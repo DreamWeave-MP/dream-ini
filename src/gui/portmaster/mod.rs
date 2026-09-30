@@ -20,6 +20,7 @@ mod shell;
 use super::{GuiApp, GuiShell};
 #[cfg(target_os = "linux")]
 use dream_soft_render::SoftwareRenderer;
+#[cfg(target_os = "linux")]
 use dream_soft_render::egui_adapter::{RenderFrame, RenderOutcome, SampledRectModulatedWorkload};
 #[cfg(target_os = "linux")]
 use fbdev::{

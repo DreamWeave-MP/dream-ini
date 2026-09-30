@@ -484,7 +484,10 @@ fn sync_parent_dir(parent: &Path) -> io::Result<()> {
     fs::File::open(parent)?.sync_all()
 }
 
+/// Windows directories cannot be opened for syncing; the file's own sync is all there is.
+/// The signature stays the Unix one so the caller reads the same on every platform.
 #[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
 fn sync_parent_dir(_parent: &Path) -> io::Result<()> {
     Ok(())
 }

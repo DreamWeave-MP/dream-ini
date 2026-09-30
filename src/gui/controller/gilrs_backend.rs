@@ -112,7 +112,6 @@ impl WorkerState {
                 let gamepad = self.gamepad_state(event.id);
                 button_pressed(button, gamepad, now)
             }
-            EventType::Connected => InputActions::default(),
             EventType::Disconnected => {
                 self.gamepads.remove(&gamepad_key(event.id));
                 InputActions::released()
@@ -163,6 +162,7 @@ impl WorkerState {
                     now,
                 )
             }
+            // Connections and the remaining axes and buttons change nothing by themselves.
             _ => InputActions::default(),
         }
     }
@@ -176,8 +176,9 @@ impl WorkerState {
             .values()
             .filter_map(|gamepad| gamepad.repeater.next_repeat())
             .min()
-            .map(|instant| instant.saturating_duration_since(Instant::now()))
-            .unwrap_or(GILRS_POLL_INTERVAL)
+            .map_or(GILRS_POLL_INTERVAL, |instant| {
+                instant.saturating_duration_since(Instant::now())
+            })
             .min(GILRS_POLL_INTERVAL)
     }
 }
