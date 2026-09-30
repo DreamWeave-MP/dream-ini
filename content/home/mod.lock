@@ -571,6 +571,148 @@
       "groups": [],
       "extensions": {},
       "critical_extensions": []
+    },
+    {
+      "version": "1.0.1",
+      "locked_from": "df119713d8e9c71ed749d7a2f4ee9ac9d2d9be27",
+      "artifacts": [
+        {
+          "id": "windows-x64",
+          "format": "binary",
+          "filename": "dream-ini-Windows-X64.zip",
+          "media_type": "application/zip",
+          "size": 3750033,
+          "digests": {
+            "sha256": "eac21a9b069a611f23ed010983e6212409812fbf33b4e8f06856a095ad8ee63e"
+          },
+          "platform": {
+            "os": "windows",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "macos-arm64",
+          "format": "binary",
+          "filename": "dream-ini-macOS-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 3952600,
+          "digests": {
+            "sha256": "b1fe72936bc92f3eebd404cca8ba493486b3ad1c7517cd6d6a301293e3fd3ce8"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "macos-x64",
+          "format": "binary",
+          "filename": "dream-ini-macOS-X64.zip",
+          "media_type": "application/zip",
+          "size": 4135566,
+          "digests": {
+            "sha256": "8209df5bc1aef8ce074574ff322efe39e8e1e9068091b2e834637b6d988a80a1"
+          },
+          "platform": {
+            "os": "macos",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "linux-x64",
+          "format": "binary",
+          "filename": "dream-ini-Linux-X64.zip",
+          "media_type": "application/zip",
+          "size": 5401529,
+          "digests": {
+            "sha256": "e9bc6c0d59b395982d9fb24cab22d4f6ca1292333b3f38c27c3ff04635a69c3d"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "x86_64"
+          }
+        },
+        {
+          "id": "android-arm64",
+          "format": "binary",
+          "filename": "dream-ini-Android-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 832499,
+          "digests": {
+            "sha256": "7e9e69c3ec96d02282204339e9c248cc3944b2068825684ac916a1f86d5c9025"
+          },
+          "platform": {
+            "os": "android",
+            "arch": "aarch64"
+          }
+        },
+        {
+          "id": "linux-arm64-portmaster",
+          "format": "binary",
+          "filename": "dream-ini-Portmaster-ARM64.zip",
+          "media_type": "application/zip",
+          "size": 3221615,
+          "digests": {
+            "sha256": "face7fc6e24c80fdaae9a2c447c92e574618a36f59325cc1696888c08e7fc14e"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "aarch64",
+            "variant": "portmaster"
+          }
+        },
+        {
+          "id": "linux-arm64-muos",
+          "format": "binary",
+          "filename": "dream-ini-Portmaster-ARM64.muxapp",
+          "media_type": "application/zip",
+          "size": 3296875,
+          "digests": {
+            "sha256": "94dca5abe1b1e0f50fd12c25197e74fbc79569211d0babe62d9804818a1d35e0"
+          },
+          "platform": {
+            "os": "linux",
+            "arch": "aarch64",
+            "variant": "muos"
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [
+        {
+          "os": "windows",
+          "arch": "x86_64"
+        },
+        {
+          "os": "macos",
+          "arch": "aarch64"
+        },
+        {
+          "os": "macos",
+          "arch": "x86_64"
+        },
+        {
+          "os": "linux",
+          "arch": "x86_64"
+        }
+      ],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "dream-ini",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
     }
   ]
 }
