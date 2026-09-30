@@ -19,7 +19,7 @@ egui = { version = "0.34", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 # The Luau binder behind the `luau` feature; a path dependency for the migration campaign.
 l3i = { version = "1.0.0", optional = true }
-openmw-config = "2.0"
+openmw-config = "3.0.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_System_Com", "Win32_UI_Shell"] }
