@@ -993,6 +993,33 @@ function textRects(text) {
   return rects.filter((rect) => rect.width > 0 && rect.height > 0);
 }
 
+// The largest box of the given shape inside bounds that no rect reaches into from the left: for
+// every band between two text edges, the space right of whatever text lies in that band. A long
+// row of download buttons then only narrows its own band, and the space beside the title and
+// summary above it stays usable.
+function clearestBand(rects, bounds, aspect) {
+  const gapY = 16;
+  const gapX = 28;
+  const levels = new Set([bounds.y0, bounds.y1]);
+  for (const rect of rects) {
+    levels.add(Math.min(bounds.y1, Math.max(bounds.y0, rect.top - gapY)));
+    levels.add(Math.min(bounds.y1, Math.max(bounds.y0, rect.bottom + gapY)));
+  }
+  const ys = [...levels].sort((a, b) => a - b);
+  let best = { x0: bounds.x0, x1: bounds.x1, y0: bounds.y0, y1: bounds.y0, size: 0 };
+  for (let i = 0; i < ys.length; i += 1) {
+    for (let j = i + 1; j < ys.length; j += 1) {
+      const y0 = ys[i];
+      const y1 = ys[j];
+      let x0 = bounds.x0;
+      for (const rect of rects) if (rect.bottom + gapY > y0 && rect.top - gapY < y1) x0 = Math.max(x0, rect.right + gapX);
+      const size = Math.min(y1 - y0, (bounds.x1 - x0) / aspect);
+      if (size > best.size) best = { x0, x1: bounds.x1, y0, y1, size };
+    }
+  }
+  return best;
+}
+
 // The largest box of the composition's shape clear of the text: beside it on a wide screen, or
 // above it where the stylesheet leaves room on a phone. Returns its centre and height, relative
 // to the art.
@@ -1009,10 +1036,10 @@ function placement(root) {
   const rects = text ? textRects(text) : [];
   const aspect = COMP.width / COMP.height;
   if (!rects.length) return { x: box.width * 0.7, y: box.height * 0.45, size: Math.min(box.height * 0.6, box.width * 0.4 / aspect), above: false };
-  const right = Math.max(...rects.map((rect) => rect.right));
   const top = Math.min(...rects.map((rect) => rect.top));
+  const beside = clearestBand(rects, { x0: shell.left, x1: Math.min(box.right - 12, shell.right), y0: box.top + 14, y1: floor - 14 }, aspect);
   const candidates = [
-    { x0: right + 24, x1: Math.min(box.right - 12, shell.right), y0: box.top + 14, y1: floor - 14, above: false },
+    { ...beside, above: false },
     { x0: shell.left - 8, x1: shell.right + 8, y0: box.top + 6, y1: top - 10, above: true },
   ].map((region) => ({ ...region, size: Math.max(0, Math.min(region.y1 - region.y0, (region.x1 - region.x0) / aspect)) }));
   const best = candidates.reduce((a, b) => (b.size > a.size ? b : a));

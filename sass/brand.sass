@@ -32,14 +32,15 @@
   &.is-live > .dini-hero__still
     opacity: 0
 
+// Without JavaScript nothing measures the text, so the still keeps to the top of the hero, clear of
+// the download buttons however many rows they take.
 html:not(.dw-js) .dw-hero--art .dw-hero__art::before
   content: ""
   position: absolute
-  top: 50%
+  top: .5rem
   right: max(1.5rem, calc((100% - var(--dw-width-page)) / 2 + 1rem))
-  width: min(40rem, 46%)
+  width: min(36rem, 38%)
   aspect-ratio: 1.88
-  transform: translateY(-50%)
   background: url("img/dream-ini-hero.webp") center / contain no-repeat
 
 // A wide screen gives the scene the height of a tall hero; the text sits in the middle of it.
