@@ -768,7 +768,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dream-ini"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1626,9 +1626,9 @@ dependencies = [
 
 [[package]]
 name = "l3i"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "134fabf2180017b64f9d361f2e42374aed00c22257285cc5030743aa29fbc11d"
+checksum = "24d35931d97c63da75ae56371bf67577f401dafe2e6546d5c2a174a8d01d18bc"
 dependencies = [
  "cc",
  "dream-net",

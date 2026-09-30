@@ -156,3 +156,11 @@ Compose `dream_ini::luau::IniExtension` into the host's l3i `RuntimePlan`. A hos
 the `dreamIni` global adds `RuntimePolicy::compat_global("@dream/ini", "dreamIni")`. Scripts that
 pass numbers in multimaps must pass strings. [Embedding Luau](@/docs/luau-hosts.md) has the setup.
 """
+
+[[releases]]
+version = "1.0.1"
+date = 2026-09-30
+summary = "Built on l3i 1.1.0."
+changed = [
+    "l3i 1.1.0 comes from crates.io; the `@dream/ini` module is unchanged.",
+]
