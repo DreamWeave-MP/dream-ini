@@ -1,0 +1,32 @@
+manifest_version = 1
+
+[package]
+id = "org.dreamweave.dream-ini"
+version = "0.1.0"
+jess_api = "1"
+include = ["src"]
+
+[modules]
+"@dream-ini" = "src/init.luau"
+# Exported for openmw-import-morrowind, the policy built on this text. It takes the encodings,
+# the trimming, and the multimap's key order from `parser`; the option-table and multimap checks
+# its own entry points make from `options`; a document's lines, their edits, and the atomic
+# write from `document`; and the canonical path a write resolves to from `storage`. They are not
+# the INI API.
+"@dream-ini/parser" = "src/ini/parser.luau"
+"@dream-ini/options" = "src/ini/options.luau"
+"@dream-ini/document" = "src/ini/document.luau"
+"@dream-ini/storage" = "src/ini/storage.luau"
+
+# Every module here is inert API: it does nothing until something requires it, and runs with the
+# authority of whatever calls it.
+
+[[layer]]
+id = "dream-ini.core"
+exports = [
+    "@dream-ini",
+    "@dream-ini/parser",
+    "@dream-ini/options",
+    "@dream-ini/document",
+    "@dream-ini/storage",
+]

@@ -1,0 +1,18 @@
+--!strict
+--!native
+-- SPDX-License-Identifier: MIT OR Apache-2.0
+-- The filesystem question a write asks, one host call.
+local fs = require '@dream/fs'
+
+--- The canonical path, or `path` itself when it can't be resolved, as dream-ini keeps it. A path
+--- that isn't there is answered without asking; `exists` says so when the caller already knows.
+local function canonical(path: string, exists: boolean?): string
+  if exists == false or (exists == nil and not jess.fs.exists(path)) then return path end
+
+  local resolved = fs.canonicalize(path)
+  return resolved or path
+end
+
+return table.freeze {
+  canonical = canonical,
+}
