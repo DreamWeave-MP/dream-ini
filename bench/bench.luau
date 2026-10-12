@@ -1,0 +1,501 @@
+--!strict
+-- dream-ini, timed from Luau: INI parses, cfg parses and serialization, cfg documents, the option
+-- and multimap checks, and trimming. Run by `jess run --package . bench/bench.luau [filter]`, on a
+-- release build. Prints one line per workload: its name, a tab, and the seconds one call takes.
+-- Every workload's result is compared with what the generator of its input says it must be,
+-- outside the time, so a path that stopped doing the work fails here.
+local ini = require '@dream-ini'
+local document = require '@dream-ini/document'
+local options = require '@dream-ini/options'
+local parser = require '@dream-ini/parser'
+
+-- A build without the verified toolchain runs Luau slower than a release does, so a number from
+-- one says nothing about what ships.
+if not jess.bench.verified then
+  error('ini bench: this jess was built without the verified toolchain: measure on a release build', 0)
+end
+
+local filter: string? = ...
+local only = if filter and filter ~= '' then filter else nil
+
+type MultiMap = ini.MultiMap
+type Entry = document.Entry
+
+export type Row = { name: string, seconds: number }
+
+local rows: { Row } = {}
+
+local function median(samples: { number }): number
+  table.sort(samples)
+  return samples[(#samples + 1) // 2]
+end
+
+--- Seconds per call of `body`: warmed up, then the median of seven batches of a size that takes
+--- about a tenth of a second, with a full collection before each so one batch's garbage isn't the
+--- next one's. `verify` is given the result of the first call and of one more after the last
+--- batch, outside the time.
+local function measure(body: () -> unknown, verify: (result: unknown) -> ()): number
+  jess.bench.collect()
+  verify(body())
+  local start = os.clock()
+  body()
+  local once = math.max(os.clock() - start, 1e-7)
+  local iterations = math.max(1, math.floor(0.1 / once))
+  local samples: { number } = {}
+
+  for batch = 1, 7 do
+    jess.bench.collect()
+    start = os.clock()
+
+    for _ = 1, iterations do
+      body()
+    end
+
+    samples[batch] = (os.clock() - start) / iterations
+  end
+
+  verify(body())
+  return median(samples)
+end
+
+--- Times `body`, whose every result `holds` must accept.
+local function workload(name: string, body: () -> unknown, holds: (result: unknown) -> boolean)
+  if only and not string.find(name, only, 1, true) then return end
+
+  local function verify(result: unknown)
+    if not holds(result) then error(`ini bench: {name}: the result is not what the input holds`, 0) end
+  end
+
+  table.insert(rows, { name = name, seconds = measure(body, verify) })
+end
+
+--- A file being written: its lines, the multimap a parse of them must give, and how many of the
+--- lines are settings.
+type Draft = { lines: { string }, entries: MultiMap, settings: number }
+
+local function put(draft: Draft, key: string, value: string, line: string)
+  table.insert(draft.lines, line)
+  draft.settings += 1
+  local values = draft.entries[key]
+
+  if values then
+    table.insert(values, value)
+  else
+    draft.entries[key] = { value }
+  end
+end
+
+local function sameMap(actual: MultiMap, expected: MultiMap): boolean
+  local matched = 0
+
+  for key, values in actual do
+    local wanted = expected[key]
+    if not wanted or #wanted ~= #values then return false end
+    if not all[for value, other in zipStrict(values, wanted) => value == other] then return false end
+
+    matched += 1
+  end
+
+  local keys = 0
+
+  for _ in expected do
+    keys += 1
+  end
+
+  return matched == keys
+end
+
+local SectionWords = {
+  'Weather',
+  'Clear',
+  'Cloudy',
+  'Foggy',
+  'Overcast',
+  'Rain',
+  'Thunderstorm',
+  'Ashstorm',
+  'Blight',
+  'Snow',
+  'Blizzard',
+  'Moons',
+  'Fonts',
+  'Movies',
+  'Inventory',
+  'Water',
+  'Pixel Water',
+}
+
+local NameWords = {
+  'Sky',
+  'Fog',
+  'Ambient',
+  'Sun',
+  'Cloud',
+  'Land Fog',
+  'Wind',
+  'Transition',
+  'Glare',
+  'Rain',
+  'Thunder',
+  'Storm',
+  'Texture',
+  'Sound',
+  'Fader',
+  'Speed',
+  'Sunrise Color',
+  'Day Color',
+  'Sunset Color',
+  'Night Color',
+  'Delta',
+  'Threshold',
+  'Frequency',
+}
+
+--- 573 one-key sections, the shape of an INI holding only the 573 keys an import reads.
+local function fallbackIni(): Draft
+  local draft: Draft = { lines = {}, entries = {}, settings = 0 }
+
+  for index = 1, 573 do
+    local section = `{SectionWords[index % #SectionWords + 1]} {SectionWords[index % 7 + 1]}`
+    local name = `{NameWords[index % #NameWords + 1]} {NameWords[index % 19 + 1]} {index}`
+    table.insert(draft.lines, `[{section}]`)
+    put(draft, `{section}:{name}`, '1,2,3', `{name}=1,2,3`)
+  end
+
+  return draft
+end
+
+--- dream-ini's synthetic large INI (its `benches/support/large_morrowind_ini`): 128 archives and
+--- 512 rounds of movie, weather, and noise sections.
+local function largeIni(): Draft
+  local draft: Draft = { lines = { '[General]' }, entries = {}, settings = 0 }
+  put(draft, 'General:Disable Audio', '0', 'Disable Audio=0')
+  table.insert(draft.lines, '[Archives]')
+
+  for index = 0, 127 do
+    put(draft, `Archives:Archive {index}`, `Archive{index}.bsa`, `Archive {index}=Archive{index}.bsa`)
+  end
+
+  for index = 0, 511 do
+    local sky = `{index % 255},{index * 2 % 255},{index * 3 % 255}`
+    table.insert(draft.lines, '[Movies]')
+    put(draft, 'Movies:New Game', `intro{index}.bik`, `New Game=intro{index}.bik`)
+    put(draft, 'Movies:Company Logo', `logo{index}.bik`, `Company Logo=logo{index}.bik`)
+    table.insert(draft.lines, '[Weather]')
+    put(draft, 'Weather:Sunrise Time', `{5 + index % 3}`, `Sunrise Time={5 + index % 3}`)
+    put(draft, 'Weather:Sunset Time', `{18 + index % 4}`, `Sunset Time={18 + index % 4}`)
+    put(draft, 'Weather:Sun Glare Fader Max', '0.75', 'Sun Glare Fader Max=0.75')
+    table.insert(draft.lines, '[Weather Clear]')
+    put(draft, 'Weather Clear:Sky Day Color', sky, `Sky Day Color={sky}`)
+    put(draft, 'Weather Clear:Cloud Texture', `cloud{index}.dds`, `Cloud Texture=cloud{index}.dds`)
+    table.insert(draft.lines, `[Noise Section {index}]`)
+    put(draft, `Noise Section {index}:Ignored Key`, `value{index}`, `Ignored Key=value{index}`)
+    table.insert(draft.lines, `; comment {index}`)
+  end
+
+  return draft
+end
+
+--- How many of `retailIni`'s lines set a key to nothing, which a parse answers with a warning each.
+local RetailEmptyValues = 5
+
+--- An INI the size and shape of the game's own Morrowind.ini: 41 sections of 16 keys, a comment
+--- line above every other section, a comment after some values, a blank line after each section.
+local function retailIni(): Draft
+  local draft: Draft = { lines = {}, entries = {}, settings = 0 }
+
+  for section = 1, 41 do
+    local title = `{SectionWords[section % #SectionWords + 1]} {section}`
+    if section % 2 == 0 then table.insert(draft.lines, `;{title} settings`) end
+
+    table.insert(draft.lines, `[{title}]`)
+
+    for index = 1, 16 do
+      local name = `{NameWords[index]} {NameWords[(index + section) % #NameWords + 1]} {NameWords[index + 7]}`
+      local value = if index % 4 == 0
+        then `Tx_{name}_{section}.tga`
+        elseif index % 4 == 1 then `{section * index % 255},{index * 7 % 255},{section % 255}`
+        elseif index % 4 == 2 then `{index / 8}`
+        else `{section * 100 + index}`
+
+      if index == 7 and section % 5 == 0 then
+        put(draft, `{title}:{name}`, `{value} `, `{name}={value} ; {index} of {section}`)
+      else
+        put(draft, `{title}:{name}`, value, `{name}={value}`)
+      end
+    end
+
+    if section % 8 == 0 then table.insert(draft.lines, `Unset {section}=`) end
+
+    table.insert(draft.lines, '')
+  end
+
+  return draft
+end
+
+--- dream-ini's large cfg: 256 data folders and 256 fallback settings.
+local function largeCfg(): Draft
+  local draft: Draft = { lines = {}, entries = {}, settings = 0 }
+  put(draft, 'encoding', 'win1252', 'encoding=win1252')
+  put(draft, 'resources', 'resources', 'resources=resources')
+
+  for index = 0, 255 do
+    local folder, setting = `/opt/morrowind/Data Files {index}`, `Old_Setting_{index},old`
+    put(draft, 'data', folder, `data={folder}`)
+    put(draft, 'fallback', setting, `fallback={setting}`)
+  end
+
+  return draft
+end
+
+--- A cfg written by hand: spaces and tabs around keys and values, comment lines, blank lines.
+--- `canonical` collects what a document of it renders: comments as written, settings trimmed.
+local function spacedCfg(canonical: { string }): Draft
+  local draft: Draft = { lines = {}, entries = {}, settings = 0 }
+
+  local function add(key: string, value: string, line: string)
+    put(draft, key, value, line)
+    table.insert(canonical, `{key}={value}`)
+  end
+
+  for index = 0, 255 do
+    if index % 8 == 0 then
+      table.insert(draft.lines, `  # data = folders {index} to {index + 7}`)
+      table.insert(draft.lines, ' \t')
+      table.insert(canonical, `  # data = folders {index} to {index + 7}`)
+      table.insert(canonical, '')
+    end
+
+    local folder, setting = `"/opt/morrowind/Data Files {index}"`, `Old_Setting_{index},old`
+    add('data', folder, `data = {folder}`)
+    add('fallback', setting, `\tfallback={setting}  `)
+    add('content', `Plugin {index}.esp`, `content =Plugin {index}.esp`)
+  end
+
+  return draft
+end
+
+--- A cfg as OpenMW writes one, with a comment and a blank line above every eighth setting.
+local function commentedCfg(): Draft
+  local draft: Draft = { lines = {}, entries = {}, settings = 0 }
+
+  for index = 0, 255 do
+    if index % 8 == 0 then
+      table.insert(draft.lines, `# folders {index} to {index + 7}`)
+      table.insert(draft.lines, '')
+    end
+
+    local folder, setting = `/opt/morrowind/Data Files {index}`, `Old_Setting_{index},old`
+    put(draft, 'data', folder, `data={folder}`)
+    put(draft, 'fallback', setting, `fallback={setting}`)
+  end
+
+  return draft
+end
+
+local function parses(name: string, draft: Draft, ending: string, warnings: number)
+  local text = table.concat(draft.lines, ending) .. ending
+
+  workload(
+    `parseIni: {name} ({#text} bytes, {#draft.lines} lines)`,
+    function(): unknown return ini.parseIni(text) end,
+    function(result: unknown): boolean
+      local parsed = result :: { entries: MultiMap, warnings: { ini.Warning } }
+      return sameMap(parsed.entries, draft.entries) and #parsed.warnings == warnings
+    end
+  )
+end
+
+local large = largeIni()
+parses('573 one-key sections', fallbackIni(), '\n', 0)
+parses('dream-ini\'s large INI', large, '\n', 0)
+parses('the shape of Morrowind.ini, CRLF', retailIni(), '\r\n', RetailEmptyValues)
+
+local function cfgParses(name: string, draft: Draft, ending: string)
+  local text = table.concat(draft.lines, ending) .. ending
+
+  workload(
+    `parseCfg: {name} ({#draft.lines} lines)`,
+    function(): unknown return ini.parseCfg(text) end,
+    function(result: unknown): boolean return sameMap(result :: MultiMap, draft.entries) end
+  )
+end
+
+local canonical: { string } = {}
+local cfg, spaced, commented = largeCfg(), spacedCfg(canonical), commentedCfg()
+cfgParses('dream-ini\'s large cfg', cfg, '\n')
+cfgParses('a hand-written cfg, CRLF', spaced, '\r\n')
+
+do
+  local cfgEntries = cfg.entries
+  local sorted = table.clone(cfg.lines)
+  -- Every `data=` line is written before its `fallback=` line and the sort is by key alone for
+  -- these four keys, so a stable order by key is what `serializeCfg` must give.
+  local order: { [string]: number } = { data = 1, encoding = 2, fallback = 3, resources = 4 }
+  local ranked: { { string } } = { {}, {}, {}, {} }
+
+  for _, line in sorted do
+    table.insert(ranked[order[string.match(line, '^[^=]*') :: string]], line)
+  end
+
+  local expected = table.concat([for lines in ranked for line in lines => line], '\n') .. '\n'
+
+  workload(
+    `serializeCfg: dream-ini's large cfg ({#sorted} lines)`,
+    function(): unknown return ini.serializeCfg(cfgEntries) end,
+    function(result: unknown): boolean return result == expected end
+  )
+end
+
+do
+  local entries = large.entries
+  local distinct = 0
+
+  for _ in entries do
+    distinct += 1
+  end
+
+  workload(
+    `options.multimap: the large INI's entries ({large.settings} values)`,
+    function(): unknown return options.multimap('bench', entries) end,
+    function(result: unknown): boolean return result == entries end
+  )
+
+  workload(
+    `keys: the large INI's entries ({distinct} keys)`,
+    function(): unknown return parser.keys(entries) end,
+    function(result: unknown): boolean
+      local keys = result :: { string }
+      local ordered = all[for index in range(2, #keys) => keys[index - 1] < keys[index]]
+      return ordered and #keys == distinct and #[for key in keys if entries[key] => key] == distinct
+    end
+  )
+end
+
+--- The options an import of files takes, and the one it can't do without.
+local ImportSpec: options.Spec = {
+  ini = 'string',
+  cfg = 'string',
+  encoding = 'string',
+  dataDirs = 'paths',
+  archives = 'boolean',
+  gameFiles = 'boolean',
+  fonts = 'boolean',
+  verbose = 'boolean',
+  dataLocal = 'string',
+  resources = 'string',
+  userData = 'string',
+}
+
+local ImportRequired = { 'ini' }
+
+do
+  local given = {
+    ini = '/opt/morrowind/Morrowind.ini',
+    cfg = '/home/player/.config/openmw/openmw.cfg',
+    encoding = 'win1252',
+    dataDirs = [for index in range(1, 16) => `/opt/morrowind/Data Files {index}`],
+    archives = true,
+    gameFiles = true,
+    verbose = false,
+  }
+
+  workload(
+    'options.read: an import\'s options',
+    function(): unknown return options.read('bench', given, ImportSpec, ImportRequired) end,
+    function(result: unknown): boolean
+      local read = result :: { [string]: unknown }
+      local count = 0
+
+      for key, value in read do
+        if (given :: { [string]: unknown })[key] ~= value then return false end
+
+        count += 1
+      end
+
+      return count == 7
+    end
+  )
+end
+
+local function documents(name: string, draft: Draft, ending: string, rendered: string)
+  local text = table.concat(draft.lines, ending) .. ending
+
+  workload(
+    `document.parse: {name} ({#draft.lines} lines)`,
+    function(): unknown return document.parse(text) end,
+    function(result: unknown): boolean
+      local entries = result :: { Entry }
+      return #entries == draft.settings and document.render { path = '', entries = entries } == rendered
+    end
+  )
+end
+
+local commentedText = table.concat(commented.lines, '\n') .. '\n'
+documents('a commented cfg', commented, '\n', commentedText)
+documents('a hand-written cfg, CRLF', spaced, '\r\n', table.concat(canonical, '\n') .. '\n')
+
+do
+  local parsed = { path = '', entries = document.parse(commentedText) }
+
+  workload(
+    `document.render: a commented cfg ({#parsed.entries} settings)`,
+    function(): unknown return document.render(parsed) end,
+    function(result: unknown): boolean return result == commentedText end
+  )
+
+  local edited = { path = '', entries = document.parse(commentedText) }
+  local folders = [for index in range(1, 256) => `/opt/openmw/Mod {index}`]
+  local kept = #edited.entries
+  local first = kept - 255
+
+  workload(
+    `document.replaceList: 256 data lines of {kept} settings`,
+    function(): unknown
+      document.replaceList(edited, 'data', folders)
+      return edited.entries
+    end,
+    function(result: unknown): boolean
+      local entries = result :: { Entry }
+      local tail = [for entry in entries[first:kept] => entry.value]
+      local replaced = all[for value, folder in zipStrict(tail, folders) => value == folder]
+      return #entries == kept and replaced and entries[1].key == 'fallback'
+    end
+  )
+end
+
+local function trims(name: string, pad: (core: string, index: number) -> string)
+  local cores = [for index in range(1, 1024) => `/opt/morrowind/Data Files {index}`]
+  local padded = [for index, core in enumerate(cores) => pad(core, index)]
+  local expected = sum[for core in cores => #core]
+
+  workload(
+    `trim: 1024 values, {name}`,
+    function(): unknown
+      local total = 0
+
+      for _, value in padded do
+        total += #parser.trim(value)
+      end
+
+      return total
+    end,
+    function(result: unknown): boolean return result == expected end
+  )
+end
+
+trims('nothing to trim', function(core: string): string return core end)
+
+trims('spaces and tabs', function(core: string, index: number): string
+  return `{string.rep(' ', index % 4)}\t{core}{string.rep(' ', index % 3 + 1)}`
+end)
+
+trims('Unicode spaces', function(core: string, index: number): string
+  return if index % 2 == 0 then `\u{A0} {core}\u{2003}` else `\u{3000}{core} \u{A0}\t`
+end)
+
+for _, row in rows do
+  print(`{row.name}\t{string.format('%.9f', row.seconds)}`)
+end
+
+return rows
