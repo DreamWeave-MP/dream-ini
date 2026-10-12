@@ -251,6 +251,26 @@ suite.describe('document', function()
     document.replaceList(edited, 'content', nil)
     expect(document.render(edited)).toBe '# end\ndata=c\ndata=d\n'
   end)
+
+  suite.it('passes over an entry a caller set to nil, rendering and replacing a list', function()
+    local edited = { path = '', entries = document.parse 'data=a\ncontent=x\ndata=b\nfallback=y\n' }
+    (edited.entries :: any)[2] = nil
+    expect(document.render(edited)).toBe 'data=a\ndata=b\nfallback=y\n'
+    document.replaceList(edited, 'data', { 'c' })
+    expect(edited.entries).toEqual {
+      { comment = '', key = 'fallback', value = 'y' },
+      { comment = '', key = 'data', value = 'c' },
+    }
+  end)
+
+  suite.it('keeps the entries behind a gap when it replaces a list', function()
+    local entries: { document.Entry } = {}
+    entries[1] = { comment = '', key = 'content', value = 'x' }
+    entries[3] = { comment = '# said\n', key = 'content', value = 'y' }
+    local edited = { path = '', entries = entries }
+    document.replaceList(edited, 'data', { 'c' })
+    expect(document.render(edited)).toBe 'content=x\n# said\ncontent=y\ndata=c\n'
+  end)
 end)
 
 return suite
