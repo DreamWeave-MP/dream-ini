@@ -191,6 +191,17 @@ suite.describe('document', function()
     expect(document.parse '# OpenMW-Config Serializer Version: 2\n').toEqual {}
   end)
 
+  suite.it('takes one return off before a line end, and none off a last line without one', function()
+    expect(document.parse '# first\r\r\n# last\r').toEqual { { comment = '# first\r\n# last\r\n' } }
+    expect(document.parse 'key=value\r').toEqual { { comment = '', key = 'key', value = 'value' } }
+  end)
+
+  suite.it('refuses a line whose last character is not UTF-8, comment or not', function()
+    expect(function() document.parse '# said \194\n' end).toThrow 'invalid UTF-8'
+    expect(function() document.parse 'key=value\255\n' end).toThrow 'invalid UTF-8'
+    expect(function() document.parse '\226\128\n' end).toThrow 'invalid UTF-8'
+  end)
+
   suite.it('trims Unicode whitespace from a line, its key and its value', function()
     expect(document.parse '\u{A0}key\u{2003}=\u{3000}value\u{A0}\n\u{A0}# said\n\u{3000}\n').toEqual {
       { comment = '', key = 'key', value = 'value' },
