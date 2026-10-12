@@ -16,14 +16,13 @@ local function asciiSpace(code: number): boolean return code == 32 or (code >= 9
 --- whitespace: the first past the last when nothing is left. It is walked as UTF-8, which raises
 --- on a first or last character that isn't.
 local function unicodeSpan(value: string): (number, number)
-  local first, last = 1, #value
+  local last = #value
+  local first = last + 1
   for index, code in utf8.codes(value) do
-    if not whitespace(code) then
-      first = index
-      break
-    end
+    if whitespace(code) then continue end
 
-    first = index + #utf8.char(code)
+    first = index
+    break
   end
 
   if first > last then return first, last end
