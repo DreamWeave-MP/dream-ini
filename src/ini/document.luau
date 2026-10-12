@@ -5,7 +5,7 @@
 -- `serialize_preserved_cfg_document` and `save_preserved_cfg_document_to_path` write one:
 -- comments, blank lines, and the order of untouched lines survive; a replaced list gives up its
 -- old lines' places and goes at the end.
-local parser, storage = require './parser', require './storage'
+local storage, strings = require './storage', require './trim'
 
 --- One `key=value` line with the comment and blank lines above it, or, without a key, the lines
 --- that ended the file with no setting after them.
@@ -19,59 +19,62 @@ export type Document = {
 
 local Stamp = '# OpenMW-Config Serializer Version:'
 
---- The lines of `text` as openmw-config's loader reads them (`str::lines`): split at `\n`, with a
---- `\r` before the `\n` dropped and a final line without a `\n` kept whole.
-local function lines(text: string): { string }
-  local result: { string } = {}
-  local start, length = 1, #text
-
-  while start <= length do
-    local newline = string.find(text, '\n', start, true)
-
-    if not newline then
-      table.insert(result, string.sub(text, start))
-      break
-    end
-
-    local finish = newline - 1
-    if finish >= start and string.byte(text, finish) == 13 then
-      finish -= 1
-    end
-
-    table.insert(result, string.sub(text, start, finish))
-    start = newline + 1
-  end
-
-  return result
-end
+local Return, Hash = 13, 35
 
 --- `text` split into entries the way openmw-config's loader attaches comments to settings: a
 --- second `encoding=` takes the first's place, `config=` lines move behind the settings, and the
 --- comments that ended the file follow them, minus a serializer stamp.
+---
+--- The lines are the loader's (`str::lines`): split at `\n`, with a `\r` before the `\n` dropped
+--- and a final line without a `\n` kept whole. Each is trimmed where it lies in the text, and so
+--- are its key and its value, so only a comment, a key and a value become strings.
 local function parse(text: string): { Entry }
   local entries: { Entry }, subConfigs: { Entry } = {}, {}
   local comment: { string } = {}
   local encodingAt: number?
+  local start, length = 1, #text
+  local nextEquals = 0
 
-  for _, line in lines(text) do
-    local trimmed = parser.trim(line)
+  while start <= length do
+    local newline = string.find(text, '\n', start, true)
+    local finish = if newline then newline - 1 else length
 
-    if trimmed == '' then
+    if newline and finish >= start and string.byte(text, finish) == Return then
+      finish -= 1
+    end
+
+    local first, last = strings.span(text, start, finish)
+    local line = start
+    start = if newline then newline + 1 else length + 1
+
+    if first > last then
       table.insert(comment, '\n')
       continue
     end
 
-    if string.sub(trimmed, 1, 1) == '#' then
-      table.insert(comment, line .. '\n')
+    if string.byte(text, first) == Hash then
+      -- A line that lost no `\r` is followed by its `\n` in the text.
+      table.insert(
+        comment,
+        if finish + 1 == newline then string.sub(text, line, newline) else string.sub(text, line, finish) .. '\n'
+      )
       continue
     end
 
-    local equals = string.find(trimmed, '=', 1, true)
-      or error(`dream.ini: OpenMW config error: invalid line: {trimmed}`, 0)
+    if nextEquals < first then nextEquals = string.find(text, '=', first, true) or length + 1 end
+
+    local equals = nextEquals
+
+    if equals > last then
+      error(`dream.ini: OpenMW config error: invalid line: {string.sub(text, first, last)}`, 0)
+    end
+
+    local keyStart, keyEnd = strings.span(text, first, equals - 1)
+    local valueStart, valueEnd = strings.span(text, equals + 1, last)
     local entry: Entry = {
       comment = table.concat(comment),
-      key = parser.trim(string.sub(trimmed, 1, equals - 1)),
-      value = parser.trim(string.sub(trimmed, equals + 1)),
+      key = string.sub(text, keyStart, keyEnd),
+      value = string.sub(text, valueStart, valueEnd),
     }
     table.clear(comment)
 
