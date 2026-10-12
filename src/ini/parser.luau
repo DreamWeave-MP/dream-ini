@@ -156,7 +156,8 @@ local function commented(text: string, start: number): boolean
   return code == Hash
 end
 
---- openmw.cfg text as a multimap: `key = value` lines, trimmed, `#` comments skipped.
+--- openmw.cfg text as a multimap: `key = value` lines, trimmed, `#` comments skipped. A key and
+--- a value are trimmed where they lie in the text, so each becomes a string once.
 local function parseCfg(text: string): MultiMap
   local map: MultiMap = {}
   local start, length = 1, #text
@@ -175,11 +176,9 @@ local function parseCfg(text: string): MultiMap
     local equals = nextEquals
 
     if equals <= finish and equals > start and not commented(text, start) then
-      push(
-        map,
-        strings.trim(string.sub(text, start, equals - 1)),
-        strings.trim(string.sub(text, equals + 1, finish))
-      )
+      local keyStart, keyEnd = strings.span(text, start, equals - 1)
+      local valueStart, valueEnd = strings.span(text, equals + 1, finish)
+      push(map, string.sub(text, keyStart, keyEnd), string.sub(text, valueStart, valueEnd))
     end
 
     start = newline + 1
