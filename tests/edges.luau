@@ -226,6 +226,11 @@ suite.describe('document', function()
     expect(rendered).toBe '# top\n\ndata=a\nencoding=win1251\n  # middle\n\ncontent=x.esp\ndata=b=c\nconfig=sub\n# tail\n\n# last\n'
   end)
 
+  suite.it('renders a setting without a value as interpolation spells one', function()
+    local entries = { { comment = '# said\n', key = 'key' }, { comment = '', key = 'other', value = '' } }
+    expect(document.render { path = '', entries = entries }).toBe '# said\nkey=nil\nother=\n'
+  end)
+
   suite.it('appends values, and nothing for none', function()
     local edited = { path = '', entries = document.parse 'data=a\n# end\n' }
     document.append(edited, 'content', { 'x.esp', 'y.esp' })
