@@ -1,0 +1,240 @@
+--!strict
+--!native
+-- What the modules beside the INI API do at their edges: trimming, cfg lines, documents and their
+-- edits, and the messages of the option and multimap checks.
+local document = require '@dream-ini/document'
+local ini = require '@dream-ini'
+local options = require '@dream-ini/options'
+local parser = require '@dream-ini/parser'
+local test = require '@jess/test'
+
+local suite, expect = test.new(), test.expect
+
+type TrimCase = { name: string, value: string, trimmed: string }
+
+local TrimCases: { TrimCase } = {
+  { name = 'nothing', value = '', trimmed = '' },
+  { name = 'only ASCII whitespace', value = ' \t\r\n\v\f', trimmed = '' },
+  { name = 'a value with nothing around it', value = 'a b', trimmed = 'a b' },
+  { name = 'spaces, tabs and line ends', value = '\t a b \r\n', trimmed = 'a b' },
+  { name = 'a no-break space at each end', value = '\u{A0}a\u{A0}', trimmed = 'a' },
+  { name = 'every Unicode space at once', value = '\u{85}\u{1680}\u{2000}\u{200A}a\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}', trimmed = 'a' },
+  { name = 'ASCII whitespace outside Unicode whitespace', value = ' \u{2003} a \u{2003} ', trimmed = 'a' },
+  { name = 'only Unicode whitespace', value = '\u{A0}\u{3000}', trimmed = '' },
+  { name = 'a letter that is not a space at each end', value = ' \u{E9}a\u{E9} ', trimmed = '\u{E9}a\u{E9}' },
+  { name = 'a zero-width space is not whitespace', value = ' \u{200B}a\u{200B} ', trimmed = '\u{200B}a\u{200B}' },
+  { name = 'a file separator is not whitespace', value = '\28a\28', trimmed = '\28a\28' },
+  { name = 'whitespace inside survives', value = ' a \u{A0}\t b ', trimmed = 'a \u{A0}\t b' },
+  { name = 'a Unicode space behind an ASCII end', value = 'a\u{A0} b\u{A0}', trimmed = 'a\u{A0} b' },
+}
+
+suite.describe('trim', function()
+  for _, case in TrimCases do
+    suite.it(case.name, function() expect(parser.trim(case.value)).toBe(case.trimmed) end)
+  end
+
+  suite.it('refuses a first character that is not UTF-8', function()
+    expect(function() parser.trim '\194a' end).toThrow 'invalid UTF-8'
+    expect(function() parser.trim ' \226\128 ' end).toThrow 'invalid UTF-8'
+  end)
+
+  suite.it('refuses a last character that is not UTF-8', function()
+    expect(function() parser.trim ' a\255\194 ' end).toThrow 'invalid UTF-8'
+  end)
+
+  suite.it('keeps bytes that are not UTF-8 between ASCII ends', function()
+    expect(parser.trim ' a\255\194b ').toBe 'a\255\194b'
+  end)
+end)
+
+type CfgCase = { name: string, text: string, map: ini.MultiMap }
+
+local CfgCases: { CfgCase } = {
+  { name = 'nothing', text = '', map = {} },
+  { name = 'a last line without a line end', text = 'key=value', map = { key = { 'value' } } },
+  { name = 'CRLF', text = 'key=value\r\nother=b\r\n', map = { key = { 'value' }, other = { 'b' } } },
+  { name = 'a value that is nothing', text = 'key=\nother= \n', map = { key = { '' }, other = { '' } } },
+  { name = 'a line that starts with its equals sign', text = '=value\n =value\n', map = { [''] = { 'value' } } },
+  { name = 'equals signs in a value', text = 'key=a=b=c\n', map = { key = { 'a=b=c' } } },
+  {
+    name = 'a comment after spaces, tabs and returns',
+    text = '#a=b\n \t\r#c=d\n\r\r# e=f\r\n',
+    map = {},
+  },
+
+  {
+    name = 'a hash after other whitespace is a key',
+    text = '\v#key=value\n\u{A0}#other=b\n',
+    map = { ['#key'] = { 'value' }, ['#other'] = { 'b' } },
+  },
+
+  {
+    name = 'Unicode whitespace comes off keys and values',
+    text = '\u{A0}key\u{2003}=\u{3000}value\u{A0}\n',
+    map = { key = { 'value' } },
+  },
+
+  {
+    name = 'a return inside a line stays in its value',
+    text = 'key=a\rb\r\r\n',
+    map = { key = { 'a\rb' } },
+  },
+
+  {
+    name = 'lines without an equals sign, and blank ones',
+    text = '\n\nnothing here\n\r\nkey = value\n[section]\n',
+    map = { key = { 'value' } },
+  },
+
+  {
+    name = 'the same key again appends',
+    text = 'data=a\ncontent=x\ndata = b\n',
+    map = { data = { 'a', 'b' }, content = { 'x' } },
+  },
+}
+
+suite.describe('parseCfg', function()
+  for _, case in CfgCases do
+    suite.it(case.name, function() expect(ini.parseCfg(case.text)).toEqual(case.map) end)
+  end
+
+  suite.it('refuses a key that starts with bytes that are not UTF-8', function()
+    expect(function() ini.parseCfg '\194key=value\n' end).toThrow 'invalid UTF-8'
+  end)
+end)
+
+suite.describe('serializeCfg', function()
+  suite.it('writes nothing for no keys, and nothing for a key without values', function()
+    expect(ini.serializeCfg {}).toBe ''
+    expect(ini.serializeCfg { data = {}, content = { 'x' } }).toBe 'content=x\n'
+  end)
+
+  suite.it('sorts keys by their bytes', function()
+    local map = { data = { '2' }, Data = { '1' }, ['content file'] = { '4' }, content = { '3', '' } }
+    expect(ini.serializeCfg(map)).toBe 'Data=1\ncontent=3\ncontent=\ncontent file=4\ndata=2\n'
+  end)
+
+  suite.it('refuses what is not a multimap, in the binding\'s words', function()
+    expect(function() ini.serializeCfg(5 :: any) end).toThrow 'ini.serializeCfg: expected a multimap table, got number'
+    expect(function() ini.serializeCfg({ 'a' } :: any) end).toThrow 'ini.serializeCfg: multimap keys must be strings, got number'
+    expect(function() ini.serializeCfg({ key = 'a' } :: any) end).toThrow 'ini.serializeCfg: expected array of strings for key \'key\', got string'
+    expect(function() ini.serializeCfg({ key = { 'a', 5 } } :: any) end).toThrow 'ini.serializeCfg: expected a string at key \'key\' index 2, got number'
+  end)
+end)
+
+local Spec: options.Spec = { name = 'string', loud = 'boolean', folders = 'paths' }
+
+suite.describe('options.read', function()
+  suite.it('gives the options given, and none for nil', function()
+    expect(options.read('here', nil, Spec)).toEqual {}
+    expect(options.read('here', { name = 'a', loud = false, folders = { 'b', 'c' } }, Spec)).toEqual {
+      name = 'a',
+      loud = false,
+      folders = { 'b', 'c' },
+    }
+  end)
+
+  suite.it('names what is wrong, in the binding\'s words', function()
+    expect(function() options.read('here', 5, Spec) end).toThrow 'here: options must be a table, got number'
+    expect(function() options.read('here', nil, Spec, { 'name' }) end).toThrow 'here: options must be a table, got nil'
+    expect(function() options.read('here', { 'a' }, Spec) end).toThrow 'here: option keys must be strings, got number'
+    expect(function() options.read('here', {}, Spec, { 'name' }) end).toThrow 'here: missing required option \'name\''
+    expect(function() options.read('here', { name = 5 }, Spec) end).toThrow 'here.name: expected string, got number'
+    expect(function() options.read('here', { loud = 'yes' }, Spec) end).toThrow 'here.loud: expected boolean, got string'
+    expect(function() options.read('here', { folders = 'a' }, Spec) end).toThrow 'here.folders: expected an array of strings, got string'
+    expect(function() options.read('here', { folders = { 'a', 5 } }, Spec) end).toThrow 'here.folders[2]: expected a string, got number'
+  end)
+
+  suite.it('names every unknown option, sorted, then the known ones', function()
+    expect(function() options.read('here', { nmae = 'a' }, Spec) end).toThrow 'here: unknown option \'nmae\'; known options are folders, loud, name'
+    expect(function() options.read('here', { zeta = 1, alpha = 2 }, Spec) end).toThrow 'here: unknown options \'alpha\', \'zeta\'; known options are folders, loud, name'
+  end)
+
+  suite.it('checks values before it reports unknown options', function()
+    expect(function() options.read('here', { nmae = 'a', loud = 5 }, Spec) end).toThrow 'here.loud: expected boolean, got number'
+  end)
+end)
+
+local Cfg = table.concat({
+  '# top',
+  '',
+  'data = a',
+  'encoding=win1252',
+  'config=sub',
+  '  # middle\r',
+  ' \t\r',
+  'content=x.esp\r',
+  'encoding = win1251',
+  'data=b=c',
+  '# tail',
+  '# OpenMW-Config Serializer Version: 1',
+  '',
+  '# last',
+}, '\n')
+
+suite.describe('document', function()
+  suite.it('attaches comments to the setting below them', function()
+    expect(document.parse(Cfg)).toEqual {
+      { comment = '# top\n\n', key = 'data', value = 'a' },
+      { comment = '', key = 'encoding', value = 'win1251' },
+      { comment = '  # middle\n\n', key = 'content', value = 'x.esp' },
+      { comment = '', key = 'data', value = 'b=c' },
+      { comment = '', key = 'config', value = 'sub' },
+      { comment = '# tail\n\n# last\n' },
+    }
+  end)
+
+  suite.it('gives no entries for nothing, and one for comments alone', function()
+    expect(document.parse '').toEqual {}
+    expect(document.parse '\n').toEqual { { comment = '\n' } }
+    expect(document.parse '# only\r\n\r\n').toEqual { { comment = '# only\n\n' } }
+    expect(document.parse '# OpenMW-Config Serializer Version: 2\n').toEqual {}
+  end)
+
+  suite.it('trims Unicode whitespace from a line, its key and its value', function()
+    expect(document.parse '\u{A0}key\u{2003}=\u{3000}value\u{A0}\n\u{A0}# said\n\u{3000}\n').toEqual {
+      { comment = '', key = 'key', value = 'value' },
+      { comment = '\u{A0}# said\n\n' },
+    }
+  end)
+
+  suite.it('keeps a setting whose key or value is nothing', function()
+    expect(document.parse '=value\nkey=\n = \n').toEqual {
+      { comment = '', key = '', value = 'value' },
+      { comment = '', key = 'key', value = '' },
+      { comment = '', key = '', value = '' },
+    }
+  end)
+
+  suite.it('refuses a line that is neither a comment nor a setting', function()
+    expect(function() document.parse 'data=a\n  not a setting \r\n' end).toThrow 'dream.ini: OpenMW config error: invalid line: not a setting'
+  end)
+
+  suite.it('renders each setting under its comment', function()
+    local rendered = ini.renderDocument { path = 'openmw.cfg', entries = document.parse(Cfg) }
+    expect(rendered).toBe '# top\n\ndata=a\nencoding=win1251\n  # middle\n\ncontent=x.esp\ndata=b=c\nconfig=sub\n# tail\n\n# last\n'
+  end)
+
+  suite.it('appends values, and nothing for none', function()
+    local edited = { path = '', entries = document.parse 'data=a\n# end\n' }
+    document.append(edited, 'content', { 'x.esp', 'y.esp' })
+    document.append(edited, 'content', nil)
+    expect(document.render(edited)).toBe 'data=a\n# end\ncontent=x.esp\ncontent=y.esp\n'
+  end)
+
+  suite.it('replaces a list behind the last line, and keeps the comments that ended the file', function()
+    local edited = { path = '', entries = document.parse '# one\ndata=a\ncontent=x\n# two\ndata=b\n# end\n' }
+    document.replaceList(edited, 'data', { 'c', 'd' })
+    expect(edited.entries).toEqual {
+      { comment = '', key = 'content', value = 'x' },
+      { comment = '# end\n' },
+      { comment = '', key = 'data', value = 'c' },
+      { comment = '', key = 'data', value = 'd' },
+    }
+
+    document.replaceList(edited, 'content', nil)
+    expect(document.render(edited)).toBe '# end\ndata=c\ndata=d\n'
+  end)
+end)
+
+return suite
