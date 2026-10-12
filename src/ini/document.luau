@@ -100,16 +100,6 @@ local function parse(text: string): { Entry }
   return entries
 end
 
-local function remove(document: Document, matches: (Entry) -> boolean)
-  local kept: { Entry } = {}
-
-  for _, entry in document.entries do
-    if not (entry.key and matches(entry)) then table.insert(kept, entry) end
-  end
-
-  document.entries = kept
-end
-
 local function append(document: Document, key: string, values: { string }?)
   for _, value in values or {} do
     table.insert(document.entries, { comment = '', key = key, value = value })
@@ -118,7 +108,7 @@ end
 
 --- Every line of `key` goes, and `values` follow the last line (`replace_list`).
 local function replaceList(document: Document, key: string, values: { string }?)
-  remove(document, function(entry) return entry.key == key end)
+  document.entries = [for entry in document.entries if not (entry.key and entry.key == key) => entry]
   append(document, key, values)
 end
 
