@@ -38,8 +38,11 @@ local Spaces = {
   '\u{200B}',
 }
 
+--- What stands before a comment's `#`: mostly what a cfg takes for the start of a comment.
+local Leads = { ' ', ' ', '\t', '\t', '\r', '\r', '\v', '\u{A0}' }
+
 --- What a line is made of: text, the bytes a parser gives meaning to, whitespace, letters outside
---- ASCII, bytes that are not UTF-8, and the keys a document treats specially.
+--- ASCII, and the keys a document treats specially.
 local Words = {
   'a',
   'B',
@@ -72,10 +75,10 @@ local Words = {
   '\u{2003}',
   '\u{3000}',
   '\u{FEFF}',
-  '\194',
-  '\226\128',
-  '\255',
 }
+
+--- Bytes that are not UTF-8: a lead byte alone, a character cut short, a byte no character has.
+local Broken = { '\194', '\226\128', '\255' }
 
 local random = Seed
 
@@ -91,22 +94,39 @@ local function run(list: { string }, most: number): string
   return table.concat([for _ in range(1, nextRandom() % (most + 1)) => list[nextRandom() % #list + 1]])
 end
 
+--- Up to `most` words, one after another; one in `rarity` is not UTF-8, and none when it is 0.
+local function words(most: number, rarity: number): string
+  local parts: { string } = {}
+
+  for _ = 1, nextRandom() % (most + 1) do
+    local list = if rarity > 0 and nextRandom() % rarity == 0 then Broken else Words
+    table.insert(parts, list[nextRandom() % #list + 1])
+  end
+
+  return table.concat(parts)
+end
+
 --- One line: blank, a comment, a setting, and, unless the text is `cfgShaped`, a section or
 --- whatever comes.
-local function line(cfgShaped: boolean): string
+local function line(cfgShaped: boolean, rarity: number): string
   local kind = nextRandom() % (if cfgShaped then 17 else 20)
   if kind < 2 then return run(Spaces, 3) end
   if kind == 2 then return Stamp end
-  if kind < 5 then return `{run(Spaces, 2)}#{run(Words, 6)}` end
-  if kind < 17 then return `{run(Spaces, 1)}{run(Words, 4)}={run(Words, 6)}{run(Spaces, 1)}` end
-  if kind < 19 then return `{run(Spaces, 1)}[{run(Words, 4)}]{run(Words, 1)}` end
+  if kind < 6 then return `{run(Leads, 3)}#{words(6, rarity)}` end
 
-  return run(Words, 8)
+  if kind < 17 then
+    return `{run(Spaces, 1)}{words(4, rarity)}={words(6, rarity)}{run(Spaces, 1)}`
+  end
+
+  if kind < 19 then return `{run(Spaces, 1)}[{words(4, rarity)}]{words(1, rarity)}` end
+
+  return words(8, rarity)
 end
 
 local Endings = { '\n', '\n', '\n', '\r\n', '\r\n', '\r', '\r\r\n' }
 
---- `count` texts of up to 24 lines, every other one holding only what a cfg holds.
+--- `count` texts of up to 24 lines. One in three holds only what a cfg holds, all of it UTF-8;
+--- one in three the same with bytes that are not; one in three whatever an INI might.
 local function texts(count: number): { string }
   local result: { string } = {}
 
@@ -114,11 +134,11 @@ local function texts(count: number): { string }
     local parts: { string } = {}
 
     for _ = 1, nextRandom() % 25 do
-      table.insert(parts, line(index % 2 == 0))
+      table.insert(parts, line(index % 3 ~= 2, if index % 3 == 0 then 0 else 40))
       table.insert(parts, Endings[nextRandom() % #Endings + 1])
     end
 
-    if index % 3 == 0 then table.remove(parts) end
+    if index % 4 == 0 then table.remove(parts) end
 
     result[index] = table.concat(parts)
   end
@@ -162,15 +182,17 @@ local function outcome(call: (text: string) -> unknown, text: string): string
   return if string.find(message, 'invalid UTF-8 code', 1, true) then '!invalid UTF-8 code' else `!{message}`
 end
 
+local function raised(answer: string): boolean return string.sub(answer, 1, 1) == '!' end
+
 local function digest(answers: { string }): string return bytes.sha256(table.concat(answers, '\n')) end
 
-local soup = texts(600)
-local padded = [for _ in range(1, 4000) => `{run(Spaces, 3)}{run(Words, 3)}{run(Spaces, 3)}`]
+local soup = texts(900)
+local padded = [for _ in range(1, 4000) => `{run(Spaces, 3)}{words(3, 12)}{run(Spaces, 3)}`]
 
 suite.describe('generated text', function()
   suite.it('parses as INI text', function()
     local answers = [for text in soup => canonical(parser.parseText(text))]
-    expect(digest(answers)).toBe 'd751f527c887dc41135e73e8f604a65148203e21669b421b21a11c46acad9660'
+    expect(digest(answers)).toBe '8207584ba5140d11a83165b523411bd985b722f35323fd94f14d287795a871c7'
   end)
 
   suite.it('parses as an INI in each encoding, with and without a byte order mark', function()
@@ -189,33 +211,37 @@ suite.describe('generated text', function()
       end
     end
 
-    expect(digest(answers)).toBe '2d365ea23406f27447e5bb19994a8231158e284ff3692f131a8ba2338b17c1b5'
+    expect(digest(answers)).toBe '2f4d76e0a44e4c60aed0c31482f8ef15cfcbcfffe1992b6484711929c4da4ba9'
   end)
 
   suite.it('parses as a cfg, and serializes back', function()
     local answers: { string } = {}
+    local parsed = 0
 
     for _, text in soup do
       local answer = outcome(parser.parseCfg, text)
       table.insert(answers, answer)
-      if string.sub(answer, 1, 1) == '!' then continue end
+      if raised(answer) then continue end
 
+      parsed += 1
       local map = parser.parseCfg(text)
       table.insert(answers, canonical(parser.keys(map)))
       table.insert(answers, ini.serializeCfg(map))
     end
 
-    expect(digest(answers)).toBe '0ccfdca549a4cd8fee6732adf404c56ac384593ad8b9e8aac1b0dafd0a53f3dc'
+    expect(parsed).toBe(693)
+    expect(digest(answers)).toBe '46963cb2f310b82a8192ca78066ef2884e46784b6239d70ca77ddbb431b835a0'
   end)
 
   suite.it('parses as a document, renders, and takes edits', function()
     local answers: { string } = {}
-    local parsed = 0
+    local parsed, invalid = 0, 0
 
     for index, text in soup do
       local answer = outcome(document.parse, text)
       table.insert(answers, answer)
-      if string.sub(answer, 1, 1) == '!' then continue end
+      if string.find(answer, 'invalid line', 1, true) then invalid += 1 end
+      if raised(answer) then continue end
 
       parsed += 1
       local edited = { path = '', entries = document.parse(text) }
@@ -226,14 +252,15 @@ suite.describe('generated text', function()
       table.insert(answers, ini.renderDocument(edited))
     end
 
-    expect(parsed > 100).toBe(true)
-    expect(digest(answers)).toBe '458ed5a916f2c44236eea9437785d8cd0f7f519fb739bbf03aa603c56a672e26'
+    expect({ parsed, invalid }).toEqual { 529, 183 }
+    expect(digest(answers)).toBe 'da19b3840d5c979516906703aeae987dbdf3915cd3a7d4bf0882ff8dc5fe5838'
   end)
 
   suite.it('trims', function()
     local answers = [for value in padded => outcome(parser.trim, value)]
-    expect(#[for answer in answers if string.sub(answer, 1, 1) == '!' => answer] > 10).toBe(true)
-    expect(digest(answers)).toBe '5bda6993bb60a627fa40352b46acbf0f80f7d359a86704cb67fc82e94fdfca3d'
+    local refused = #[for answer in answers if raised(answer) => answer]
+    expect(refused).toBe(411)
+    expect(digest(answers)).toBe '89d255714122d19ebe88e347aa8e9ee2ee07ab02a72f3141e7903e442d045348'
   end)
 end)
 
