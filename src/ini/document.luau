@@ -116,9 +116,10 @@ end
 
 --- The document's text: each line with its comment, as the file would read.
 local function render(document: Document): string
-  local output: { string } = {}
+  local entries = document.entries
+  local output: { string } = table.create(5 * #entries)
 
-  for _, entry in document.entries do
+  for _, entry in entries do
     local { comment, key, value } = entry
     table.insert(output, comment)
     if not key then continue end
