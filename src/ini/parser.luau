@@ -140,6 +140,22 @@ local function parseIni(source: string | buffer, given: { encoding: string? }?)
   return parseText(decode(source, label))
 end
 
+local Space, Tab, Hash = 32, 9, 35
+
+--- Whether the cfg line at `start` is a comment: a `#` after spaces, tabs, or returns, as
+--- dream-ini's `first_non_ws` looks for it; other whitespace before a `#` makes it part of the
+--- key.
+local function commented(text: string, start: number): boolean
+  local code = string.byte(text, start)
+
+  while code == Space or code == Tab or code == Return do
+    start += 1
+    code = string.byte(text, start)
+  end
+
+  return code == Hash
+end
+
 --- openmw.cfg text as a multimap: `key = value` lines, trimmed, `#` comments skipped.
 local function parseCfg(text: string): MultiMap
   local map: MultiMap = {}
@@ -158,9 +174,7 @@ local function parseCfg(text: string): MultiMap
 
     local equals = nextEquals
 
-    -- A comment starts with `#` after spaces, tabs, or returns, as dream-ini's `first_non_ws`
-    -- looks for it; other whitespace before a `#` makes it part of the key.
-    if equals <= finish and equals > start and not string.match(text, '^[ \t\r]*#', start) then
+    if equals <= finish and equals > start and not commented(text, start) then
       push(
         map,
         strings.trim(string.sub(text, start, equals - 1)),
