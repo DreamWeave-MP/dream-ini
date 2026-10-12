@@ -44,7 +44,7 @@ local function parse(text: string): { Entry }
     end
 
     local first, last = strings.span(text, start, finish)
-    local line = start
+    local lineStart = start
     start = if newline then newline + 1 else length + 1
 
     if first > last then
@@ -56,7 +56,9 @@ local function parse(text: string): { Entry }
       -- A line that lost no `\r` is followed by its `\n` in the text.
       table.insert(
         comment,
-        if finish + 1 == newline then string.sub(text, line, newline) else string.sub(text, line, finish) .. '\n'
+        if finish + 1 == newline
+          then string.sub(text, lineStart, newline)
+          else string.sub(text, lineStart, finish) .. '\n'
       )
       continue
     end
