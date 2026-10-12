@@ -5,7 +5,7 @@ id = "org.dreamweave.dream-ini"
 version = "0.1.0"
 jess_api = "1"
 include = ["src"]
-tests = ["tests/run.luau", "tests/edges.luau", "tests/style.luau"]
+tests = ["tests/run.luau", "tests/edges.luau", "tests/soup.luau", "tests/style.luau"]
 
 [modules]
 "@dream-ini" = "src/init.luau"
