@@ -112,7 +112,15 @@ end
 
 --- Every line of `key` goes, and `values` follow the last line (`replace_list`).
 local function replaceList(document: Document, key: string, values: { string }?)
-  document.entries = [for entry in document.entries if not (entry.key and entry.key == key) => entry]
+  local kept: { Entry } = {}
+
+  -- The entries are a caller's, who may have set one to nil: the walk passes over a gap, where
+  -- counting to the length would stop at one or index it.
+  for _, entry in document.entries do
+    if not (entry.key and entry.key == key) then table.insert(kept, entry) end
+  end
+
+  document.entries = kept
   append(document, key, values)
 end
 
