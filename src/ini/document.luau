@@ -71,12 +71,18 @@ local function parse(text: string): { Entry }
 
     local keyStart, keyEnd = strings.span(text, first, equals - 1)
     local valueStart, valueEnd = strings.span(text, equals + 1, last)
+    local above = ''
+
+    if #comment > 0 then
+      above = table.concat(comment)
+      table.clear(comment)
+    end
+
     local entry: Entry = {
-      comment = table.concat(comment),
+      comment = above,
       key = string.sub(text, keyStart, keyEnd),
       value = string.sub(text, valueStart, valueEnd),
     }
-    table.clear(comment)
 
     if entry.key == 'config' then
       table.insert(subConfigs, entry)
