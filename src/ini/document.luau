@@ -117,9 +117,20 @@ local function render(document: Document): string
   local output: { string } = {}
 
   for _, entry in document.entries do
-    table.insert(output, entry.comment)
+    local { comment, key, value } = entry
+    table.insert(output, comment)
+    if not key then continue end
 
-    if entry.key then table.insert(output, `{entry.key}={entry.value}\n`) end
+    -- A key and a value that are strings join the output as they are. Anything else a caller
+    -- left there, a missing value included, is spelled the way interpolation spells it.
+    if type(key) == 'string' and type(value) == 'string' then
+      table.insert(output, key)
+      table.insert(output, '=')
+      table.insert(output, value)
+      table.insert(output, '\n')
+    else
+      table.insert(output, `{key}={value}\n`)
+    end
   end
 
   return table.concat(output)
