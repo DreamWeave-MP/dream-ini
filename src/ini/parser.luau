@@ -201,7 +201,7 @@ end
 local function serializeCfg(map: MultiMap): string
   map = options.multimap('ini.serializeCfg', map)
   local sorted = keys(map)
-  local output: { string } = table.create(4 * sum[for key in sorted => #map[key]])
+  local output = table.create(4 * sum[for key in sorted => #map[key]]) :: { string }
   local count = 0
 
   for _, key in sorted do

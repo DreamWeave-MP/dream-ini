@@ -127,7 +127,7 @@ end
 --- The document's text: each line with its comment, as the file would read.
 local function render(document: Document): string
   local entries = document.entries
-  local output: { string } = table.create(5 * #entries)
+  local output = table.create(5 * #entries) :: { string }
 
   for _, entry in entries do
     local { comment, key, value } = entry
