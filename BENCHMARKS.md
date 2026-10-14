@@ -1,13 +1,13 @@
 # Benchmarks
 
-`bench/bench.luau` times the package through its exports: INI parses, cfg parses and
+`bench/bench.jsl` times the package through its exports: INI parses, cfg parses and
 serialization, cfg documents and their edits, the option and multimap checks, and trimming. Each
 workload is warmed up, sized to about a tenth of a second a batch, and reported as the median of
 seven batches with a full collection before each. Every result is compared with what the
 generator of its input says it must be, outside the time.
 
 ```sh
-jess run --package jpk/dream-ini jpk/dream-ini/bench/bench.luau [filter]
+jess run --package jpk/dream-ini jpk/dream-ini/bench/bench.jsl [filter]
 ```
 
 It refuses a build without the verified toolchain.
@@ -22,7 +22,7 @@ work, each run as
 
 ```sh
 systemd-run --user --scope -q -p MemoryMax=3G -p MemorySwapMax=0 \
-  target/l3i2/jess run --package <the base's export, or jpk/dream-ini> jpk/dream-ini/bench/bench.luau
+  target/l3i2/jess run --package <the base's export, or jpk/dream-ini> jpk/dream-ini/bench/bench.jsl
 ```
 
 Each cell is the median of the six runs' medians. A difference under about 5 percent is noise
@@ -51,7 +51,7 @@ the base always run first, five rounds read those same rows 4 to 7 percent slowe
 What moved is the cfg side, and none of it moved because of syntax. `parseCfg` tested every line
 with a setting for a comment through `string.match`; reading the bytes before the `#` took 17 to
 18 percent off both rows. It and `document.parse` cut a substring for each key and value and
-then trimmed it into a second string; `span` in `src/ini/trim.luau` finds the trimmed range in
+then trimmed it into a second string; `span` in `src/ini/trim.jsl` finds the trimmed range in
 the text, so each becomes a string once, which is the rest of `parseCfg`'s hand-written row
 (the large cfg has nothing to trim, and that step left it where it was). `document.parse` also
 made a string of every line before deciding what it was, and joined and cleared an empty comment
