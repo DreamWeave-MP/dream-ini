@@ -1,5 +1,4 @@
 --!strict
---!native
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 local parser, document = require '@self/ini/parser', require '@self/ini/document'
 local types = require '@self/ini/types'

@@ -1,5 +1,4 @@
 --!strict
---!native
 -- SPDX-License-Identifier: MIT OR Apache-2.0
 -- The filesystem question a write asks, one host call.
 local fs = require '@dream/fs'
