@@ -88,3 +88,54 @@ were measured and left out, none faster than what is there:
 The primitive `site/content/docs/scripting/packages.md` asks for is still the one that would
 move this: a native call that returns every line's spans, or every position of a byte, at
 `memchr`'s speed. l3i 2.0's data plane is not that for bytes of text.
+
+## Which modules are native, and why
+
+Jess compiles to machine code only what is marked (`--!native` on a module, `@native` on one
+function), and every load pays for what is marked. A module carries `--!native` when a row below
+spends its time there and the module is small (12 KB or less); a larger module carries `@native`
+on the functions the row spends its time in, and nothing else.
+
+Measured 2026-10-15 with `jess 0.1.0`, the verified release build of jess `07c38cb` on l3i
+2.0.3, on the i7-10870H, the one-minute load 1.40 and 1.39 at the start of the two
+sessions. In each session the bench ran alternately on this package and on a copy of it with
+every module marked, three fresh runs of `bench/bench.jsl` each, every run's row the median of
+its batches; a column is the median of the three, and a ratio is against the all-marked runs of
+the same session. Which functions a row spends its time in comes from `jess run --profile` of
+that row alone, unmarked. The load cost is a fresh `jess run --package <this package>
+--package-path jpk` of a script that only requires `@dream-ini`, the two sides alternating, the
+median of five each after one warm-up.
+
+| Requiring `@dream-ini` | All marked | This state |
+| --- | ---: | ---: |
+| Unmarked | 0.051 s | 0.050 s |
+| Final | 0.051 s | 0.051 s |
+
+| Row | All marked (ms) | Unmarked / all marked | Final (ms) | Final / all marked |
+| --- | ---: | ---: | ---: | ---: |
+| parseIni: 573 one-key sections (24196 bytes, 1146 lines) | 0.3145 | **1.552×** | 0.3098 | 0.985× |
+| parseIni: dream-ini's large INI (127373 bytes, 6787 lines) | 1.474 | **1.631×** | 1.469 | 0.997× |
+| parseIni: the shape of Morrowind.ini, CRLF (25347 bytes, 763 lines) | 0.3001 | **1.345×** | 0.3038 | 1.012× |
+| parseCfg: dream-ini's large cfg (514 lines) | 0.1501 | **2.538×** | 0.1535 | 1.023× |
+| parseCfg: a hand-written cfg, CRLF (832 lines) | 0.2400 | **2.817×** | 0.2415 | 1.006× |
+| serializeCfg: dream-ini's large cfg (514 lines) | 0.03003 | **2.177×** | 0.03014 | 1.004× |
+| options.multimap: the large INI's entries (4225 values) | 0.02448 | **5.237×** | 0.02443 | 0.998× |
+| keys: the large INI's entries (648 keys) | 0.1011 | **1.072×** | 0.1005 | 0.994× |
+| options.read: an import's options | 0.00101 | **1.693×** | 0.00103 | 1.015× |
+| document.parse: a commented cfg (576 lines) | 0.2357 | **2.334×** | 0.2373 | 1.007× |
+| document.parse: a hand-written cfg, CRLF (832 lines) | 0.3711 | **2.492×** | 0.3669 | 0.989× |
+| document.render: a commented cfg (512 settings) | 0.04895 | **2.093×** | 0.04914 | 1.004× |
+| document.replaceList: 256 data lines of 512 settings | 0.02965 | **1.618×** | 0.02993 | 1.009× |
+| trim: 1024 values, nothing to trim | 0.07601 | **2.975×** | 0.07531 | 0.991× |
+| trim: 1024 values, spaces and tabs | 0.1867 | **2.459×** | 0.1845 | 0.988× |
+| trim: 1024 values, Unicode spaces | 0.5794 | **2.184×** | 0.5722 | 0.988× |
+
+What carries the directive (every module here is one a row spends its time in, unmarked):
+
+- Whole: `ini/document`, `ini/options`, `ini/parser`, `ini/trim`.
+- Unmarked: `ini/storage`, `ini/types`, `init`.
+
+The package is small and nearly all of it is the parser: unmarked, every one of the 16 rows ran
+more than 5% slower, and requiring it cost 1 ms less. The three modules left unmarked are the
+entry, the storage table, and the types, 1.4 KB together, which no row spends time in. No row is
+more than 5% slower than all marked.
