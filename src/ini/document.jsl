@@ -5,6 +5,7 @@
 -- `serialize_preserved_cfg_document` and `save_preserved_cfg_document_to_path` write one:
 -- comments, blank lines, and the order of untouched lines survive; a replaced list gives up its
 -- old lines' places and goes at the end.
+local fs = require '@dream/fs'
 local storage, strings = require './storage', require './trim'
 
 --- One `key=value` line with the comment and blank lines above it, or, without a key, the lines
@@ -152,13 +153,12 @@ end
 --- `text` written over `path` through a temporary file beside it and a rename, so a failure
 --- leaves the old file whole, with dream-ini's error wording.
 local function replaceFile(path: string, text: string)
-  -- `replace` throws when the folder can't take a temporary file or the rename fails.
-  local ok, problem = pcall(jess.fs.replace, path, text)
-  if ok then return end
+  local written, message = fs.writeFile(path, text, { atomic = true })
+  if written then return end
 
-  local message = tostring(problem)
+  local problem = tostring(message)
   error(
-    `dream.ini: {path}: {string.match(message, '^failed to write \'.-\': (.*)$') or message}`,
+    `dream.ini: {path}: {string.match(problem, '^dream%.fs%.writeFile: .-: (.*)$') or problem}`,
     0
   )
 end
