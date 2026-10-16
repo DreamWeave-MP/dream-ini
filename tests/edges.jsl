@@ -227,7 +227,7 @@ suite.describe('document', function()
   end)
 
   suite.it('renders a setting without a value as interpolation spells one', function()
-    local entries = { { comment = '# said\n', key = 'key' }, { comment = '', key = 'other', value = '' } }
+    local entries: { document.Entry } = { { comment = '# said\n', key = 'key' }, { comment = '', key = 'other', value = '' } }
     expect(document.render { path = '', entries = entries }).toBe '# said\nkey=nil\nother=\n'
   end)
 
