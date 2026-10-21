@@ -1,0 +1,40 @@
+base_url = "https://dreamweave-mp.github.io/dream-ini"
+title = "dream-ini"
+description = "Morrowind.ini and OpenMW's INI importer semantics, read and written the way the engine does, as a Jess package in Luau."
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+taxonomies = [{ name = "tags", feed = false }]
+
+[search]
+index_format = "fuse_json"
+include_title = true
+include_description = true
+include_content = true
+truncate_content_length = 400
+
+[markdown]
+highlighting = { theme = "dracula-soft" }
+insert_anchor_links = "right"
+smart_punctuation = true
+
+[slugify]
+paths = "safe"
+
+[link_checker]
+skip_prefixes = ["https://github.com/", "https://www.nexusmods.com/"]
+
+[extra]
+github_username = "DreamWeave-MP"
+github_project = "dream-ini"
+logo_text = "dream-ini"
+palette = "prism"
+menu_items = [
+    { name = "dream-ini", url = "@/home/index.md" },
+    { name = "Network", url = "@/network.md" },
+]
+
+[extra.comments]
+enabled = false
+category = "General"

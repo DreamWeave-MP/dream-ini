@@ -1,3 +1,12 @@
 # Packed output and local test/work data.
 *.jpk
 /target/
+
+# Build output of the DreamWeave Mod Template, and the packages jess.lock pins
+/public/
+/dist/
+/static/dreamweave/
+/static/dreamweave.json
+/content/**/_changelog.md
+/.jess/
+*.jpk
