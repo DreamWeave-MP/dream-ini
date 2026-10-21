@@ -1,0 +1,49 @@
+{
+  "schema_version": "3",
+  "document": "lock",
+  "project": "79c1c987-d68a-48a2-a3b9-5addce404eb9",
+  "note": "Written by CI when a release tag is pushed: what each published release's archive contains. Do not edit.",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "locked_from": "f0480fe47718422a1ff2bf2268f80de110954e0f",
+      "artifacts": [
+        {
+          "id": "jpk",
+          "format": "jpk",
+          "filename": "org.dreamweave.dream-ini-0.1.0.jpk",
+          "media_type": "application/vnd.jess.jpk",
+          "size": 22780,
+          "digests": {
+            "sha256": "35d6adeef8c9b92eed7f97d2f0470758ffe433eb61d4890e12547ec04ce9ee4a"
+          },
+          "jess": {
+            "package": "org.dreamweave.dream-ini",
+            "jess_api": "1",
+            "content_digest": "100a5475b4ed0606e014c4b0bc5dea676f2168c0bbc2da4f42b5e55b7b5ec0e5",
+            "dependencies": {}
+          }
+        }
+      ],
+      "runtimes": {},
+      "platforms": [],
+      "provides": [],
+      "relationships": [],
+      "components": [
+        {
+          "id": "main",
+          "name": "dream-ini",
+          "path": ".",
+          "required": true,
+          "default": true,
+          "requires": [],
+          "conflicts": [],
+          "suggested_with": []
+        }
+      ],
+      "groups": [],
+      "extensions": {},
+      "critical_extensions": []
+    }
+  ]
+}
